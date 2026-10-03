@@ -72,6 +72,11 @@ pub struct FrameInfo {
     hf_sections: Vec<Vec<Option<SectionBuffer>>>,
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
+    // Visible frames skipped without decoding since the last decoded frame (when seeking): the
+    // frame counters of the next decoded frame (which seed its noise) still have to count them.
+    pub skipped_visible_frames: usize,
+    // The frame counters for a decoder state created from scratch (non-zero after a seek).
+    pub start_frame_counters: (usize, usize),
 }
 
 impl FrameInfo {
@@ -90,6 +95,8 @@ impl FrameInfo {
             hf_sections: vec![],
             candidate_hf_sections: HashSet::new(),
             pixels_dirty: false,
+            skipped_visible_frames: 0,
+            start_frame_counters: (0, 0),
         }
     }
 
@@ -100,6 +107,8 @@ impl FrameInfo {
 
         if clear_frame {
             self.frame = None;
+            self.skipped_visible_frames = 0;
+            self.start_frame_counters = (0, 0);
         }
 
         // Clear sections
@@ -219,9 +228,17 @@ impl FrameInfo {
                 .transpose()?
                 .flatten()
                 .unwrap_or_else(|| {
-                    DecoderState::new(file_header.clone(), decode_options, level5_limits)
+                    let mut s =
+                        DecoderState::new(file_header.clone(), decode_options, level5_limits);
+                    (s.visible_frame_index, s.nonvisible_frame_index) = self.start_frame_counters;
+                    s
                 });
             decoder_state.level5_limits = level5_limits;
+            if self.skipped_visible_frames > 0 {
+                decoder_state.visible_frame_index += self.skipped_visible_frames;
+                decoder_state.nonvisible_frame_index = 0;
+                self.skipped_visible_frames = 0;
+            }
             let mut frame =
                 Frame::from_header_and_toc(self.frame_header.take().unwrap(), toc, decoder_state)?;
 

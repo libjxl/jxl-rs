@@ -132,8 +132,10 @@ impl CodestreamParser {
         &mut self,
         visible_frames_to_skip: usize,
         consumed_codestream: u64,
+        frame_counters: (usize, usize),
     ) {
         self.frame_info.clear(true);
+        self.frame_info.start_frame_counters = frame_counters;
         self.local_buffer = SmallBuffer::new(4096);
         self.local_buffer.mark_consumed(consumed_codestream);
         self.visible_frames_to_skip = visible_frames_to_skip;
@@ -284,7 +286,20 @@ impl CodestreamParser {
                         process_mode = ProcessMode::SkipOutput;
                     } else if self.visible_frames_to_skip > 0 {
                         self.visible_frames_to_skip -= 1;
-                        process_mode = ProcessMode::SkipOutput;
+                        // A frame that is not saved in a reference slot cannot affect later
+                        // frames (blending and patches only read reference slots), so it does
+                        // not need to be decoded at all.
+                        if self
+                            .frame_info
+                            .current_frame_header()
+                            .unwrap()
+                            .can_be_referenced
+                        {
+                            process_mode = ProcessMode::SkipOutput;
+                        } else {
+                            process_mode = ProcessMode::Skip(false);
+                            self.frame_info.skipped_visible_frames += 1;
+                        }
                     }
 
                     if decode_options.scan_frames_only && process_mode == ProcessMode::Process {

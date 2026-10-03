@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::api::{
     JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderInner, JxlDecoderOptions, JxlPixelFormat,
-    JxlTransferFunction, ProcessingResult, states,
+    JxlTransferFunction, ProcessingResult, VisibleFrameInfo, states,
 };
 use crate::error::Error;
 use crate::image::{Image, ImageDataType, JxlOutputBuffer, Rect};
@@ -840,6 +840,85 @@ fn wrap_with_jxlp_chunks(codestream: &[u8], chunk_starts: &[usize]) -> Vec<u8> {
     container
 }
 
+/// Seeks `decoder` to visible frame `target`, decodes it and compares it with the sequential decode;
+/// returns the input that follows the frame.
+fn seek_and_compare<'a>(
+    decoder: &mut JxlDecoderInner,
+    data: &'a [u8],
+    scanned_frames: &[VisibleFrameInfo],
+    sequential_frames: &[Vec<Image<f32>>],
+    target_visible_index: usize,
+) -> &'a [u8] {
+    let seek_target = scanned_frames[target_visible_index].seek_target;
+
+    let expected = &sequential_frames[target_visible_index];
+
+    decoder.start_new_frame(seek_target);
+    let mut input = &data[seek_target.decode_start_file_offset as usize..];
+
+    let result = decoder.process(&mut input, None, None);
+    assert!(
+        matches!(result, Ok(ProcessingResult::Complete { .. })),
+        "decoder.process: {result:?}"
+    );
+
+    let basic_info = decoder.basic_info().unwrap().clone();
+    let (width, height) = basic_info.size;
+
+    let default_format = decoder.current_pixel_format().unwrap().clone();
+    let requested_format = JxlPixelFormat {
+        color_type: default_format.color_type,
+        color_data_format: Some(JxlDataFormat::f32()),
+        extra_channel_format: default_format
+            .extra_channel_format
+            .iter()
+            .map(|_| Some(JxlDataFormat::f32()))
+            .collect(),
+    };
+    decoder.set_pixel_format(requested_format.clone()).unwrap();
+
+    let channels = requested_format.color_type.samples_per_pixel();
+    let num_ec = requested_format.extra_channel_format.len();
+
+    let mut color_buffer = Image::<f32>::new((width * channels, height)).unwrap();
+    let mut ec_buffers: Vec<Image<f32>> = (0..num_ec)
+        .map(|_| Image::<f32>::new((width, height)).unwrap())
+        .collect();
+    let mut buffers: Vec<JxlOutputBuffer> = vec![JxlOutputBuffer::from_image_rect_mut(
+        color_buffer
+            .get_rect_mut(Rect {
+                origin: (0, 0),
+                size: (width * channels, height),
+            })
+            .into_raw(),
+    )];
+    for ec in ec_buffers.iter_mut() {
+        buffers.push(JxlOutputBuffer::from_image_rect_mut(
+            ec.get_rect_mut(Rect {
+                origin: (0, 0),
+                size: (width, height),
+            })
+            .into_raw(),
+        ));
+    }
+
+    assert!(matches!(
+        decoder.process(&mut input, Some(&mut buffers), None),
+        Ok(ProcessingResult::Complete { .. })
+    ));
+
+    let mut seek_decoded = Vec::with_capacity(1 + num_ec);
+    seek_decoded.push(color_buffer);
+    seek_decoded.extend(ec_buffers);
+    compare_frames(
+        Path::new("start_new_frame_seek"),
+        target_visible_index,
+        expected,
+        &seek_decoded,
+    );
+    input
+}
+
 fn assert_start_new_frame_matches_sequential(data: &[u8]) {
     let scanned_frames = scan_frames(data, usize::MAX);
 
@@ -865,72 +944,12 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
         for _ in 0..num_seeks {
             let target_visible_index =
                 u.int_in_range(0..=scanned_frames.len() as u64 - 1)? as usize;
-            let seek_target = scanned_frames[target_visible_index].seek_target;
-
-            let expected = &sequential_frames[target_visible_index];
-
-            decoder.start_new_frame(seek_target);
-            let mut input = &data[seek_target.decode_start_file_offset as usize..];
-
-            let result = decoder.process(&mut input, None, None);
-            assert!(
-                matches!(result, Ok(ProcessingResult::Complete { .. })),
-                "decoder.process: {result:?}"
-            );
-
-            let basic_info = decoder.basic_info().unwrap().clone();
-            let (width, height) = basic_info.size;
-
-            let default_format = decoder.current_pixel_format().unwrap().clone();
-            let requested_format = JxlPixelFormat {
-                color_type: default_format.color_type,
-                color_data_format: Some(JxlDataFormat::f32()),
-                extra_channel_format: default_format
-                    .extra_channel_format
-                    .iter()
-                    .map(|_| Some(JxlDataFormat::f32()))
-                    .collect(),
-            };
-            decoder.set_pixel_format(requested_format.clone()).unwrap();
-
-            let channels = requested_format.color_type.samples_per_pixel();
-            let num_ec = requested_format.extra_channel_format.len();
-
-            let mut color_buffer = Image::<f32>::new((width * channels, height)).unwrap();
-            let mut ec_buffers: Vec<Image<f32>> = (0..num_ec)
-                .map(|_| Image::<f32>::new((width, height)).unwrap())
-                .collect();
-            let mut buffers: Vec<JxlOutputBuffer> = vec![JxlOutputBuffer::from_image_rect_mut(
-                color_buffer
-                    .get_rect_mut(Rect {
-                        origin: (0, 0),
-                        size: (width * channels, height),
-                    })
-                    .into_raw(),
-            )];
-            for ec in ec_buffers.iter_mut() {
-                buffers.push(JxlOutputBuffer::from_image_rect_mut(
-                    ec.get_rect_mut(Rect {
-                        origin: (0, 0),
-                        size: (width, height),
-                    })
-                    .into_raw(),
-                ));
-            }
-
-            assert!(matches!(
-                decoder.process(&mut input, Some(&mut buffers), None),
-                Ok(ProcessingResult::Complete { .. })
-            ));
-
-            let mut seek_decoded = Vec::with_capacity(1 + num_ec);
-            seek_decoded.push(color_buffer);
-            seek_decoded.extend(ec_buffers);
-            compare_frames(
-                Path::new("start_new_frame_seek"),
+            let input = seek_and_compare(
+                &mut decoder,
+                data,
+                &scanned_frames,
+                &sequential_frames,
                 target_visible_index,
-                expected,
-                &seek_decoded,
             );
 
             let available_bytes = input.len();
@@ -950,6 +969,39 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
         }
         Ok(())
     });
+}
+
+/// Seeks to every visible frame, from the last to the first, and compares each with the sequential
+/// decode.
+fn assert_every_seek_matches_sequential(data: &[u8]) {
+    let scanned_frames = scan_frames(data, usize::MAX);
+    let sequential_frames = decode(data, Default::default()).unwrap();
+    let mut decoder = JxlDecoderInner::new(JxlDecoderOptions::default());
+    let mut input = data;
+    while let ProcessingResult::Complete { .. } = decoder.process(&mut input, None, None).unwrap() {
+        if input.is_empty() {
+            break;
+        }
+    }
+    for target in (0..scanned_frames.len()).rev() {
+        seek_and_compare(
+            &mut decoder,
+            data,
+            &scanned_frames,
+            &sequential_frames,
+            target,
+        );
+    }
+}
+
+// An animation with noise on every frame; displayed frames that are saved as references (some of
+// them used by later frames' blending), displayed frames that are not, cropped frames, patches,
+// and keyframes after the start. Seeking must skip the unsaved frames and still seed the noise of
+// each frame as a sequential decode does.
+#[test]
+fn test_seek_every_frame_noise_references() {
+    let data = std::fs::read("resources/test/animation_seek_noise_references.jxl").unwrap();
+    assert_every_seek_matches_sequential(&data);
 }
 
 #[test]
