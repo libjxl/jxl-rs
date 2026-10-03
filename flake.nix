@@ -1,4 +1,16 @@
 {
+  # Add fenix and crane binary cache substituters for faster builds
+  nixConfig = {
+    extra-substituters = [
+      "https://crane.cachix.org"
+      "https://fenix.cachix.org"
+    ];
+    extra-trusted-public-keys = [
+      "crane.cachix.org-1:8Scfpmn9w+hGdXH/Q9tTLiYAE/2dnJYRJP7kl80GuRk="
+      "fenix.cachix.org-1:ecJhr+RdYEdcVgUkjruiYhjbBloIEGov7bos90cZi0Q="
+    ];
+  };
+
   inputs = {
     crane.url = "github:ipetkov/crane";
     fenix = {
@@ -6,7 +18,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
-    nixpkgs.url = "nixpkgs/nixos-unstable";
+    nixpkgs.url = "nixpkgs/nixos-unstable-small";
   };
 
   outputs =
@@ -126,7 +138,6 @@
           };
         };
 
-        # Setup fenix binary cache (https://app.cachix.org/cache/fenix) for faster builds
         devShells = {
           default = mkShellForToolchain rustDevToolchain;
           miri = mkShellForToolchain rustMiriToolchain;
