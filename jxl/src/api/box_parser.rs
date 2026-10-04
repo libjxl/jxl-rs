@@ -558,6 +558,7 @@ impl BoxParser {
                     }
                     self.state = ParseState::BoxNeeded(8);
                 }
+                ParseState::Skip(None) => return Ok(()),
                 ParseState::Codestream(count) | ParseState::Skip(count) => {
                     if count == Some(0) {
                         self.state = ParseState::Complete;
@@ -580,10 +581,7 @@ impl BoxParser {
                         buf.data.extend_from_slice(&self.local_buffer);
                         self.local_buffer.consume(local_buffer_len);
                     }
-                    if self.input_closed {
-                        return Ok(());
-                    }
-                    return Err(Error::OutOfBounds(1));
+                    return Ok(());
                 }
                 ParseState::Aux(Some(count)) => {
                     if count == 0 {

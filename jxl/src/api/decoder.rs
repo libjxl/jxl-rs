@@ -232,7 +232,8 @@ impl JxlDecoder {
         self.box_parser.aux_boxes(box_type)
     }
 
-    /// Signals that no more input bytes will be provided to the decoder.
+    /// Signals that no more input bytes will be provided to the decoder in subsequent
+    /// calls to process().
     ///
     /// Calling this is only necessary if additional boxes were requested (via
     /// [`JxlDecoderOptions::request_aux_boxes`]) - if no additional boxes are requested,
