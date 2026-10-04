@@ -1355,6 +1355,41 @@ fn aux_box_incomplete_trailing_box() {
 }
 
 #[test]
+fn aux_box_empty_input_at_box_boundary() {
+    let data = include_bytes!("../../tests/testdata/exif_trailing_finite.jxl");
+    // Stop at the box boundary after the codestream.
+    let mut input = &data[..52];
+    let options = JxlDecoderOptions {
+        scan_frames_only: true,
+        request_aux_boxes: vec![JxlAuxBoxType::EXIF],
+        ..Default::default()
+    };
+    let mut decoder = JxlDecoder::new(options);
+
+    let expected_events = [
+        Event::BasicInfo,
+        Event::FrameHeader,
+        Event::FrameComplete {
+            has_more_frames: false,
+        },
+    ];
+    for expected in expected_events {
+        assert_eq!(decoder.process(&mut input, None, None).unwrap(), expected);
+    }
+
+    // No more bytes are available yet, but the stream has not ended.
+    assert!(input.is_empty());
+    decoder.process(&mut input, None, None).unwrap();
+
+    let mut input = &data[52..];
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::Complete
+    );
+    assert_eq!(decoder.aux_boxes(JxlAuxBoxType::EXIF).len(), 1);
+}
+
+#[test]
 fn aux_box_trailing_infinite() {
     let data = [
         (
