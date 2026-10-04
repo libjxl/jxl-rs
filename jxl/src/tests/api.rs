@@ -1326,6 +1326,35 @@ fn aux_box_finite() {
 }
 
 #[test]
+fn aux_box_incomplete_trailing_box() {
+    let data = include_bytes!("../../tests/testdata/exif_trailing_finite.jxl");
+    // Supply the codestream box and only the first byte of the Exif box header.
+    let mut input = &data[..53];
+    let options = JxlDecoderOptions {
+        scan_frames_only: true,
+        request_aux_boxes: vec![JxlAuxBoxType::EXIF],
+        ..Default::default()
+    };
+    let mut decoder = JxlDecoder::new(options);
+
+    let expected_events = [
+        Event::BasicInfo,
+        Event::FrameHeader,
+        Event::FrameComplete {
+            has_more_frames: false,
+        },
+    ];
+    for expected in expected_events {
+        assert_eq!(decoder.process(&mut input, None, None).unwrap(), expected);
+    }
+
+    assert!(matches!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::NeedMoreInput { .. }
+    ));
+}
+
+#[test]
 fn aux_box_trailing_infinite() {
     let data = [
         (
