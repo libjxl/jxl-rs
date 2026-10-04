@@ -204,7 +204,10 @@ impl CodestreamParser {
         parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<Event> {
         match self.process_inner(input, decode_options, output_buffers, parallel_runner) {
-            Err(Error::OutOfBounds(_)) if input.box_parser().is_codestream_complete() => {
+            Err(Error::OutOfBounds(_))
+                if self.state != ParserState::TrailingData
+                    && input.box_parser().is_codestream_complete() =>
+            {
                 Err(Error::UnexpectedCodestreamBoxEnd)
             }
             Err(Error::OutOfBounds(size_hint)) => Ok(Event::NeedMoreInput { size_hint }),

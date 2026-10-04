@@ -148,6 +148,7 @@ pub(super) struct BoxParser {
     allow_checkpoint: bool,
     container_level: Option<ProfileLevel>,
     aux: AuxBoxState,
+    input_closed: bool,
 }
 
 #[derive(Default)]
@@ -174,6 +175,7 @@ impl BoxParser {
                 boxes_to_extract: box_types.into_iter().collect(),
                 ..Default::default()
             },
+            input_closed: false,
         }
     }
 
@@ -207,6 +209,11 @@ impl BoxParser {
             self.aux.seen_box_count -= 1;
         }
         self.aux.next_box_idx = box_checkpoint.next_aux_box_idx;
+        self.input_closed = false;
+    }
+
+    pub(super) fn close_input(&mut self) {
+        self.input_closed = true;
     }
 
     pub(super) fn state_checkpoint(
@@ -534,6 +541,9 @@ impl BoxParser {
     }
 
     fn consume_trailing_data(&mut self, input: &mut dyn JxlBitstreamInput) -> Result<()> {
+        if self.aux.boxes_to_extract.is_empty() {
+            return Ok(());
+        }
         loop {
             match self.state {
                 ParseState::Codestream(None) => {
@@ -541,7 +551,10 @@ impl BoxParser {
                 }
                 ParseState::Complete => {
                     if self.available_bytes_inner(input)? == 0 {
-                        return Ok(());
+                        if self.input_closed {
+                            return Ok(());
+                        }
+                        return Err(Error::OutOfBounds(8));
                     }
                     self.state = ParseState::BoxNeeded(8);
                 }
@@ -553,6 +566,9 @@ impl BoxParser {
                     let to_skip = count.unwrap_or(u64::MAX).min(usize::MAX as u64) as usize;
                     let n = self.skip_inner(input, to_skip)? as u64;
                     if n == 0 {
+                        if self.input_closed {
+                            return Err(Error::InvalidBox);
+                        }
                         return Err(Error::OutOfBounds(to_skip));
                     }
                     self.state = ParseState::Skip(count.map(|x| x - n));
@@ -564,7 +580,10 @@ impl BoxParser {
                         buf.data.extend_from_slice(&self.local_buffer);
                         self.local_buffer.consume(local_buffer_len);
                     }
-                    return Ok(());
+                    if self.input_closed {
+                        return Ok(());
+                    }
+                    return Err(Error::OutOfBounds(1));
                 }
                 ParseState::Aux(Some(count)) => {
                     if count == 0 {
@@ -576,6 +595,9 @@ impl BoxParser {
 
                     let total = self.handle_aux_box(input, count)?;
                     if total == 0 {
+                        if self.input_closed {
+                            return Err(Error::InvalidBox);
+                        }
                         return Err(Error::OutOfBounds(count.min(usize::MAX as u64) as usize));
                     }
                     self.state = ParseState::Aux(Some(count - total));
@@ -616,7 +638,10 @@ impl BoxParser {
     }
 
     fn parse_box(&mut self, input: &mut dyn JxlBitstreamInput, required_size: usize) -> Result<()> {
-        self.read_until_at_least(input, required_size)?;
+        match self.read_until_at_least(input, required_size) {
+            Err(Error::OutOfBounds(_)) if self.input_closed => return Err(Error::InvalidBox),
+            res => res?,
+        }
 
         let min_len = match &self.local_buffer[..] {
             [0, 0, 0, 1, ..] => 16,
@@ -638,6 +663,9 @@ impl BoxParser {
         };
 
         if self.local_buffer.len() < extra_len + min_len {
+            if self.input_closed {
+                return Err(Error::InvalidBox);
+            }
             self.state = ParseState::BoxNeeded(extra_len + min_len);
             return Ok(());
         }

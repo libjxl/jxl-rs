@@ -232,6 +232,17 @@ impl JxlDecoder {
         self.box_parser.aux_boxes(box_type)
     }
 
+    /// Signals that no more input bytes will be provided to the decoder.
+    ///
+    /// Calling this is only necessary if additional boxes were requested (via
+    /// [`JxlDecoderOptions::request_aux_boxes`]) - if no additional boxes are requested,
+    /// or if the decoder determines that they cannot be present in the file after the
+    /// end of the codestream, the decoder will transition to [`Event::Complete`] after
+    /// the last frame.
+    pub fn close_input(&mut self) {
+        self.box_parser.close_input();
+    }
+
     /// Process more of the input file.
     /// This function will return when reaching the next decoding stage (i.e. finished decoding
     /// file/frame header, finished decoding a frame, or finished the entire decode).

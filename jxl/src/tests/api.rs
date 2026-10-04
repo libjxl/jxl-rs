@@ -1283,6 +1283,7 @@ fn incomplete_ooo_jxlp() {
 }
 
 fn process_to_complete(decoder: &mut JxlDecoder, buf: &mut &[u8]) {
+    decoder.close_input();
     loop {
         match decoder.process(buf, None, None).unwrap() {
             Event::Complete => break,
@@ -1379,9 +1380,13 @@ fn aux_box_empty_input_at_box_boundary() {
 
     // No more bytes are available yet, but the stream has not ended.
     assert!(input.is_empty());
-    decoder.process(&mut input, None, None).unwrap();
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::NeedMoreInput { size_hint: 8 }
+    );
 
     let mut input = &data[52..];
+    decoder.close_input();
     assert_eq!(
         decoder.process(&mut input, None, None).unwrap(),
         Event::Complete
