@@ -38,11 +38,7 @@ impl Frame {
         output_tf: &TransferFunction,
     ) -> Result<()> {
         let save_stage = SaveStage::new(
-            if color_type.has_alpha() {
-                &[0, 1, 2, 3]
-            } else {
-                &[0, 1, 2]
-            },
+            &[0, 1, 2],
             orientation,
             0,
             color_type,
@@ -57,33 +53,15 @@ impl Frame {
             F16(ConvertF32ToF16Stage),
             None,
         }
-        let (converter, constant_alpha) = match data_format {
+        let converter = match data_format {
             JxlDataFormat::U8 { bit_depth } => {
-                let alpha = ((1u16 << bit_depth) - 1) as u8;
-                (
-                    DataFormatConverter::U8(ConvertF32ToU8Stage::new(0, bit_depth)),
-                    RowBuffer::new_filled(DataTypeTag::U8, ulen, &alpha.to_ne_bytes())?,
-                )
+                DataFormatConverter::U8(ConvertF32ToU8Stage::new(0, bit_depth))
             }
             JxlDataFormat::U16 { bit_depth, .. } => {
-                let alpha = ((1u32 << bit_depth) - 1) as u16;
-                (
-                    DataFormatConverter::U16(ConvertF32ToU16Stage::new(0, bit_depth)),
-                    RowBuffer::new_filled(DataTypeTag::U16, ulen, &alpha.to_ne_bytes())?,
-                )
+                DataFormatConverter::U16(ConvertF32ToU16Stage::new(0, bit_depth))
             }
-            JxlDataFormat::F16 { .. } => (
-                DataFormatConverter::F16(ConvertF32ToF16Stage::new(0)),
-                RowBuffer::new_filled(
-                    DataTypeTag::F16,
-                    ulen,
-                    &(f16::from_f32(1.0).to_bits().to_ne_bytes()),
-                )?,
-            ),
-            JxlDataFormat::F32 { .. } => (
-                DataFormatConverter::None,
-                RowBuffer::new_filled(DataTypeTag::F32, ulen, &1.0f32.to_ne_bytes())?,
-            ),
+            JxlDataFormat::F16 { .. } => DataFormatConverter::F16(ConvertF32ToF16Stage::new(0)),
+            JxlDataFormat::F32 { .. } => DataFormatConverter::None,
         };
 
         let upsample_stage = Upsample8x::new(&self.decoder_state.file_header.transform_data, 0);
@@ -111,6 +89,8 @@ impl Frame {
             RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
             RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
         ];
+
+        let mut save_scratch = RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ulen)?;
 
         // At this point, we already verified that lf_frame or lf_frame_data are present.
         let src = if self.header.frame_type == FrameType::RegularFrame {
@@ -239,33 +219,16 @@ impl Frame {
                     DataFormatConverter::None => &upsampled_rows,
                 };
 
-                let input_no_alpha = match color_type {
+                let input_channels = match color_type {
                     JxlColorType::Bgr | JxlColorType::Bgra => {
                         [&save_input[2], &save_input[1], &save_input[0]]
                     }
                     _ => [&save_input[0], &save_input[1], &save_input[2]],
                 };
-                let input_alpha = match color_type {
-                    JxlColorType::Bgra => [
-                        &save_input[2],
-                        &save_input[1],
-                        &save_input[0],
-                        &constant_alpha,
-                    ],
-                    _ => [
-                        &save_input[0],
-                        &save_input[1],
-                        &save_input[2],
-                        &constant_alpha,
-                    ],
-                };
 
                 save_stage.save_lowmem(
-                    if color_type.has_alpha() {
-                        &input_alpha
-                    } else {
-                        &input_no_alpha
-                    },
+                    &input_channels,
+                    &mut save_scratch,
                     output_buffers,
                     upsampled_rect.size,
                     uy,

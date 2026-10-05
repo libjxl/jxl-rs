@@ -423,16 +423,13 @@ impl LowMemoryRenderPipeline {
                     Stage::Save(s) => {
                         // Find buffers for channels that will be saved.
                         // Channel ordering is handled in stage_input_buffer_index construction.
-                        let mut input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
+                        let input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
                             .map(|(si, ci)| &data.row_buffers[*si][*ci])
                             .collect();
-                        // Append opaque alpha buffer if fill_opaque_alpha is set
-                        if let Some(ref alpha_buf) = self.opaque_alpha_buffers[i] {
-                            input_data.push(alpha_buf);
-                        }
                         s.save_lowmem(
                             &input_data,
+                            data.save_scratch.as_mut().unwrap(),
                             &mut *buffers,
                             (xsize >> dx, num_rows >> dy),
                             y,
@@ -567,16 +564,13 @@ impl LowMemoryRenderPipeline {
                     Stage::Save(s) => {
                         // Find buffers for channels that will be saved.
                         // Channel ordering is handled in stage_input_buffer_index construction.
-                        let mut input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
+                        let input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
                             .map(|(si, ci)| &data.row_buffers[*si][*ci])
                             .collect();
-                        // Append opaque alpha buffer if fill_opaque_alpha is set
-                        if let Some(ref alpha_buf) = self.opaque_alpha_buffers[i] {
-                            input_data.push(alpha_buf);
-                        }
                         s.save_lowmem(
                             &input_data,
+                            data.save_scratch.as_mut().unwrap(),
                             &mut *buffers,
                             (xsize, ysize),
                             y,

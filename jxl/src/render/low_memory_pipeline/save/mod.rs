@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::headers::Orientation;
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::render::save::SaveStage;
+use crate::util::ChannelVec;
 
 mod identity;
 
@@ -19,6 +20,7 @@ impl SaveStage {
     pub fn save_lowmem(
         &self,
         data: &[&RowBuffer],
+        scratch: &mut RowBuffer,
         buffers: &mut [Option<OutputChannelRef>],
         group_size: (usize, usize),
         frame_y: usize,
@@ -64,6 +66,20 @@ impl SaveStage {
         let relative_y = group_y - save_start.1;
 
         let save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
+
+        let mut input_channels: ChannelVec<&RowBuffer> = data.iter().copied().collect();
+        if self.fill_opaque_alpha {
+            let fill_pattern = self.data_format.opaque_alpha_bytes();
+            let bps = self.data_format.bytes_per_sample();
+            let byte_start = RowBuffer::x0_byte_offset() + save_start.0 * bps;
+            let byte_end = RowBuffer::x0_byte_offset() + save_end.0 * bps;
+            let row_bytes = &mut scratch.get_row_mut::<u8>(0)[byte_start..byte_end];
+            for (i, byte) in row_bytes.iter_mut().enumerate() {
+                *byte = fill_pattern[i % fill_pattern.len()];
+            }
+            input_channels.push(&*scratch);
+        }
+        let data = &input_channels[..];
 
         let num_fast = match self.orientation {
             Orientation::Identity => identity::store(
