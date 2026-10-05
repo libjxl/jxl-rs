@@ -71,8 +71,8 @@ pub struct FrameInfo {
     hf_sections: Vec<Vec<Option<SectionBuffer>>>,
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
-    // The frame counters for a decoder state created from scratch (non-zero after a seek).
-    pub(super) start_frame_counters: (usize, usize),
+    // The frame counters that a decoder state created from scratch starts from.
+    start_frame_counters: (usize, usize),
 }
 
 impl FrameInfo {
@@ -95,15 +95,19 @@ impl FrameInfo {
         }
     }
 
-    pub fn clear(&mut self, clear_frame: bool) {
+    /// Drops the current frame and decoder state: the next frame starts from a new decoder state,
+    /// preceded by `start_frame_counters` (visible frames, and non-visible frames since the last
+    /// visible one).
+    pub fn reset(&mut self, start_frame_counters: (usize, usize)) {
+        self.clear();
+        self.frame = None;
+        self.start_frame_counters = start_frame_counters;
+    }
+
+    pub fn clear(&mut self) {
         self.frame_header = None;
         self.toc_parser = None;
         self.ready_section_data = 0;
-
-        if clear_frame {
-            self.frame = None;
-            self.start_frame_counters = (0, 0);
-        }
 
         // Clear sections
         self.sections.clear();
@@ -222,10 +226,12 @@ impl FrameInfo {
                 .transpose()?
                 .flatten()
                 .unwrap_or_else(|| {
-                    let mut s =
-                        DecoderState::new(file_header.clone(), decode_options, level5_limits);
-                    (s.visible_frame_index, s.nonvisible_frame_index) = self.start_frame_counters;
-                    s
+                    DecoderState::new(
+                        file_header.clone(),
+                        decode_options,
+                        level5_limits,
+                        self.start_frame_counters,
+                    )
                 });
             decoder_state.level5_limits = level5_limits;
             let mut frame =

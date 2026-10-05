@@ -143,7 +143,14 @@ impl DecoderState {
     pub const MAX_STORED_FRAMES: usize = 4;
     pub const NUM_LF_FRAMES: usize = 4;
 
-    pub fn new(file_header: FileHeader, options: &JxlDecoderOptions, level5_limits: bool) -> Self {
+    /// A decoder state with no reference frames, for a frame preceded by `frame_counters`
+    /// (visible frames, and non-visible frames since the last visible one).
+    pub fn new(
+        file_header: FileHeader,
+        options: &JxlDecoderOptions,
+        level5_limits: bool,
+        frame_counters: (usize, usize),
+    ) -> Self {
         Self {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
@@ -153,8 +160,8 @@ impl DecoderState {
             use_simple_pipeline: options.test_options.use_simple_pipeline,
             #[cfg(test)]
             allow_16bit_modular_buffers: !options.test_options.disable_16bit_modular_buffers,
-            visible_frame_index: 0,
-            nonvisible_frame_index: 0,
+            visible_frame_index: frame_counters.0,
+            nonvisible_frame_index: frame_counters.1,
             high_precision: options.high_precision,
             premultiply_output: options.premultiply_output,
             adjust_orientation: options.adjust_orientation,
