@@ -106,7 +106,6 @@ impl Frame {
         mut pipeline: RenderPipelineBuilder<P>,
         channels: &[usize],
         data_format: JxlDataFormat,
-        clamp_range_for_f16: Option<(f32, f32)>,
     ) -> RenderPipelineBuilder<P> {
         use crate::render::stages::{
             ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage,
@@ -127,9 +126,7 @@ impl Frame {
             }
             JxlDataFormat::F16 { .. } => {
                 for &channel in channels {
-                    pipeline = pipeline.add_inout_stage(
-                        ConvertF32ToF16Stage::new_with_clamp_range(channel, clamp_range_for_f16),
-                    );
+                    pipeline = pipeline.add_inout_stage(ConvertF32ToF16Stage::new(channel));
                 }
             }
             // F32 doesn't need conversion - the pipeline already uses f32
@@ -786,18 +783,6 @@ impl Frame {
             })
             .unwrap_or_else(|| output_color_info.tf.clone());
 
-        // Clamp transfer-domain values while converting to f16 so we don't
-        // emit wild out-of-range values to downstream consumers.
-        //
-        // PQ has a bounded signal domain [0,1].
-        // HLG may carry modest overshoot/undershoot (e.g. from narrow-range
-        // workflows), so preserve headroom with a looser clamp.
-        let clamp_range_for_f16 = match &output_tf {
-            TransferFunction::Pq { .. } => Some((0.0, 1.0)),
-            TransferFunction::Hlg { .. } => Some((-0.074, 1.1)),
-            _ => None,
-        };
-
         let xyb_encoded = decoder_state.file_header.image_metadata.xyb_encoded;
 
         if frame_header.do_ycbcr {
@@ -938,12 +923,7 @@ impl Frame {
                     ));
                 }
                 // Add conversion stages for non-float output formats
-                pipeline = Self::add_conversion_stages(
-                    pipeline,
-                    color_source_channels,
-                    *df,
-                    clamp_range_for_f16,
-                );
+                pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df);
                 pipeline = pipeline.add_save_stage(
                     color_source_channels,
                     output_orientation,
@@ -961,7 +941,7 @@ impl Frame {
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
                     // Add conversion stages for non-float output formats
-                    pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df, None);
+                    pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df);
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         output_orientation,

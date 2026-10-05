@@ -97,7 +97,7 @@ pub fn linear_to_pq_precise(intensity_target: f32, samples: &mut [f32]) {
         let num = PQ_C1 + xp * PQ_C2;
         let den = 1.0 + xp * PQ_C3;
         let e = (num / den).powf(PQ_M2);
-        *s = (e as f32).copysign(*s);
+        *s = (e as f32).copysign(*s).clamp(0.0, 1.0);
     }
 }
 
@@ -152,6 +152,8 @@ pub fn linear_to_pq_simd_vec<D: SimdDescriptor>(
     let y = threshold.gt(a).if_then_else_f32(y_small, y_large);
 
     y.copysign(s)
+        .max(D::F32Vec::splat(d, 0.0))
+        .min(D::F32Vec::splat(d, 1.0))
 }
 
 const HLG_A: f64 = 0.17883277;
@@ -211,6 +213,8 @@ pub fn scene_to_hlg_vec<D: SimdDescriptor>(d: D, s: D::F32Vec) -> D::F32Vec {
     a.gt(a_threshold)
         .if_then_else_f32(y_large, y_small)
         .copysign(s)
+        .max(D::F32Vec::splat(d, -0.074))
+        .min(D::F32Vec::splat(d, 1.1))
 }
 
 /// Converts HLG signal to scene-referred linear sample.
@@ -404,7 +408,7 @@ mod test {
                 eval_rational_poly(a_1_4, PQ_INV_EOTF_P, PQ_INV_EOTF_Q)
             };
 
-            *s = y.copysign(*s);
+            *s = y.copysign(*s).clamp(0.0, 1.0);
         }
     }
 
@@ -525,7 +529,7 @@ mod test {
                 // TODO(tirr-c): maybe use mul_add?
                 HLG_A * (12.0 * a - HLG_B).ln() + HLG_C
             };
-            *s = (y as f32).copysign(*s);
+            *s = (y as f32).copysign(*s).clamp(-0.074, 1.1);
         }
     }
 
@@ -552,7 +556,7 @@ mod test {
                 // log2 x = ln x / ln 2, therefore ln x = (ln 2)(log2 x)
                 (HLG_A * std::f64::consts::LN_2) as f32 * log + HLG_C as f32
             };
-            *s = y.copysign(*s);
+            *s = y.copysign(*s).clamp(-0.074, 1.1);
         }
     }
 
