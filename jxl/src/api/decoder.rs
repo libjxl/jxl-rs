@@ -58,6 +58,9 @@ pub struct VisibleFrameSeekTarget {
     /// Number of visible frames to skip after seek-start before decoding the
     /// requested target frame.
     pub visible_frames_to_skip: usize,
+    /// Visible frames before the decode-start frame, and non-visible frames since the last visible
+    /// one: the frame counters the decoder starts from (they seed the noise of each frame).
+    pub decode_start_frame_counters: (usize, usize),
 }
 
 /// JPEG XL decoder.
@@ -216,6 +219,7 @@ impl JxlDecoder {
         self.codestream_parser.start_new_frame(
             seek_target.visible_frames_to_skip,
             seek_target.box_parser_checkpoint.consumed_codestream,
+            seek_target.decode_start_frame_counters,
         );
         Ok(())
     }

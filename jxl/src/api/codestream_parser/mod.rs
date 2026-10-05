@@ -135,8 +135,9 @@ impl CodestreamParser {
         &mut self,
         visible_frames_to_skip: usize,
         consumed_codestream: u64,
+        frame_counters: (usize, usize),
     ) {
-        self.frame_info.clear(true);
+        self.frame_info.reset(frame_counters);
         self.local_buffer = SmallBuffer::new(4096);
         self.local_buffer.mark_consumed(consumed_codestream);
         self.visible_frames_to_skip = visible_frames_to_skip;
@@ -356,7 +357,11 @@ impl CodestreamParser {
                     }
 
                     let is_last = self.frame_info.current_frame_header().unwrap().is_last;
-                    self.frame_info.clear(is_last);
+                    if is_last {
+                        self.frame_info.reset((0, 0));
+                    } else {
+                        self.frame_info.clear();
+                    }
                     if !is_last {
                         self.state = ParserState::FrameHeader { is_preview };
                     } else if is_preview {
