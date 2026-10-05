@@ -66,6 +66,26 @@ impl SaveStage {
         let relative_y = group_y - save_start.1;
         let save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
 
+        let output_y = match self.orientation {
+            Orientation::Identity => Some(relative_y),
+            Orientation::FlipVertical => Some(save_size.1 - 1 - relative_y),
+            _ => None,
+        };
+
+        if let Some(output_y) = output_y
+            && identity::store_fused(
+                self,
+                data,
+                frame_y,
+                group_origin.0,
+                save_start.0..save_end.0,
+                buf,
+                output_y,
+            )
+        {
+            return Ok(());
+        }
+
         let conv_start = save_start.0;
         let conv_len = save_end.0 - conv_start;
         let mut save_buffers: ChannelVec<&RowBuffer> = ChannelVec::new();
@@ -174,12 +194,6 @@ impl SaveStage {
             save_buffers.push(&*s_buf);
         }
         let data = &save_buffers[..];
-
-        let output_y = match self.orientation {
-            Orientation::Identity => Some(relative_y),
-            Orientation::FlipVertical => Some(save_size.1 - 1 - relative_y),
-            _ => None,
-        };
 
         if let Some(output_y) = output_y
             && identity::store(
