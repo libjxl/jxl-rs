@@ -80,27 +80,6 @@ const PQ_C1: f64 = 3424.0 / 4096.0;
 const PQ_C2: f64 = (2413.0 / 4096.0) * 32.0;
 const PQ_C3: f64 = (2392.0 / 4096.0) * 32.0;
 
-/// Converts linear sample to PQ signal using PQ inverse EOTF, where linear sample value of 1.0
-/// represents `intensity_target` display nits.
-///
-/// This version uses original EOTF using double precision arithmetic internally.
-pub fn linear_to_pq_precise(intensity_target: f32, samples: &mut [f32]) {
-    let mult = intensity_target as f64 * 10000f64.recip();
-
-    for s in samples {
-        if *s == 0.0 {
-            continue;
-        }
-
-        let a = s.abs() as f64;
-        let xp = (a * mult).powf(PQ_M1);
-        let num = PQ_C1 + xp * PQ_C2;
-        let den = 1.0 + xp * PQ_C3;
-        let e = (num / den).powf(PQ_M2);
-        *s = (e as f32).copysign(*s).clamp(0.0, 1.0);
-    }
-}
-
 /// Converts PQ signal to linear sample using PQ EOTF, where linear sample value of 1.0 represents
 /// `intensity_target` display nits.
 ///
@@ -391,6 +370,23 @@ mod test {
                 .if_then_else_f32(linear_part, gamma_part)
                 .copysign(x)
                 .store(vec);
+        }
+    }
+
+    fn linear_to_pq_precise(intensity_target: f32, samples: &mut [f32]) {
+        let mult = intensity_target as f64 * 10000f64.recip();
+
+        for s in samples {
+            if *s == 0.0 {
+                continue;
+            }
+
+            let a = s.abs() as f64;
+            let xp = (a * mult).powf(PQ_M1);
+            let num = PQ_C1 + xp * PQ_C2;
+            let den = 1.0 + xp * PQ_C3;
+            let e = (num / den).powf(PQ_M2);
+            *s = (e as f32).copysign(*s).clamp(0.0, 1.0);
         }
     }
 
