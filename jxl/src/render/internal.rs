@@ -62,12 +62,12 @@ impl<Buffer: 'static> Stage<Buffer> {
             Stage::Save(s) => s.uses_channel(c),
         }
     }
-    pub(super) fn input_type(&self) -> DataTypeTag {
+    pub(super) fn input_type(&self, c: usize) -> DataTypeTag {
         match self {
             Stage::Extend(_) => DataTypeTag::F32,
             Stage::InPlace(s) => s.ty(),
             Stage::InOut(s) => s.input_type(),
-            Stage::Save(s) => s.input_type(),
+            Stage::Save(s) => s.input_type(c),
         }
     }
     pub(super) fn output_type(&self) -> Option<DataTypeTag> {

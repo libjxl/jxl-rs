@@ -14,11 +14,8 @@ use crate::headers::Orientation;
 use crate::headers::bit_depth::BitDepth;
 use crate::image::{BufferRecycler, DataTypeTag};
 use crate::render::internal::ChannelInfo;
-use crate::render::save::SaveStage;
-use crate::render::stages::{
-    ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage, ConvertI16ToU8Stage,
-    ConvertI32ToU8Stage, ConvertModular16ToF32Stage, ConvertModularToF32Stage,
-};
+use crate::render::save::{SaveChannelType, SaveStage};
+use crate::render::stages::{ConvertModular16ToF32Stage, ConvertModularToF32Stage};
 use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
 use crate::util::tracing_wrappers::*;
@@ -73,68 +70,43 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
     }
 
-    pub(super) fn add_stage_internal(mut self, stage: Stage<Pipeline::Buffer>) -> Self {
-        let input_type = stage.input_type();
+    pub(super) fn add_stage_internal(mut self, mut stage: Stage<Pipeline::Buffer>) -> Self {
         let output_type = stage.output_type();
         for (c, (cur_ty, bd)) in self.channel_types.iter_mut().enumerate() {
             if !stage.uses_channel(c) {
                 continue;
             }
-            if *cur_ty != input_type {
-                if matches!(*cur_ty, DataTypeTag::I16 | DataTypeTag::I32)
-                    && let Some(in_bd) = *bd
+            if matches!(*cur_ty, DataTypeTag::I16 | DataTypeTag::I32)
+                && let Some(in_bd) = *bd
+            {
+                if let Stage::Save(s) = &mut stage
+                    && !in_bd.floating_point_sample()
                 {
-                    let direct_to_u8 = match &stage {
-                        Stage::Save(s) => match s.data_format {
-                            JxlDataFormat::U8 { bit_depth: out_b }
-                                if !in_bd.floating_point_sample()
-                                    && out_b.is_multiple_of(in_bd.bits_per_sample() as u8) =>
-                            {
-                                Some(out_b)
-                            }
-                            _ => None,
-                        },
-                        _ => None,
+                    let in_bits = in_bd.bits_per_sample() as u8;
+                    let can_convert_inline = match s.data_format {
+                        JxlDataFormat::U8 {
+                            bit_depth: out_bits,
+                        } => out_bits.is_multiple_of(in_bits),
+                        JxlDataFormat::F16 { .. } => *cur_ty == DataTypeTag::I16,
+                        _ => false,
                     };
-                    if let Some(out_b) = direct_to_u8 {
-                        let in_b = in_bd.bits_per_sample() as u8;
-                        let mult = ((1i32 << out_b) - 1) / ((1i32 << in_b) - 1);
-                        let max = (1i32 << out_b) - 1;
-                        let conv = if *cur_ty == DataTypeTag::I16 {
-                            Pipeline::box_inout_stage(ConvertI16ToU8Stage::new(c, mult, max))
+                    if can_convert_inline {
+                        let save_ty = if *cur_ty == DataTypeTag::I16 {
+                            SaveChannelType::I16 { bit_depth: in_bits }
                         } else {
-                            Pipeline::box_inout_stage(ConvertI32ToU8Stage::new(c, mult, max))
+                            SaveChannelType::I32 { bit_depth: in_bits }
                         };
-                        self.shared.stages.push(Stage::InOut(conv));
-                        *cur_ty = DataTypeTag::U8;
-                    } else if input_type == DataTypeTag::F32 || matches!(&stage, Stage::Save(_)) {
-                        let conv = if *cur_ty == DataTypeTag::I16 {
-                            Pipeline::box_inout_stage(ConvertModular16ToF32Stage::new(c, in_bd))
-                        } else {
-                            Pipeline::box_inout_stage(ConvertModularToF32Stage::new(c, in_bd))
-                        };
-                        self.shared.stages.push(Stage::InOut(conv));
-                        *cur_ty = DataTypeTag::F32;
+                        s.set_channel_type(c, save_ty);
                     }
                 }
-                if *cur_ty == DataTypeTag::F32
-                    && input_type != DataTypeTag::F32
-                    && let Stage::Save(s) = &stage
-                {
-                    let conv = match s.data_format {
-                        JxlDataFormat::U8 { bit_depth } => {
-                            Pipeline::box_inout_stage(ConvertF32ToU8Stage::new(c, bit_depth))
-                        }
-                        JxlDataFormat::U16 { bit_depth, .. } => {
-                            Pipeline::box_inout_stage(ConvertF32ToU16Stage::new(c, bit_depth))
-                        }
-                        JxlDataFormat::F16 { .. } => {
-                            Pipeline::box_inout_stage(ConvertF32ToF16Stage::new(c))
-                        }
-                        JxlDataFormat::F32 { .. } => unreachable!(),
+                if stage.input_type(c) == DataTypeTag::F32 {
+                    let conv = if *cur_ty == DataTypeTag::I16 {
+                        Pipeline::box_inout_stage(ConvertModular16ToF32Stage::new(c, in_bd))
+                    } else {
+                        Pipeline::box_inout_stage(ConvertModularToF32Stage::new(c, in_bd))
                     };
                     self.shared.stages.push(Stage::InOut(conv));
-                    *cur_ty = input_type;
+                    *cur_ty = DataTypeTag::F32;
                 }
             }
             if let Some(out_ty) = output_type {
@@ -238,7 +210,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             .collect();
 
         for (i, stage) in self.shared.stages.iter().enumerate() {
-            let input_type = stage.input_type();
             let output_type = stage.output_type();
             let shift = stage.shift();
             let border = stage.border();
@@ -258,6 +229,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                         downsample: (0, 0),
                     });
                 } else {
+                    let input_type = stage.input_type(c);
                     if info.ty != input_type {
                         return Err(Error::PipelineChannelTypeMismatch(
                             stage.to_string(),

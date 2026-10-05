@@ -16,12 +16,9 @@ use crate::image::{DataTypeTag, Rect};
 use crate::render::buffer_splitter::{BufferSplitter, OutputChannelRef, SaveStageBufferInfo};
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::save::SaveStage;
-use crate::render::stages::{
-    ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage, OutputColorInfo, Upsample8x,
-    XybColorConvertStage,
-};
+use crate::render::stages::{OutputColorInfo, Upsample8x, XybColorConvertStage};
 use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
-use crate::util::{SmallVec, f16, mirror};
+use crate::util::{SmallVec, mirror};
 
 impl Frame {
     #[allow(clippy::too_many_arguments)]
@@ -47,22 +44,12 @@ impl Frame {
         );
         let len = rect.size.0;
         let ulen = len * 8;
-        enum DataFormatConverter {
-            U8(ConvertF32ToU8Stage),
-            U16(ConvertF32ToU16Stage),
-            F16(ConvertF32ToF16Stage),
-            None,
-        }
-        let converter = match data_format {
-            JxlDataFormat::U8 { bit_depth } => {
-                DataFormatConverter::U8(ConvertF32ToU8Stage::new(0, bit_depth))
-            }
-            JxlDataFormat::U16 { bit_depth, .. } => {
-                DataFormatConverter::U16(ConvertF32ToU16Stage::new(0, bit_depth))
-            }
-            JxlDataFormat::F16 { .. } => DataFormatConverter::F16(ConvertF32ToF16Stage::new(0)),
-            JxlDataFormat::F32 { .. } => DataFormatConverter::None,
-        };
+        let mut scratch = [
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ulen)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ulen)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ulen)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ulen)?,
+        ];
 
         let upsample_stage = Upsample8x::new(&self.decoder_state.file_header.transform_data, 0);
         let mut upsample_state = upsample_stage.init_local_state()?.unwrap();
@@ -83,14 +70,6 @@ impl Frame {
             RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
             RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
         ];
-
-        let mut output_rows = [
-            RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
-            RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
-            RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
-        ];
-
-        let mut save_scratch = RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ulen)?;
 
         // At this point, we already verified that lf_frame or lf_frame_data are present.
         let src = if self.header.frame_type == FrameType::RegularFrame {
@@ -163,7 +142,7 @@ impl Frame {
                 );
             }
 
-            // un-XYB, convert and save.
+            // un-XYB and save.
             for uy in y * 8..y * 8 + 8 {
                 // XYB
                 let [x, y, b] = &mut upsampled_rows;
@@ -175,60 +154,16 @@ impl Frame {
                 ];
                 xyb_stage.process_row_chunk((0, 0), ulen, &mut rows, None, false);
 
-                macro_rules! convert {
-                    ($s: expr, $t: ty) => {
-                        for c in 0..3 {
-                            let input_rows_refs = std::iter::once(
-                                &upsampled_rows[c].get_row(uy)[RowBuffer::x0_offset::<f32>()..],
-                            )
-                            .collect();
-                            let input_channels = Channels::new(input_rows_refs, 1, 1);
-                            let mut output_rows_refs = SmallVec::new();
-                            output_rows[c].get_rows_mut(
-                                uy..uy + 1,
-                                RowBuffer::x0_offset::<$t>(),
-                                &mut output_rows_refs,
-                            );
-                            let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 1);
-                            $s.process_row_chunk(
-                                (0, 0),
-                                ulen,
-                                &input_channels,
-                                &mut output_channels,
-                                None,
-                                false,
-                            );
-                        }
-                    };
-                }
-
-                // Convert
-                let save_input = match &converter {
-                    DataFormatConverter::U8(s) => {
-                        convert!(s, u8);
-                        &output_rows
-                    }
-                    DataFormatConverter::U16(s) => {
-                        convert!(s, u16);
-                        &output_rows
-                    }
-                    DataFormatConverter::F16(s) => {
-                        convert!(s, f16);
-                        &output_rows
-                    }
-                    DataFormatConverter::None => &upsampled_rows,
-                };
-
                 let input_channels = match color_type {
                     JxlColorType::Bgr | JxlColorType::Bgra => {
-                        [&save_input[2], &save_input[1], &save_input[0]]
+                        [&upsampled_rows[2], &upsampled_rows[1], &upsampled_rows[0]]
                     }
-                    _ => [&save_input[0], &save_input[1], &save_input[2]],
+                    _ => [&upsampled_rows[0], &upsampled_rows[1], &upsampled_rows[2]],
                 };
 
                 save_stage.save_lowmem(
                     &input_channels,
-                    &mut save_scratch,
+                    &mut scratch,
                     output_buffers,
                     upsampled_rect.size,
                     uy,

@@ -32,7 +32,7 @@ mod save;
 
 struct LowMemoryRenderPipelinePerThread {
     row_buffers: Vec<Vec<RowBuffer>>,
-    save_scratch: Option<RowBuffer>,
+    save_scratch: Option<[RowBuffer; 4]>,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<ErasedLocalState>>>,
 }
@@ -76,13 +76,12 @@ impl LowMemoryRenderPipelinePerThread {
             }
             self.row_buffers.push(stage_buffers);
         }
-        self.save_scratch = Some(RowBuffer::new(
-            DataTypeTag::F32,
-            0,
-            0,
-            0,
-            p.shared.chunk_size,
-        )?);
+        self.save_scratch = Some([
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
+        ]);
         self.local_states = p
             .shared
             .stages
