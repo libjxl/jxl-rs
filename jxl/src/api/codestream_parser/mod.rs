@@ -113,6 +113,10 @@ pub(super) struct CodestreamParser {
     /// Number of visible frames still to skip before returning to the caller.
     /// Set via `start_new_frame` when seeking to a non-keyframe.
     visible_frames_to_skip: usize,
+
+    /// Number of frames decoded (not skipped), for tests.
+    #[cfg(test)]
+    pub(super) frames_decoded: usize,
 }
 
 impl CodestreamParser {
@@ -126,6 +130,8 @@ impl CodestreamParser {
             header_needed_bytes: None,
             frame_info: FrameInfo::new(),
             visible_frames_to_skip: 0,
+            #[cfg(test)]
+            frames_decoded: 0,
             frame_scan_info: FrameScanInfo::new(),
             file_length: None,
         }
@@ -288,11 +294,29 @@ impl CodestreamParser {
                         process_mode = ProcessMode::SkipOutput;
                     } else if self.visible_frames_to_skip > 0 {
                         self.visible_frames_to_skip -= 1;
-                        process_mode = ProcessMode::SkipOutput;
+                        // A frame that is not saved in a reference slot cannot affect later
+                        // frames (blending and patches only read reference slots), so it does
+                        // not need to be decoded at all.
+                        if self
+                            .frame_info
+                            .current_frame_header()
+                            .unwrap()
+                            .can_be_referenced
+                        {
+                            process_mode = ProcessMode::SkipOutput;
+                        } else {
+                            process_mode = ProcessMode::Skip(false);
+                            self.frame_info.skipped_visible_frames += 1;
+                        }
                     }
 
                     if decode_options.scan_frames_only && process_mode == ProcessMode::Process {
                         process_mode = ProcessMode::Skip(true);
+                    }
+
+                    #[cfg(test)]
+                    if !matches!(process_mode, ProcessMode::Skip(_)) {
+                        self.frames_decoded += 1;
                     }
 
                     self.state = ParserState::Sections {

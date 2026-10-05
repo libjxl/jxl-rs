@@ -783,6 +783,52 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
     });
 }
 
+// Sprite sheet A in slot 1, frames 0-5 patch from it, sheet B replaces it, frames 6-11 patch from
+// that. Every frame depends on a sheet, so a seek starts at the sheet and skips the frames in
+// between, which are not saved in any slot.
+#[test]
+fn test_start_new_frame_skips_unreferenced_frames() {
+    let data = std::fs::read("resources/test/animation_seek_sprite_sheets.jxl").unwrap();
+    let scanned_frames = scan_frames(&data, usize::MAX);
+    let sequential_frames = decode(&data, Default::default()).unwrap();
+    assert_eq!(scanned_frames.len(), 12);
+
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let mut input = &data[..];
+    while decoder.process(&mut input, None, None).unwrap() != Event::Complete {}
+
+    for target in (0..scanned_frames.len()).rev() {
+        let seek_target = scanned_frames[target].seek_target;
+        let expected = &sequential_frames[target];
+        let before = decoder.frames_decoded();
+
+        decoder.start_new_frame(seek_target).unwrap();
+        let mut input = &data[seek_target.decode_start_file_offset as usize..];
+        assert_eq!(
+            decoder.process(&mut input, None, None).unwrap(),
+            Event::FrameHeader
+        );
+        let mut seek_decoded: Vec<Image<f32>> = expected
+            .iter()
+            .map(|img| Image::new(img.size()).unwrap())
+            .collect();
+        let mut buffers = as_output_buffers(&mut seek_decoded);
+        assert!(matches!(
+            decoder.process(&mut input, Some(&mut buffers), None),
+            Ok(Event::FrameComplete { .. })
+        ));
+        compare_frames(
+            Path::new("skip_unreferenced"),
+            target,
+            expected,
+            &seek_decoded,
+        );
+
+        // The sheet and the target; the frames in between are skipped.
+        assert_eq!(decoder.frames_decoded() - before, 2, "frame {target}");
+    }
+}
+
 #[test]
 fn test_start_new_frame_bare_codestream() {
     let data =
