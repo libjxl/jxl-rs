@@ -7,9 +7,7 @@ use jxl_simd::{F32SimdVec, I16SimdVec, I32SimdVec, SimdMask, SimdMask16, simd_fu
 
 use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::bit_depth::BitDepth;
-use crate::render::{
-    Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, StageSpecialCase,
-};
+use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
 use crate::util::DITHER_TABLE;
 use crate::util::sync::{Arc, RwLock};
 
@@ -435,17 +433,6 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
             modular_to_float_32bit_simd_dispatch(input[0], output_rows[0][0], scale, xsize);
         }
     }
-
-    fn is_special_case(&self) -> Option<StageSpecialCase> {
-        if self.bit_depth.floating_point_sample() {
-            None
-        } else {
-            Some(StageSpecialCase::ModularToF32 {
-                channel: self.channel,
-                bit_depth: self.bit_depth.bits_per_sample() as u8,
-            })
-        }
-    }
 }
 
 pub struct ConvertModular16ToF32Stage {
@@ -521,17 +508,6 @@ impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
         } else {
             let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
             modular16_to_float_simd_dispatch(input[0], output_rows[0][0], scale, xsize);
-        }
-    }
-
-    fn is_special_case(&self) -> Option<StageSpecialCase> {
-        if self.bit_depth.floating_point_sample() {
-            None
-        } else {
-            Some(StageSpecialCase::Modular16ToF32 {
-                channel: self.channel,
-                bit_depth: self.bit_depth.bits_per_sample() as u8,
-            })
         }
     }
 }
@@ -620,13 +596,6 @@ impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
         let output = &mut output_rows[0][0];
         let max = ((1u32 << self.bit_depth) - 1) as f32;
         f32_to_u8_simd_dispatch(input, output, max, position, self.channel, xsize);
-    }
-
-    fn is_special_case(&self) -> Option<StageSpecialCase> {
-        Some(StageSpecialCase::F32ToU8 {
-            channel: self.channel,
-            bit_depth: self.bit_depth,
-        })
     }
 }
 

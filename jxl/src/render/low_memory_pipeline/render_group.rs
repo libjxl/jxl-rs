@@ -96,7 +96,6 @@ impl<'a> BufferFiller<'a> {
             ty,
             downsample: (dx, dy),
         } = rp.shared.channel_info[0][c];
-        let ty = ty.expect("Channel info should be populated at this point");
 
         let scaled_y_border = rp.input_border_pixels[c].1 << dy;
         let stage_vy_start = vyrange.start as isize - scaled_y_border as isize;

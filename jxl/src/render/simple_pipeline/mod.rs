@@ -174,7 +174,6 @@ impl RenderPipeline for SimpleRenderPipeline {
             let goffset = self.shared.group_offset(group_id);
             let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
             let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
-            let ty = ty.unwrap();
             assert_eq!(ty, T::DATA_TYPE_ID);
             let mut buffers = self.input_buffers.lock().unwrap();
             let total_sz = buffers[channel].size();
