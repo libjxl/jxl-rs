@@ -3,14 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::inner::box_parser::CodestreamInput;
-use crate::api::inner::codestream_parser::frame_info::FrameInfo;
-use crate::api::inner::codestream_parser::frame_scan_info::FrameScanInfo;
-use crate::api::inner::codestream_parser::image_info::ImageInfo;
-use crate::api::inner::process::SmallBuffer;
+use crate::api::box_parser::CodestreamInput;
+use crate::api::codestream_parser::frame_info::FrameInfo;
+use crate::api::codestream_parser::frame_scan_info::FrameScanInfo;
+use crate::api::codestream_parser::image_info::ImageInfo;
 use crate::api::{
-    JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
-    ProfileLevel,
+    Event, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
+    ProfileLevel, SmallBuffer,
 };
 use crate::error::{Error, Result};
 
@@ -49,7 +48,8 @@ enum ParserState {
         is_preview: bool,
         process_mode: ProcessMode,
     },
-    Finished,
+    TrailingData,
+    Done,
 }
 
 fn level5_limits(input: &CodestreamInput, decode_options: &JxlDecoderOptions) -> bool {
@@ -76,8 +76,11 @@ fn validate_output_buffers(
     output_buffers: &[JxlOutputBuffer],
     pixel_format: Option<&JxlPixelFormat>,
 ) -> Result<()> {
-    let px = pixel_format
-        .expect("API usage error: cannot pass output buffers before having color information");
+    let Some(px) = pixel_format else {
+        return Err(Error::ApiUsageError(
+            "cannot provide output buffers before BasicInfo",
+        ));
+    };
     let expected_len = std::iter::once(&px.color_data_format)
         .chain(px.extra_channel_format.iter())
         .filter(|x| x.is_some())
@@ -141,8 +144,8 @@ impl CodestreamParser {
         self.header_needed_bytes = None;
     }
 
-    pub(super) fn has_more_frames(&self) -> bool {
-        self.state != ParserState::Finished
+    fn has_more_frames(&self) -> bool {
+        !matches!(self.state, ParserState::TrailingData | ParserState::Done)
     }
 
     fn refill_and_parse<T>(
@@ -199,14 +202,16 @@ impl CodestreamParser {
         decode_options: &JxlDecoderOptions,
         output_buffers: Option<&mut [JxlOutputBuffer]>,
         parallel_runner: &mut dyn JxlParallelRunner,
-    ) -> Result<()> {
-        let result = self.process_inner(input, decode_options, output_buffers, parallel_runner);
-        if let Err(Error::OutOfBounds(_)) = result
-            && input.box_parser().is_codestream_complete()
-        {
-            Err(Error::UnexpectedCodestreamBoxEnd)
-        } else {
-            result
+    ) -> Result<Event> {
+        match self.process_inner(input, decode_options, output_buffers, parallel_runner) {
+            Err(Error::OutOfBounds(_))
+                if self.state != ParserState::TrailingData
+                    && input.box_parser().is_codestream_complete() =>
+            {
+                Err(Error::UnexpectedCodestreamBoxEnd)
+            }
+            Err(Error::OutOfBounds(size_hint)) => Ok(Event::NeedMoreInput { size_hint }),
+            result => result,
         }
     }
 
@@ -216,11 +221,10 @@ impl CodestreamParser {
         decode_options: &JxlDecoderOptions,
         mut output_buffers: Option<&mut [JxlOutputBuffer]>,
         parallel_runner: &mut dyn JxlParallelRunner,
-    ) -> Result<()> {
+    ) -> Result<Event> {
         if let Some(output_buffers) = &output_buffers {
             validate_output_buffers(output_buffers, self.pixel_format.as_ref())?;
         }
-
         loop {
             match self.state {
                 ParserState::FileHeader => {
@@ -241,7 +245,7 @@ impl CodestreamParser {
                     self.state = ParserState::FrameHeader {
                         is_preview: self.image_info.has_preview(),
                     };
-                    return Ok(());
+                    return Ok(Event::BasicInfo);
                 }
 
                 ParserState::FrameHeader { is_preview } => {
@@ -321,7 +325,7 @@ impl CodestreamParser {
                     }
 
                     if process_mode.notify_user() {
-                        return Ok(());
+                        return Ok(Event::FrameHeader);
                     }
                 }
 
@@ -337,7 +341,9 @@ impl CodestreamParser {
                             .fill_sections(input, &mut self.local_buffer)?;
 
                         match self.frame_info.process_sections(
-                            &mut output_buffers,
+                            (process_mode == ProcessMode::Process)
+                                .then_some(output_buffers.as_deref_mut())
+                                .flatten(),
                             self.output_color_profile.as_ref().unwrap(),
                             self.pixel_format.as_ref().unwrap(),
                             parallel_runner,
@@ -356,7 +362,7 @@ impl CodestreamParser {
                     } else if is_preview {
                         self.state = ParserState::FrameHeader { is_preview: false };
                     } else {
-                        self.state = ParserState::Finished;
+                        self.state = ParserState::TrailingData;
                         self.file_length = Some(
                             input
                                 .box_parser()
@@ -365,18 +371,29 @@ impl CodestreamParser {
                     }
 
                     if process_mode.notify_user() {
-                        return Ok(());
+                        return Ok(Event::FrameComplete {
+                            has_more_frames: self.has_more_frames(),
+                        });
                     }
                 }
 
-                ParserState::Finished => {
-                    panic!("API usage error: called process() on completed file")
+                ParserState::TrailingData => {
+                    input.consume_trailing_data()?;
+                    self.state = ParserState::Done;
+                    return Ok(Event::Complete);
+                }
+
+                ParserState::Done => {
+                    return Err(Error::ApiUsageError("decoding is already complete"));
                 }
             };
         }
     }
 
-    pub fn has_frame(&self) -> bool {
-        matches!(self.state, ParserState::Sections { .. })
+    pub fn has_visible_frame(&self) -> bool {
+        matches!(
+            self.state,
+            ParserState::Sections { process_mode, .. } if process_mode.notify_user()
+        )
     }
 }

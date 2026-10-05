@@ -6,12 +6,12 @@
 use std::path::Path;
 
 use crate::api::{
-    JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderInner, JxlDecoderOptions, JxlPixelFormat,
-    JxlTransferFunction, ProcessingResult, states,
+    Event, JxlAuxBoxType, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
+    JxlPixelFormat, JxlTransferFunction,
 };
 use crate::error::Error;
-use crate::image::{Image, ImageDataType, JxlOutputBuffer, Rect};
-use crate::tests::decode::{DecodeParams, compare_frames, decode, scan_frames};
+use crate::image::{Image, ImageDataType};
+use crate::tests::decode::{DecodeParams, as_output_buffers, compare_frames, decode, scan_frames};
 
 // OOO jxlp boxes require any frame to start in a box that has all the logically-before
 // boxes physically before it, and all the logically-after boxes physically after it.
@@ -30,45 +30,39 @@ fn decode_ooo_jxlp_invalid_animated_container() {
 fn test_preview_size_none_for_regular_files() {
     let file = std::fs::read("resources/test/basic.jxl").unwrap();
     let options = JxlDecoderOptions::default();
-    let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut decoder = JxlDecoder::new(options);
     let mut input = file.as_slice();
-    let decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-        }
-    };
-    assert!(decoder.basic_info().preview_size.is_none());
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::BasicInfo
+    );
+    assert!(decoder.basic_info().unwrap().preview_size.is_none());
 }
 
 #[test]
 fn test_preview_size_some_for_preview_files() {
     let file = std::fs::read("resources/test/with_preview.jxl").unwrap();
     let options = JxlDecoderOptions::default();
-    let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut decoder = JxlDecoder::new(options);
     let mut input = file.as_slice();
-    let decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-        }
-    };
-    assert_eq!(decoder.basic_info().preview_size, Some((16, 16)));
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::BasicInfo
+    );
+    assert_eq!(decoder.basic_info().unwrap().preview_size, Some((16, 16)));
 }
 
 #[test]
 fn test_set_pixel_format() {
     let file = std::fs::read("resources/test/basic.jxl").unwrap();
     let options = JxlDecoderOptions::default();
-    let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut decoder = JxlDecoder::new(options);
     let mut input = file.as_slice();
-    let mut decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-        }
-    };
-    let default_format = decoder.current_pixel_format().clone();
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::BasicInfo
+    );
+    let default_format = decoder.current_pixel_format().unwrap().clone();
     assert_eq!(default_format.color_type, JxlColorType::Rgb);
 
     let new_format = JxlPixelFormat {
@@ -77,30 +71,36 @@ fn test_set_pixel_format() {
         extra_channel_format: vec![],
     };
     decoder.set_pixel_format(new_format.clone()).unwrap();
-    assert_eq!(decoder.current_pixel_format(), &new_format);
+    assert_eq!(decoder.current_pixel_format().unwrap(), &new_format);
 }
 
 #[test]
 fn test_default_output_tf_by_pixel_format() {
     let file = std::fs::read("resources/test/lossy_with_icc.jxl").unwrap();
     let options = JxlDecoderOptions::default();
-    let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut decoder = JxlDecoder::new(options);
     let mut input = file.as_slice();
-    let mut decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-        }
-    };
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::BasicInfo
+    );
 
     assert_eq!(
-        *decoder.output_color_profile().transfer_function().unwrap(),
+        *decoder
+            .output_color_profile()
+            .unwrap()
+            .transfer_function()
+            .unwrap(),
         JxlTransferFunction::Linear,
     );
 
     decoder.set_pixel_format(JxlPixelFormat::rgba8(0)).unwrap();
     assert_eq!(
-        *decoder.output_color_profile().transfer_function().unwrap(),
+        *decoder
+            .output_color_profile()
+            .unwrap()
+            .transfer_function()
+            .unwrap(),
         JxlTransferFunction::SRGB,
     );
 
@@ -108,13 +108,21 @@ fn test_default_output_tf_by_pixel_format() {
         .set_pixel_format(JxlPixelFormat::rgba_f16(0))
         .unwrap();
     assert_eq!(
-        *decoder.output_color_profile().transfer_function().unwrap(),
+        *decoder
+            .output_color_profile()
+            .unwrap()
+            .transfer_function()
+            .unwrap(),
         JxlTransferFunction::Linear,
     );
 
     decoder.set_pixel_format(JxlPixelFormat::rgba16(0)).unwrap();
     assert_eq!(
-        *decoder.output_color_profile().transfer_function().unwrap(),
+        *decoder
+            .output_color_profile()
+            .unwrap()
+            .transfer_function()
+            .unwrap(),
         JxlTransferFunction::SRGB,
     );
 }
@@ -336,168 +344,35 @@ fn test_premultiply_output_already_premultiplied() {
     }
 }
 
-/// Test that animations with reference frames work correctly.
-#[test]
-fn test_animation_with_reference_frames() {
-    let file =
-        std::fs::read("resources/test/conformance_test_images/animation_spline.jxl").unwrap();
-
-    let options = JxlDecoderOptions::default();
-    let decoder = JxlDecoder::<states::Initialized>::new(options);
-    let mut input = file.as_slice();
-
-    let mut decoder = decoder;
-    let mut decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                decoder = fallback;
-            }
-        }
-    };
-
-    let rgb_format = JxlPixelFormat {
-        color_type: JxlColorType::Rgb,
-        color_data_format: Some(JxlDataFormat::f32()),
-        extra_channel_format: vec![],
-    };
-    decoder.set_pixel_format(rgb_format).unwrap();
-
-    let basic_info = decoder.basic_info().clone();
-    let (width, height) = basic_info.size;
-
-    let mut frame_count = 0;
-
-    loop {
-        let mut decoder_frame = loop {
-            match decoder.process(&mut input, None).unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    decoder = fallback;
-                }
-            }
-        };
-
-        let mut color_buffer = Image::<f32>::new((width * 3, height)).unwrap();
-        let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
-            color_buffer
-                .get_rect_mut(Rect {
-                    origin: (0, 0),
-                    size: (width * 3, height),
-                })
-                .into_raw(),
-        )];
-
-        decoder = loop {
-            match decoder_frame
-                .process(&mut input, &mut buffers, None)
-                .unwrap()
-            {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    decoder_frame = fallback;
-                }
-            }
-        };
-
-        frame_count += 1;
-
-        if !decoder.has_more_frames() {
-            break;
-        }
-    }
-
-    assert!(
-        frame_count > 1,
-        "Expected multiple frames in animation, got {}",
-        frame_count
-    );
-}
-
 #[test]
 fn test_skip_frame_then_decode_next() {
     let file =
         std::fs::read("resources/test/conformance_test_images/animation_spline.jxl").unwrap();
 
-    let options = JxlDecoderOptions::default();
-    let decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
     let mut input = file.as_slice();
 
-    let mut decoder = decoder;
-    let mut decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                decoder = fallback;
-            }
-        }
-    };
+    for expected in [
+        Event::BasicInfo,
+        Event::FrameHeader,
+        Event::FrameComplete {
+            has_more_frames: true,
+        },
+        Event::FrameHeader,
+    ] {
+        assert_eq!(decoder.process(&mut input, None, None).unwrap(), expected);
+    }
 
-    let rgb_format = JxlPixelFormat {
-        color_type: JxlColorType::Rgb,
-        color_data_format: Some(JxlDataFormat::f32()),
-        extra_channel_format: vec![],
-    };
-    decoder.set_pixel_format(rgb_format).unwrap();
-
-    let basic_info = decoder.basic_info().clone();
-    let (width, height) = basic_info.size;
-
-    let mut decoder_frame = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                decoder = fallback;
-            }
-        }
-    };
-
-    let mut decoder = loop {
-        match decoder_frame.skip_frame(&mut input).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                decoder_frame = fallback;
-            }
-        }
-    };
-
-    assert!(
-        decoder.has_more_frames(),
-        "Animation should have more frames"
-    );
-
-    let mut decoder_frame = loop {
-        match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                decoder = fallback;
-            }
-        }
-    };
-
-    let mut color_buffer = Image::<f32>::new((width * 3, height)).unwrap();
-    let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
-        color_buffer
-            .get_rect_mut(Rect {
-                origin: (0, 0),
-                size: (width * 3, height),
-            })
-            .into_raw(),
-    )];
-
-    let decoder = loop {
-        match decoder_frame
-            .process(&mut input, &mut buffers, None)
-            .unwrap()
-        {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                decoder_frame = fallback;
-            }
-        }
-    };
-
-    let _ = decoder.has_more_frames();
+    let (width, height) = decoder.basic_info().unwrap().size;
+    let mut color_buffer = [Image::<f32>::new((width * 3, height)).unwrap()];
+    assert!(matches!(
+        decoder.process(
+            &mut input,
+            Some(&mut as_output_buffers(&mut color_buffer)),
+            None
+        ),
+        Ok(Event::FrameComplete { .. })
+    ));
 }
 
 fn check_output_format_matches_f32<T: ImageDataType>() {
@@ -850,16 +725,13 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
             u.int_in_range(scanned_frames[0].file_offset..=data.len() as u64)? as usize;
 
         let options = JxlDecoderOptions::default();
-        let mut decoder = JxlDecoderInner::new(options);
+        let mut decoder = JxlDecoder::new(options);
         let mut input = &data[..initial_offset];
 
-        while let ProcessingResult::Complete { .. } =
-            decoder.process(&mut input, None, None).unwrap()
-        {
-            if input.is_empty() {
-                break;
-            }
-        }
+        while !matches!(
+            decoder.process(&mut input, None, None).unwrap(),
+            Event::NeedMoreInput { .. } | Event::Complete
+        ) {}
 
         let num_seeks = u.int_in_range(1..=3)?;
         for _ in 0..num_seeks {
@@ -869,63 +741,25 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
 
             let expected = &sequential_frames[target_visible_index];
 
-            decoder.start_new_frame(seek_target);
+            decoder.start_new_frame(seek_target).unwrap();
             let mut input = &data[seek_target.decode_start_file_offset as usize..];
 
-            let result = decoder.process(&mut input, None, None);
-            assert!(
-                matches!(result, Ok(ProcessingResult::Complete { .. })),
-                "decoder.process: {result:?}"
+            assert_eq!(
+                decoder.process(&mut input, None, None).unwrap(),
+                Event::FrameHeader
             );
 
-            let basic_info = decoder.basic_info().unwrap().clone();
-            let (width, height) = basic_info.size;
-
-            let default_format = decoder.current_pixel_format().unwrap().clone();
-            let requested_format = JxlPixelFormat {
-                color_type: default_format.color_type,
-                color_data_format: Some(JxlDataFormat::f32()),
-                extra_channel_format: default_format
-                    .extra_channel_format
-                    .iter()
-                    .map(|_| Some(JxlDataFormat::f32()))
-                    .collect(),
-            };
-            decoder.set_pixel_format(requested_format.clone()).unwrap();
-
-            let channels = requested_format.color_type.samples_per_pixel();
-            let num_ec = requested_format.extra_channel_format.len();
-
-            let mut color_buffer = Image::<f32>::new((width * channels, height)).unwrap();
-            let mut ec_buffers: Vec<Image<f32>> = (0..num_ec)
-                .map(|_| Image::<f32>::new((width, height)).unwrap())
+            let mut seek_decoded: Vec<Image<f32>> = expected
+                .iter()
+                .map(|img| Image::new(img.size()).unwrap())
                 .collect();
-            let mut buffers: Vec<JxlOutputBuffer> = vec![JxlOutputBuffer::from_image_rect_mut(
-                color_buffer
-                    .get_rect_mut(Rect {
-                        origin: (0, 0),
-                        size: (width * channels, height),
-                    })
-                    .into_raw(),
-            )];
-            for ec in ec_buffers.iter_mut() {
-                buffers.push(JxlOutputBuffer::from_image_rect_mut(
-                    ec.get_rect_mut(Rect {
-                        origin: (0, 0),
-                        size: (width, height),
-                    })
-                    .into_raw(),
-                ));
-            }
+            let mut buffers = as_output_buffers(&mut seek_decoded);
 
             assert!(matches!(
                 decoder.process(&mut input, Some(&mut buffers), None),
-                Ok(ProcessingResult::Complete { .. })
+                Ok(Event::FrameComplete { .. })
             ));
 
-            let mut seek_decoded = Vec::with_capacity(1 + num_ec);
-            seek_decoded.push(color_buffer);
-            seek_decoded.extend(ec_buffers);
             compare_frames(
                 Path::new("start_new_frame_seek"),
                 target_visible_index,
@@ -940,13 +774,10 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
             }
             let mut extra_input = &input[..extra_bytes];
 
-            while let ProcessingResult::Complete { .. } =
-                decoder.process(&mut extra_input, None, None).unwrap()
-            {
-                if extra_input.is_empty() {
-                    break;
-                }
-            }
+            while !matches!(
+                decoder.process(&mut extra_input, None, None).unwrap(),
+                Event::NeedMoreInput { .. } | Event::Complete
+            ) {}
         }
         Ok(())
     });
@@ -1128,10 +959,10 @@ fn test_fuzzer_xyb_icc_no_panic() {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x25, 0x00,
     ];
 
-    let mut decoder = JxlDecoderInner::new(Default::default());
+    let mut decoder = JxlDecoder::new(Default::default());
     let mut input = data;
 
-    if let Ok(ProcessingResult::Complete { .. }) = decoder.process(&mut input, None, None)
+    if let Ok(Event::BasicInfo) = decoder.process(&mut input, None, None)
         && let Some(profile) = decoder.output_color_profile()
     {
         let _ = profile.try_as_icc();
@@ -1152,12 +983,13 @@ fn test_scan_frames_only_empty_followup_no_panic_502853162() {
         scan_frames_only: true,
         ..Default::default()
     };
-    let mut decoder = JxlDecoderInner::new(opts);
+    let mut decoder = JxlDecoder::new(opts);
 
     let mut input = data;
-    while decoder.has_more_frames() && !input.is_empty() {
-        let _ = decoder.process(&mut input, None, None).unwrap();
-    }
+    while !matches!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::NeedMoreInput { .. } | Event::Complete
+    ) {}
 }
 
 /// Small regression test for issue #728: squeeze transform boundary bug.
@@ -1413,4 +1245,207 @@ fn test_adjust_orientation_disabled() {
             }
         }
     }
+}
+
+#[test]
+fn basic_info_not_visible_before_embedded_profile() {
+    let data = std::fs::read("resources/test/conformance_test_images/cmyk_layers.jxl").unwrap();
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+
+    for chunk in data.chunks(64) {
+        let mut input = chunk;
+        let _ = decoder.process(&mut input, None, None);
+
+        if decoder.embedded_color_profile().is_none() {
+            assert!(decoder.basic_info().is_none());
+        }
+
+        if decoder.basic_info().is_some() {
+            assert!(decoder.embedded_color_profile().is_some());
+            return;
+        }
+    }
+
+    panic!("failed to reach image-info state while parsing cmyk_layers.jxl");
+}
+
+#[test]
+fn incomplete_ooo_jxlp() {
+    let data = include_bytes!("../../tests/testdata/incomplete_ooo_jxlp.jxl");
+
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let mut input = data.as_slice();
+    let result = decoder.process(&mut input, None, None);
+    assert!(
+        matches!(result, Err(Error::UnexpectedCodestreamBoxEnd)),
+        "{result:?}"
+    );
+}
+
+fn process_to_complete(decoder: &mut JxlDecoder, buf: &mut &[u8]) {
+    decoder.close_input();
+    loop {
+        match decoder.process(buf, None, None).unwrap() {
+            Event::Complete => break,
+            Event::NeedMoreInput { .. } => panic!("unexpected NeedMoreInput"),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn aux_box_finite() {
+    let data = [
+        (&include_bytes!("../../tests/testdata/exif.jxl")[..], 170),
+        (
+            &include_bytes!("../../tests/testdata/exif_brob.jxl")[..],
+            120,
+        ),
+        (
+            &include_bytes!("../../tests/testdata/exif_trailing_finite.jxl")[..],
+            170,
+        ),
+        (
+            &include_bytes!("../../tests/testdata/exif_brob_trailing_finite.jxl")[..],
+            120,
+        ),
+    ];
+
+    for (mut buf, expected_size) in data {
+        let options = JxlDecoderOptions {
+            request_aux_boxes: vec![JxlAuxBoxType::EXIF],
+            scan_frames_only: true,
+            ..Default::default()
+        };
+        let mut decoder = JxlDecoder::new(options);
+        process_to_complete(&mut decoder, &mut buf);
+
+        let exif = &decoder.aux_boxes(JxlAuxBoxType::EXIF)[0];
+        assert_eq!(exif.raw_data().len(), expected_size);
+        assert!(decoder.trailing_box().is_none());
+    }
+}
+
+#[test]
+fn aux_box_incomplete_trailing_box() {
+    let data = include_bytes!("../../tests/testdata/exif_trailing_finite.jxl");
+    // Supply the codestream box and only the first byte of the Exif box header.
+    let mut input = &data[..53];
+    let options = JxlDecoderOptions {
+        scan_frames_only: true,
+        request_aux_boxes: vec![JxlAuxBoxType::EXIF],
+        ..Default::default()
+    };
+    let mut decoder = JxlDecoder::new(options);
+
+    let expected_events = [
+        Event::BasicInfo,
+        Event::FrameHeader,
+        Event::FrameComplete {
+            has_more_frames: false,
+        },
+    ];
+    for expected in expected_events {
+        assert_eq!(decoder.process(&mut input, None, None).unwrap(), expected);
+    }
+
+    assert!(matches!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::NeedMoreInput { .. }
+    ));
+}
+
+#[test]
+fn aux_box_empty_input_at_box_boundary() {
+    let data = include_bytes!("../../tests/testdata/exif_trailing_finite.jxl");
+    // Stop at the box boundary after the codestream.
+    let mut input = &data[..52];
+    let options = JxlDecoderOptions {
+        scan_frames_only: true,
+        request_aux_boxes: vec![JxlAuxBoxType::EXIF],
+        ..Default::default()
+    };
+    let mut decoder = JxlDecoder::new(options);
+
+    let expected_events = [
+        Event::BasicInfo,
+        Event::FrameHeader,
+        Event::FrameComplete {
+            has_more_frames: false,
+        },
+    ];
+    for expected in expected_events {
+        assert_eq!(decoder.process(&mut input, None, None).unwrap(), expected);
+    }
+
+    // No more bytes are available yet, but the stream has not ended.
+    assert!(input.is_empty());
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::NeedMoreInput { size_hint: 8 }
+    );
+
+    let mut input = &data[52..];
+    decoder.close_input();
+    assert_eq!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::Complete
+    );
+    assert_eq!(decoder.aux_boxes(JxlAuxBoxType::EXIF).len(), 1);
+}
+
+#[test]
+fn aux_box_trailing_infinite() {
+    let data = [
+        (
+            &include_bytes!("../../tests/testdata/exif_trailing_infinite.jxl")[..],
+            170,
+        ),
+        (
+            &include_bytes!("../../tests/testdata/exif_brob_trailing_infinite.jxl")[..],
+            120,
+        ),
+    ];
+
+    for (mut buf, expected_size) in data {
+        let options = JxlDecoderOptions {
+            request_aux_boxes: vec![JxlAuxBoxType::EXIF],
+            scan_frames_only: true,
+            ..Default::default()
+        };
+        let mut decoder = JxlDecoder::new(options);
+        process_to_complete(&mut decoder, &mut buf);
+
+        let trailing = decoder.trailing_box().unwrap();
+        assert_eq!(trailing.box_type(), JxlAuxBoxType::EXIF);
+        assert_eq!(trailing.raw_data().len() + buf.len(), expected_size);
+    }
+}
+
+#[test]
+fn aux_box_seek() {
+    let data = include_bytes!("../../tests/testdata/multiple_aux.jxl");
+
+    let ty_foo = JxlAuxBoxType(*b"foo ");
+    let ty_bar = JxlAuxBoxType(*b"bar ");
+
+    let options = JxlDecoderOptions {
+        request_aux_boxes: vec![ty_bar],
+        scan_frames_only: true,
+        ..Default::default()
+    };
+    let mut decoder = JxlDecoder::new(options);
+
+    let mut buf = &data[..];
+    process_to_complete(&mut decoder, &mut buf);
+    assert!(decoder.aux_boxes(ty_foo).is_empty());
+    assert_eq!(decoder.aux_boxes(ty_bar).len(), 2);
+
+    let seek_target = decoder.scanned_frames()[0].seek_target;
+    decoder.start_new_frame(seek_target).unwrap();
+
+    let mut buf = &data[(seek_target.decode_start_file_offset as usize)..];
+    process_to_complete(&mut decoder, &mut buf);
+    assert!(decoder.aux_boxes(ty_foo).is_empty());
+    assert_eq!(decoder.aux_boxes(ty_bar).len(), 2);
 }

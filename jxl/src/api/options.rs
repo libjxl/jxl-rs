@@ -44,6 +44,11 @@ pub struct JxlDecoderOptions {
     /// This is useful for collecting [`VisibleFrameInfo`](crate::api::VisibleFrameInfo)
     /// via the regular decoder API without producing pixels.
     pub scan_frames_only: bool,
+    /// Additional boxes to request from the decoder.
+    ///
+    /// Note that if you request additional boxes, you must call `close_input()` when the
+    /// file is over, and some cases of metadata boxes after the end of the codestream
+    /// require special handling (see `[JxlDecoder::trailing_box]`).
     pub request_aux_boxes: Vec<JxlAuxBoxType>,
     /// Maximum profile and level allowed when decoding (default: [`ProfileLevel::Main5`]).
     /// When [`ProfileLevel::Main5`], enforces Level 5 complexity constraints defined by ISO/IEC 18181-1.
