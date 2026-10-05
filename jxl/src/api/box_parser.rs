@@ -58,6 +58,10 @@ pub struct JxlAuxBoxType(pub [u8; 4]);
 
 impl JxlAuxBoxType {
     pub const EXIF: Self = JxlAuxBoxType(*b"Exif");
+    pub const XMP: Self = JxlAuxBoxType(*b"xml ");
+    pub const JUMBF: Self = JxlAuxBoxType(*b"jumb");
+    pub const JPEG_RECONSTRUCTION_DATA: Self = JxlAuxBoxType(*b"jbrd");
+    pub const HDR_GAIN_MAP: Self = JxlAuxBoxType(*b"jhgm");
 }
 
 pub struct JxlAuxBox {
