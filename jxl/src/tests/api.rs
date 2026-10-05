@@ -783,6 +783,59 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
     });
 }
 
+/// Seeks to every visible frame, from the last to the first, and compares each with the sequential
+/// decode.
+fn assert_every_seek_matches_sequential(data: &[u8]) {
+    let scanned_frames = scan_frames(data, usize::MAX);
+    let sequential_frames = decode(data, Default::default()).unwrap();
+
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let mut input = data;
+    while !matches!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::NeedMoreInput { .. } | Event::Complete
+    ) {}
+
+    for target in (0..scanned_frames.len()).rev() {
+        let seek_target = scanned_frames[target].seek_target;
+        let expected = &sequential_frames[target];
+
+        decoder.start_new_frame(seek_target).unwrap();
+        let mut input = &data[seek_target.decode_start_file_offset as usize..];
+        assert_eq!(
+            decoder.process(&mut input, None, None).unwrap(),
+            Event::FrameHeader
+        );
+
+        let mut seek_decoded: Vec<Image<f32>> = expected
+            .iter()
+            .map(|img| Image::new(img.size()).unwrap())
+            .collect();
+        let mut buffers = as_output_buffers(&mut seek_decoded);
+        assert!(matches!(
+            decoder.process(&mut input, Some(&mut buffers), None),
+            Ok(Event::FrameComplete { .. })
+        ));
+
+        compare_frames(
+            Path::new("seek_every_frame"),
+            target,
+            expected,
+            &seek_decoded,
+        );
+    }
+}
+
+// An animation with noise on every frame; displayed frames that are saved as references (some of
+// them used by later frames' blending), displayed frames that are not, cropped frames, patches,
+// and keyframes after the start. Seeking must skip the unsaved frames and still seed the noise of
+// each frame as a sequential decode does.
+#[test]
+fn test_seek_every_frame_noise_references() {
+    let data = std::fs::read("resources/test/animation_seek_noise_references.jxl").unwrap();
+    assert_every_seek_matches_sequential(&data);
+}
+
 #[test]
 fn test_start_new_frame_bare_codestream() {
     let data =

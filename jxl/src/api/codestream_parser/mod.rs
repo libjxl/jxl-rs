@@ -135,8 +135,10 @@ impl CodestreamParser {
         &mut self,
         visible_frames_to_skip: usize,
         consumed_codestream: u64,
+        frame_counters: (usize, usize),
     ) {
         self.frame_info.clear(true);
+        self.frame_info.start_frame_counters = frame_counters;
         self.local_buffer = SmallBuffer::new(4096);
         self.local_buffer.mark_consumed(consumed_codestream);
         self.visible_frames_to_skip = visible_frames_to_skip;

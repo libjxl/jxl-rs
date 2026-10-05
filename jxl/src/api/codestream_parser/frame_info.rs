@@ -71,6 +71,8 @@ pub struct FrameInfo {
     hf_sections: Vec<Vec<Option<SectionBuffer>>>,
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
+    // The frame counters for a decoder state created from scratch (non-zero after a seek).
+    pub(super) start_frame_counters: (usize, usize),
 }
 
 impl FrameInfo {
@@ -89,6 +91,7 @@ impl FrameInfo {
             hf_sections: vec![],
             candidate_hf_sections: HashSet::new(),
             pixels_dirty: false,
+            start_frame_counters: (0, 0),
         }
     }
 
@@ -99,6 +102,7 @@ impl FrameInfo {
 
         if clear_frame {
             self.frame = None;
+            self.start_frame_counters = (0, 0);
         }
 
         // Clear sections
@@ -218,7 +222,10 @@ impl FrameInfo {
                 .transpose()?
                 .flatten()
                 .unwrap_or_else(|| {
-                    DecoderState::new(file_header.clone(), decode_options, level5_limits)
+                    let mut s =
+                        DecoderState::new(file_header.clone(), decode_options, level5_limits);
+                    (s.visible_frame_index, s.nonvisible_frame_index) = self.start_frame_counters;
+                    s
                 });
             decoder_state.level5_limits = level5_limits;
             let mut frame =

@@ -13,6 +13,7 @@ use crate::headers::frame_header::FrameHeader;
 struct FrameStartInfo {
     box_parser_checkpoint: BoxParserCheckpoint,
     visible_count_before: usize,
+    nonvisible_count_before: usize,
 }
 
 pub(super) struct FrameScanInfo {
@@ -20,6 +21,8 @@ pub(super) struct FrameScanInfo {
     scanned_frames: Vec<VisibleFrameInfo>,
     /// Zero-based visible frame index counter.
     visible_frame_index: usize,
+    /// Non-visible frames since the last visible frame.
+    nonvisible_frame_index: usize,
     /// File offsets and visibility info for every non-preview frame (visible
     /// and non-visible), in parse order.
     frame_starts: Vec<FrameStartInfo>,
@@ -39,6 +42,7 @@ impl FrameScanInfo {
         Self {
             scanned_frames: Vec::new(),
             visible_frame_index: 0,
+            nonvisible_frame_index: 0,
             frame_starts: Vec::new(),
             reference_slot_decode_start: [None; DecoderState::MAX_STORED_FRAMES],
             lf_slot_decode_start: [None; DecoderState::NUM_LF_FRAMES],
@@ -62,7 +66,13 @@ impl FrameScanInfo {
         self.frame_starts.push(FrameStartInfo {
             box_parser_checkpoint,
             visible_count_before: self.visible_frame_index,
+            nonvisible_count_before: self.nonvisible_frame_index,
         });
+        if is_visible {
+            self.nonvisible_frame_index = 0;
+        } else {
+            self.nonvisible_frame_index += 1;
+        }
 
         let mut decode_start_frame_index = current_frame_index;
 
@@ -117,6 +127,10 @@ impl FrameScanInfo {
                 visible_frames_to_skip: self
                     .visible_frame_index
                     .saturating_sub(decode_start.visible_count_before),
+                decode_start_frame_counters: (
+                    decode_start.visible_count_before,
+                    decode_start.nonvisible_count_before,
+                ),
             };
             let is_keyframe = seek_target.visible_frames_to_skip == 0;
 
