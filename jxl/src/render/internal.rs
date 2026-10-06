@@ -12,7 +12,7 @@ use super::stages::ExtendToImageDimensionsStage;
 use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::error::Result;
 use crate::image::{BufferRecycler, DataTypeTag, ImageDataType};
-use crate::render::{ErasedLocalState, StageSpecialCase};
+use crate::render::ErasedLocalState;
 use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::AtomicBool;
 
@@ -62,24 +62,17 @@ impl<Buffer: 'static> Stage<Buffer> {
             Stage::Save(s) => s.uses_channel(c),
         }
     }
-    pub(super) fn input_type(&self) -> DataTypeTag {
+    pub(super) fn input_type(&self, c: usize) -> DataTypeTag {
         match self {
             Stage::Extend(_) => DataTypeTag::F32,
             Stage::InPlace(s) => s.ty(),
             Stage::InOut(s) => s.input_type(),
-            Stage::Save(s) => s.input_type(),
+            Stage::Save(s) => s.input_type(c),
         }
     }
     pub(super) fn output_type(&self) -> Option<DataTypeTag> {
         match self {
             Stage::InOut(s) => Some(s.output_type()),
-            _ => None,
-        }
-    }
-    pub(super) fn is_special_case(&self) -> Option<StageSpecialCase> {
-        match self {
-            Stage::InOut(s) => s.is_special_case(),
-            Stage::InPlace(s) => s.is_special_case(),
             _ => None,
         }
     }
@@ -98,7 +91,7 @@ impl<Buffer> Display for Stage<Buffer> {
 
 #[derive(Clone, Debug)]
 pub struct ChannelInfo {
-    pub ty: Option<DataTypeTag>,
+    pub ty: DataTypeTag,
     pub downsample: (u8, u8),
 }
 
@@ -148,13 +141,11 @@ impl<Buffer> RenderPipelineShared<Buffer> {
         requested_data_type: DataTypeTag,
     ) -> (usize, usize) {
         let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
-        // Channels that no stage consumes have no type at all. Callers may still ask for a
+        // Channels that no stage consumes are not marked as used. Callers may still ask for a
         // scratch buffer for them (e.g. VarDCT always decodes three colour channels, but a
         // grayscale pipeline only ever reads the first one); the data written there is
         // discarded, so any type is acceptable.
-        if let Some(ty) = ty
-            && ty != requested_data_type
-        {
+        if self.channel_is_used[channel] && ty != requested_data_type {
             panic!(
                 "Invalid pipeline usage: incorrect channel type, requested {requested_data_type:?}, but pipeline wants {ty:?}"
             );
@@ -190,7 +181,6 @@ pub trait InPlaceStage: Any + Display + Send + Sync {
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>>;
     fn uses_channel(&self, c: usize) -> bool;
     fn ty(&self) -> DataTypeTag;
-    fn is_special_case(&self) -> Option<StageSpecialCase>;
 }
 
 pub trait RunInPlaceStage<Buffer: PipelineBuffer>: InPlaceStage {
@@ -212,9 +202,6 @@ impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
     fn ty(&self) -> DataTypeTag {
         T::Type::DATA_TYPE_ID
     }
-    fn is_special_case(&self) -> Option<StageSpecialCase> {
-        self.is_special_case()
-    }
 }
 
 pub trait InOutStage: Any + Display + Send + Sync {
@@ -224,7 +211,6 @@ pub trait InOutStage: Any + Display + Send + Sync {
     fn uses_channel(&self, c: usize) -> bool;
     fn input_type(&self) -> DataTypeTag;
     fn output_type(&self) -> DataTypeTag;
-    fn is_special_case(&self) -> Option<StageSpecialCase>;
 }
 
 impl<T: RenderPipelineInOutStage> InOutStage for T {
@@ -245,9 +231,6 @@ impl<T: RenderPipelineInOutStage> InOutStage for T {
     }
     fn output_type(&self) -> DataTypeTag {
         T::OutputT::DATA_TYPE_ID
-    }
-    fn is_special_case(&self) -> Option<StageSpecialCase> {
-        self.is_special_case()
     }
 }
 

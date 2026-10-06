@@ -42,12 +42,6 @@ pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
 pub type ErasedLocalState = dyn Any + Send + Sync;
 
-pub enum StageSpecialCase {
-    F32ToU8 { channel: usize, bit_depth: u8 },
-    ModularToF32 { channel: usize, bit_depth: u8 },
-    Modular16ToF32 { channel: usize, bit_depth: u8 },
-}
-
 /// Modifies channels in-place.
 pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display + Send + Sync {
     type Type: ImageDataType;
@@ -67,10 +61,6 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display + Send + Sync {
     }
 
     fn uses_channel(&self, c: usize) -> bool;
-
-    fn is_special_case(&self) -> Option<StageSpecialCase> {
-        None
-    }
 }
 
 /// Modifies data and writes it to a new buffer, of possibly different type.
@@ -113,10 +103,6 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     }
 
     fn uses_channel(&self, c: usize) -> bool;
-
-    fn is_special_case(&self) -> Option<StageSpecialCase> {
-        None
-    }
 }
 
 pub trait RenderPipeline: Sized {

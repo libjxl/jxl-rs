@@ -7,8 +7,8 @@ use crate::api::{Endianness, JxlDataFormat, JxlOutputBuffer};
 use crate::error::Result;
 use crate::image::Image;
 use crate::render::buffer_splitter::OutputChannelRef;
-use crate::render::save::SaveStage;
-use crate::util::f16;
+use crate::render::save::{SaveChannelType, SaveStage};
+use crate::util::{DITHER_TABLE, f16};
 
 impl SaveStage {
     pub(super) fn save_simple(
@@ -28,7 +28,12 @@ impl SaveStage {
 
         let output_channels = self.output_channels();
 
-        for (c, &chan) in self.channels.iter().enumerate() {
+        for (c, (&chan, &ch_ty)) in self
+            .channels
+            .iter()
+            .zip(self.channel_types.iter())
+            .enumerate()
+        {
             for y in 0..size.1 {
                 let src_row = data[chan].row(y);
 
@@ -50,21 +55,48 @@ impl SaveStage {
                         };
                     }
 
-                    match self.data_format {
-                        JxlDataFormat::U8 { .. } => {
-                            // Conversion stages already handle bit depth scaling
-                            write_pixel!(px as u8, Endianness::LittleEndian);
+                    match (ch_ty, self.data_format) {
+                        (SaveChannelType::F32, JxlDataFormat::U8 { bit_depth }) => {
+                            let max = ((1u32 << bit_depth) - 1) as f32;
+                            let dither = DITHER_TABLE[(y + chan * 13) % 32][(x + chan * 23) % 32];
+                            let v = ((px as f32) * max + dither).clamp(0.0, max).round() as u8;
+                            write_pixel!(v, Endianness::LittleEndian);
                         }
-                        JxlDataFormat::U16 { endianness, .. } => {
-                            // Conversion stages already handle bit depth scaling
-                            write_pixel!(px as u16, endianness);
+                        (
+                            SaveChannelType::I16 { bit_depth: in_bd }
+                            | SaveChannelType::I32 { bit_depth: in_bd },
+                            JxlDataFormat::U8 { bit_depth: out_bd },
+                        ) => {
+                            let max = (1i32 << out_bd) - 1;
+                            let scale = max / ((1i32 << in_bd) - 1);
+                            let v = ((px as i32) * scale).clamp(0, max) as u8;
+                            write_pixel!(v, Endianness::LittleEndian);
                         }
-                        JxlDataFormat::F32 { endianness } => {
+                        (
+                            SaveChannelType::F32,
+                            JxlDataFormat::U16 {
+                                endianness,
+                                bit_depth,
+                            },
+                        ) => {
+                            let max = ((1u32 << bit_depth) - 1) as f32;
+                            let v = ((px as f32).clamp(0.0, 1.0) * max).round() as u16;
+                            write_pixel!(v, endianness);
+                        }
+                        (SaveChannelType::F32, JxlDataFormat::F32 { endianness }) => {
                             write_pixel!(px as f32, endianness);
                         }
-                        JxlDataFormat::F16 { endianness } => {
+                        (SaveChannelType::F32, JxlDataFormat::F16 { endianness }) => {
                             write_pixel!(f16::from_f64(px), endianness);
                         }
+                        (
+                            SaveChannelType::I16 { bit_depth: in_bd },
+                            JxlDataFormat::F16 { endianness },
+                        ) => {
+                            let scale = 1.0 / ((1u64 << in_bd) - 1) as f32;
+                            write_pixel!(f16::from_f32((px as f32) * scale), endianness);
+                        }
+                        _ => unreachable!(),
                     }
                 }
             }
@@ -129,8 +161,10 @@ mod test {
 
         for y in 0..128 {
             for x in 0..128 {
-                // Conversion stages handle bit depth scaling, save stage just casts
-                let expected = src[0].row(y)[x] as u8;
+                let dither = DITHER_TABLE[y % 32][x % 32];
+                let expected = ((src[0].row(y)[x] as f32) * 255.0 + dither)
+                    .clamp(0.0, 255.0)
+                    .round() as u8;
                 assert_eq!(expected, dst.row(y)[x]);
             }
         }

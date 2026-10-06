@@ -172,7 +172,6 @@ impl LowMemoryRenderPipeline {
                 ty,
                 downsample: (dx, dy),
             } = self.shared.channel_info[0][c];
-            let ty = ty.unwrap();
             let bx = bx >> dx;
             let by = by >> dy;
             let mut topbottom = if let Some(b) = buf.topbottom[c].try_write().unwrap().take() {
