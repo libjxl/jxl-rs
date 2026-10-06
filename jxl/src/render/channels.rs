@@ -146,20 +146,6 @@ impl<'a, T> Channels<'a, T> {
         }
     }
 
-    /// Returns the number of channels.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.channel_buffers.len()
-    }
-
-    /// Returns a slice of row `center_y + dy` in channel `c`, starting at `x_offset - border_x`.
-    #[inline]
-    pub fn get_row_slice(&self, c: usize, dy: isize, border_x: usize) -> &'a [T] {
-        let row = mirror(self.center_y as isize + dy, self.image_height) & (self.num_rows - 1);
-        let row_start = row * self.stride;
-        &self.channel_buffers[c][row_start + self.x_offset - border_x..row_start + self.stride]
-    }
-
     /// Creates a compile-time sized `ChannelsView` precomputing mirrored row offsets for
     /// `CHANS` channels, `ROWS` vertical rows (`ROWS = 2 * border_y + 1`), and horizontal
     /// radius `RADIUS`.
@@ -252,7 +238,6 @@ impl<'a, T, const CHANS: usize, const ROWS: usize, const RADIUS: usize>
     }
 
     /// Narrows the view to a single channel `CHAN`.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[inline(always)]
     pub fn select_channel<const CHAN: usize>(&self) -> ChannelsView<'a, T, 1, ROWS, RADIUS> {
         const { assert!(CHAN < CHANS) };
@@ -309,28 +294,6 @@ impl<'a, T> ChannelsMut<'a, T> {
             num_rows,
             stride,
         }
-    }
-
-    /// Returns the number of channels.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.channel_buffers.len()
-    }
-
-    /// Returns mutable slices of row `first_y` for the first 3 channels, starting at `x_offset`.
-    #[inline]
-    pub fn split_first_3_single_row_mut(&mut self) -> (&mut [T], &mut [T], &mut [T]) {
-        let row = self.first_y & (self.num_rows - 1);
-        let start = row * self.stride + self.x_offset;
-        let end = (row + 1) * self.stride;
-        let [c0, c1, c2, ..] = &mut self.channel_buffers[..] else {
-            unreachable!();
-        };
-        (
-            &mut c0[start..end],
-            &mut c1[start..end],
-            &mut c2[start..end],
-        )
     }
 
     /// Creates a compile-time sized `ChannelsMutView` precomputing row offsets for
