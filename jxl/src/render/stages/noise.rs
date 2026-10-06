@@ -12,102 +12,124 @@ use crate::features::noise::Noise;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
 use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
+    for_each_chunk,
 };
-use crate::util::round_up_size_to_cache_line;
 use crate::util::sync::{Arc, RwLock};
 
 pub struct ConvolveNoiseStage {
-    channel: usize,
+    first_channel: usize,
 }
 
 impl ConvolveNoiseStage {
-    pub fn new(channel: usize) -> ConvolveNoiseStage {
-        ConvolveNoiseStage { channel }
+    pub fn new(first_channel: usize) -> ConvolveNoiseStage {
+        ConvolveNoiseStage { first_channel }
     }
 }
 
 impl std::fmt::Display for ConvolveNoiseStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "convolve noise for channel {}", self.channel,)
+        write!(
+            f,
+            "convolve noise for channels {}..{}",
+            self.first_channel,
+            self.first_channel + 3
+        )
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn grow_noise_state(state: &mut [Vec<[i32; 16]>; 3], num_chunks: usize) {
+    for s in state.iter_mut() {
+        s.resize(num_chunks, [0; 16]);
     }
 }
 
 #[inline(always)]
 fn convolve_noise_simd_impl<D: SimdDescriptor>(
     d: D,
-    input: &[&[u16]],
-    output: &mut [f32],
-    state: &mut [i32],
+    input_rows: &Channels<u16>,
+    output_rows: &mut ChannelsMut<f32>,
+    state: &mut [Vec<[i32; 16]>; 3],
     previous_call_was_previous_row: bool,
     xsize: usize,
 ) {
+    const { assert!(D::I32Vec::LEN <= 16) };
+    const { assert!(D::I32Vec::LEN == D::F32Vec::LEN) };
+    if xsize == 0 {
+        return;
+    }
+    let len = D::F32Vec::LEN;
+    let num_chunks = (xsize - 1) / len + 1;
+    if state.iter().any(|s| s.len() < num_chunks) {
+        grow_noise_state(state, num_chunks);
+    }
+    let [s0, s1, s2] = state;
+    let s0 = &mut s0[..num_chunks];
+    let s1 = &mut s1[..num_chunks];
+    let s2 = &mut s2[..num_chunks];
+
     // Multipliers compensated by 128 for the lack of shift by 7 in the mantissa:
     // c_sum = 0.16 * 128 / 2^23 = 0.16 / 65536.0
     // c_center = -4.0 * 128 / 2^23 = -4.0 / 65536.0
     let c_sum = D::F32Vec::splat(d, 0.16 / 65536.0);
     let c_center = D::F32Vec::splat(d, -4.0 / 65536.0);
 
-    let row_sum = {
-        #[inline(always)]
-        |w: &[u16]| -> D::I32Vec {
-            let mut sum = D::I32Vec::load_from_u16(d, &w[0..]);
-            sum += D::I32Vec::load_from_u16(d, &w[1..]);
-            sum += D::I32Vec::load_from_u16(d, &w[2..]);
-            sum += D::I32Vec::load_from_u16(d, &w[3..]);
-            sum += D::I32Vec::load_from_u16(d, &w[4..]);
+    macro_rules! row_sum {
+        ($inv:expr, $ch:literal, $dy:expr) => {{
+            let mut sum = $inv.load::<_, $ch>(d, $dy, -2);
+            sum += $inv.load::<_, $ch>(d, $dy, -1);
+            sum += $inv.load::<_, $ch>(d, $dy, 0);
+            sum += $inv.load::<_, $ch>(d, $dy, 1);
+            sum += $inv.load::<_, $ch>(d, $dy, 2);
             sum
-        }
-    };
+        }};
+    }
 
-    let iter0 = input[0].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let iter2 = input[2].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let iter4 = input[4].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let out_iter = output.chunks_exact_mut(D::F32Vec::LEN);
-    let state_iter = state.chunks_exact_mut(D::I32Vec::LEN);
-    let num_chunks = xsize.div_ceil(D::I32Vec::LEN);
-
+    let in_view = input_rows.view::<3, 5, 2>();
+    let out_view = output_rows.view::<3, 1, 1>();
     if previous_call_was_previous_row {
-        for ((((w0, w2), w4), out), state_chunk) in iter0
-            .zip(iter2)
-            .zip(iter4)
-            .zip(out_iter)
-            .zip(state_iter)
-            .take(num_chunks)
-        {
-            let prev_state = D::I32Vec::load(d, state_chunk);
-            let r4 = row_sum(w4);
-            let sum_5x5 = prev_state + r4;
-            let p00 = D::I32Vec::load_from_u16(d, &w2[2..]);
-            let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
-            result.store(out);
-            let r0 = row_sum(w0);
-            let next_state = sum_5x5 - r0;
-            next_state.store(state_chunk);
-        }
+        for_each_chunk(d, xsize, in_view, out_view, |x, inv, outv| {
+            let idx = x / len;
+            macro_rules! step {
+                ($ch:literal, $s:ident) => {{
+                    let prev_state = D::I32Vec::load(d, &$s[idx]);
+                    let r4 = row_sum!(inv, $ch, 2);
+                    let sum_5x5 = prev_state + r4;
+                    let p00 = inv.load::<_, $ch>(d, 0, 0);
+                    let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                    outv.store::<_, $ch>(d, 0, result);
+                    let r0 = row_sum!(inv, $ch, -2);
+                    let next_state = sum_5x5 - r0;
+                    next_state.store(&mut $s[idx]);
+                }};
+            }
+            step!(0, s0);
+            step!(1, s1);
+            step!(2, s2);
+        });
     } else {
-        let iter1 = input[1].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-        let iter3 = input[3].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-        for ((((((w0, w1), w2), w3), w4), out), state_chunk) in iter0
-            .zip(iter1)
-            .zip(iter2)
-            .zip(iter3)
-            .zip(iter4)
-            .zip(out_iter)
-            .zip(state_iter)
-            .take(num_chunks)
-        {
-            let p00 = D::I32Vec::load_from_u16(d, &w2[2..]);
-            let r0 = row_sum(w0);
-            let r1 = row_sum(w1);
-            let r2 = row_sum(w2);
-            let r3 = row_sum(w3);
-            let r4 = row_sum(w4);
-            let sum_5x5 = r0 + r1 + r2 + r3 + r4;
-            let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
-            result.store(out);
-            let next_state = sum_5x5 - r0;
-            next_state.store(state_chunk);
-        }
+        for_each_chunk(d, xsize, in_view, out_view, |x, inv, outv| {
+            let idx = x / len;
+            macro_rules! step {
+                ($ch:literal, $s:ident) => {{
+                    let p00 = inv.load::<_, $ch>(d, 0, 0);
+                    let r0 = row_sum!(inv, $ch, -2);
+                    let r1 = row_sum!(inv, $ch, -1);
+                    let r2 = row_sum!(inv, $ch, 0);
+                    let r3 = row_sum!(inv, $ch, 1);
+                    let r4 = row_sum!(inv, $ch, 2);
+                    let sum_5x5 = r0 + r1 + r2 + r3 + r4;
+                    let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                    outv.store::<_, $ch>(d, 0, result);
+                    let next_state = sum_5x5 - r0;
+                    next_state.store(&mut $s[idx]);
+                }};
+            }
+            step!(0, s0);
+            step!(1, s1);
+            step!(2, s2);
+        });
     }
 }
 
@@ -116,13 +138,20 @@ simd_function!(
     convolve_noise_simd_dispatch,
     d: D,
     fn convolve_noise_simd(
-        input: &[&[u16]],
-        output: &mut [f32],
-        state: &mut [i32],
+        input_rows: &Channels<u16>,
+        output_rows: &mut ChannelsMut<f32>,
+        state: &mut [Vec<[i32; 16]>; 3],
         previous_call_was_previous_row: bool,
         xsize: usize,
     ) {
-        convolve_noise_simd_impl(d, input, output, state, previous_call_was_previous_row, xsize)
+        convolve_noise_simd_impl(
+            d,
+            input_rows,
+            output_rows,
+            state,
+            previous_call_was_previous_row,
+            xsize,
+        )
     }
 );
 
@@ -133,11 +162,15 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
     const BORDER: (u8, u8) = (2, 2);
 
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
-        Ok(Some(Box::new(Vec::<i32>::new())))
+        Ok(Some(Box::new([
+            Vec::<[i32; 16]>::new(),
+            Vec::<[i32; 16]>::new(),
+            Vec::<[i32; 16]>::new(),
+        ])))
     }
 
     fn uses_channel(&self, c: usize) -> bool {
-        c == self.channel
+        (self.first_channel..self.first_channel + 3).contains(&c)
     }
 
     fn process_row_chunk(
@@ -149,16 +182,10 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         state: Option<&mut ErasedLocalState>,
         previous_call_was_previous_row: bool,
     ) {
-        let input: [&[u16]; 5] =
-            std::array::from_fn(|r| input_rows.get_row_slice(0, r as isize - 2, 2));
-        let state: &mut Vec<i32> = state.unwrap().downcast_mut().unwrap();
-        let needed = round_up_size_to_cache_line::<i32>(xsize);
-        if state.len() < needed {
-            state.resize(needed, 0);
-        }
+        let state: &mut [Vec<[i32; 16]>; 3] = state.unwrap().downcast_mut().unwrap();
         convolve_noise_simd_dispatch(
-            &input,
-            output_rows.get_single_row_mut(0),
+            input_rows,
+            output_rows,
             state,
             previous_call_was_previous_row,
             xsize,
@@ -345,7 +372,7 @@ mod test {
 
     #[test]
     fn convolve_noise_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency(|| ConvolveNoiseStage::new(0), (500, 500), 1)
+        crate::render::test::test_stage_consistency(|| ConvolveNoiseStage::new(0), (500, 500), 3)
     }
 
     // TODO(firsching): Add more relevant AddNoise tests as per discussions in https://github.com/libjxl/jxl-rs/pull/60.
