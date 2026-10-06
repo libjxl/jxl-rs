@@ -52,7 +52,6 @@ impl Frame {
         ];
 
         let upsample_stage = Upsample8x::new(&self.decoder_state.file_header.transform_data, 0);
-        let mut upsample_state = upsample_stage.init_local_state()?.unwrap();
 
         let mut stage_color_info = output_color_info.clone();
         stage_color_info.tf = output_tf.clone();
@@ -133,7 +132,7 @@ impl Frame {
                     len,
                     &input_channels,
                     &mut output_channels,
-                    Some(upsample_state.as_mut()),
+                    None,
                     false,
                 );
             }

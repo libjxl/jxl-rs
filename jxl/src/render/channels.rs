@@ -333,35 +333,6 @@ impl<'a, T> ChannelsMut<'a, T> {
         )
     }
 
-    /// Returns mutable row slices for `num_out_rows` rows in channel `c`, starting at `x_offset`.
-    #[inline]
-    pub fn get_channel_rows_mut(
-        &mut self,
-        c: usize,
-        num_out_rows: usize,
-    ) -> SmallVec<&mut [T], 8, StackOnly> {
-        assert!(num_out_rows <= self.num_rows);
-        let first_row_idx = self.first_y & (self.num_rows - 1);
-        let stride = self.stride;
-        let x_offset = self.x_offset;
-        let start = first_row_idx * stride;
-        let num_pre = (num_out_rows + first_row_idx).saturating_sub(self.num_rows);
-        let num_post = num_out_rows - num_pre;
-        let (pre, post) = self.channel_buffers[c].split_at_mut(start);
-        let mut out = SmallVec::new();
-        out.extend(
-            post.chunks_exact_mut(stride)
-                .take(num_post)
-                .map(|chunk| &mut chunk[x_offset..]),
-        );
-        out.extend(
-            pre.chunks_exact_mut(stride)
-                .take(num_pre)
-                .map(|chunk| &mut chunk[x_offset..]),
-        );
-        out
-    }
-
     /// Creates a compile-time sized `ChannelsMutView` precomputing row offsets for
     /// `CHANS` channels and `ROWS` output rows with horizontal scale factor `SCALE`.
     #[inline(always)]

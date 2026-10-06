@@ -67,7 +67,6 @@ fn upsample_lf_group(
     let gy = group / width_groups;
 
     let upsample = Upsample8x::new(factors, 0);
-    let mut state = upsample.init_local_state()?.unwrap();
 
     let max_width = pixels.iter().map(|x| x.size().0).max().unwrap();
 
@@ -143,7 +142,7 @@ fn upsample_lf_group(
                     num_blocks,
                     &input_channels,
                     &mut output_channels,
-                    Some(state.as_mut()),
+                    None,
                     false,
                 );
             }
