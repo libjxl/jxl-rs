@@ -19,10 +19,7 @@ pub struct RowBuffer {
     buffer: Box<[CacheLine]>,
     // Distance (in number of *cache lines*) between the start of two rows.
     row_stride: usize,
-    // Number of rows that are actually stored.
-    // TODO(veluca): consider padding this to a power of 2 and using & here. In *most* cases,
-    // that's not a huge loss in memory usage (for most images, num_rows is 1/3/5/7, which would
-    // become 1/4/8/8).
+    // Number of rows that are actually stored (always a power of two).
     num_rows: usize,
 }
 
