@@ -59,8 +59,10 @@ fn epf2_process_row_chunk(
 ) {
     let (xpos, ypos) = pos;
     assert_eq!(input_rows.len(), 3, "Expected 3 channels, got {}", input_rows.len());
-    let (input_x, input_y, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
-    let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
+    let [input_x, input_y, input_b]: [[&[f32]; 3]; 3] = std::array::from_fn(|c| {
+        std::array::from_fn(|r| input_rows.get_row_slice(c, r as isize - 1, 1))
+    });
+    let (output_x, output_y, output_b) = output_rows.split_first_3_single_row_mut();
 
     let sigma = stage.sigma.try_read().unwrap();
     let row_sigma = sigma.row(ypos / BLOCK_DIM);
@@ -77,9 +79,9 @@ fn epf2_process_row_chunk(
 
         let sigma_mask = D::F32Vec::splat(d, MIN_SIGMA).gt(sigma);
         if sigma_mask.all() {
-            D::F32Vec::load(d, &input_x[1][1 + x..]).store(&mut output_x[0][x..]);
-            D::F32Vec::load(d, &input_y[1][1 + x..]).store(&mut output_y[0][x..]);
-            D::F32Vec::load(d, &input_b[1][1 + x..]).store(&mut output_b[0][x..]);
+            D::F32Vec::load(d, &input_x[1][1 + x..]).store(&mut output_x[x..]);
+            D::F32Vec::load(d, &input_y[1][1 + x..]).store(&mut output_y[x..]);
+            D::F32Vec::load(d, &input_b[1][1 + x..]).store(&mut output_b[x..]);
             continue;
         }
 
@@ -124,9 +126,9 @@ fn epf2_process_row_chunk(
         x_acc = sigma_mask.if_then_else_f32(D::F32Vec::load(d, &input_x[1][1+x..]), x_acc);
         y_acc = sigma_mask.if_then_else_f32(D::F32Vec::load(d, &input_y[1][1+x..]), y_acc);
         b_acc = sigma_mask.if_then_else_f32(D::F32Vec::load(d, &input_b[1][1+x..]), b_acc);
-        x_acc.store(&mut output_x[0][x..]);
-        y_acc.store(&mut output_y[0][x..]);
-        b_acc.store(&mut output_b[0][x..]);
+        x_acc.store(&mut output_x[x..]);
+        y_acc.store(&mut output_y[x..]);
+        b_acc.store(&mut output_b[x..]);
     }
 });
 

@@ -60,6 +60,11 @@ simd_function!(
     let (xpos, ypos) = pos;
     assert_eq!(input_rows.len(), 3);
     assert_eq!(output_rows.len(), 3);
+    let input: [[&[f32]; 7]; 3] = std::array::from_fn(|c| {
+        std::array::from_fn(|r| input_rows.get_row_slice(c, r as isize - 3, 3))
+    });
+    let (out0, out1, out2) = output_rows.split_first_3_single_row_mut();
+    let mut output = [out0, out1, out2];
 
     let sigma = stage.sigma.try_read().unwrap();
     let row_sigma = sigma.row(ypos / BLOCK_DIM);
@@ -76,15 +81,15 @@ simd_function!(
 
         let sigma_mask = D::F32Vec::splat(d, MIN_SIGMA).gt(sigma);
         if sigma_mask.all() {
-            for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
-                D::F32Vec::load(d, &input_c[3][3 + x..]).store(&mut output_c[0][x..]);
+            for (input_c, output_c) in input.iter().zip(output.iter_mut()) {
+                D::F32Vec::load(d, &input_c[3][3 + x..]).store(&mut output_c[x..]);
             }
             continue;
         }
 
         // Compute SADs
         let mut sads = [D::F32Vec::splat(d, 0.0); 12];
-        for (input_c, scale) in input_rows.iter().zip(stage.channel_scale) {
+        for (input_c, scale) in input.iter().zip(stage.channel_scale) {
             let scale = D::F32Vec::splat(d, scale);
 
             let p30 = D::F32Vec::load(d, &input_c[0][3 + x..]);
@@ -185,7 +190,7 @@ simd_function!(
             w += *sad;
         }
         let inv_w = D::F32Vec::splat(d, 1.0) / w;
-        for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
+        for (input_c, output_c) in input.iter().zip(output.iter_mut()) {
             let mut out = D::F32Vec::load(d, &input_c[3][3 + x..]);
             for (row_idx, col_idx, sad_idx) in [
                 (5, 3+x, 11),
@@ -206,7 +211,7 @@ simd_function!(
             out *= inv_w;
             let p33 = D::F32Vec::load(d, &input_c[3][3 + x..]);
             let out = sigma_mask.if_then_else_f32(p33, out);
-            out.store(&mut output_c[0][x..]);
+            out.store(&mut output_c[x..]);
         }
     }
 });

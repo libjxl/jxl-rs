@@ -149,15 +149,16 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         state: Option<&mut ErasedLocalState>,
         previous_call_was_previous_row: bool,
     ) {
-        let input = &input_rows[0];
+        let input: [&[u16]; 5] =
+            std::array::from_fn(|r| input_rows.get_row_slice(0, r as isize - 2, 2));
         let state: &mut Vec<i32> = state.unwrap().downcast_mut().unwrap();
         let needed = round_up_size_to_cache_line::<i32>(xsize);
         if state.len() < needed {
             state.resize(needed, 0);
         }
         convolve_noise_simd_dispatch(
-            input,
-            output_rows[0][0],
+            &input,
+            output_rows.get_single_row_mut(0),
             state,
             previous_call_was_previous_row,
             xsize,
