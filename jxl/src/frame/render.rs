@@ -590,22 +590,18 @@ impl Frame {
 
         let filters = &frame_header.restoration_filter;
         if filters.gab {
-            pipeline = pipeline
-                .add_inout_stage(GaborishStage::new(
-                    0,
+            pipeline = pipeline.add_inout_stage(GaborishStage::new(
+                [
                     filters.gab_x_weight1,
-                    filters.gab_x_weight2,
-                ))
-                .add_inout_stage(GaborishStage::new(
-                    1,
                     filters.gab_y_weight1,
-                    filters.gab_y_weight2,
-                ))
-                .add_inout_stage(GaborishStage::new(
-                    2,
                     filters.gab_b_weight1,
+                ],
+                [
+                    filters.gab_x_weight2,
+                    filters.gab_y_weight2,
                     filters.gab_b_weight2,
-                ));
+                ],
+            ));
         }
 
         let rf = &frame_header.restoration_filter;
@@ -686,8 +682,6 @@ impl Frame {
         if frame_header.has_noise() {
             pipeline = pipeline
                 .add_inout_stage(ConvolveNoiseStage::new(num_channels))
-                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 1))
-                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 2))
                 .add_inplace_stage(AddNoiseStage::new(
                     noise,
                     color_correlation_params,

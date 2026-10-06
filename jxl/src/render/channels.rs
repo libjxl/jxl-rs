@@ -317,14 +317,6 @@ impl<'a, T> ChannelsMut<'a, T> {
         self.channel_buffers.len()
     }
 
-    /// Returns a mutable slice of row `first_y` in channel `c`, starting at `x_offset`.
-    #[inline]
-    pub fn get_single_row_mut(&mut self, c: usize) -> &mut [T] {
-        let row = self.first_y & (self.num_rows - 1);
-        let row_start = row * self.stride;
-        &mut self.channel_buffers[c][row_start + self.x_offset..row_start + self.stride]
-    }
-
     /// Returns mutable slices of row `first_y` for the first 3 channels, starting at `x_offset`.
     #[inline]
     pub fn split_first_3_single_row_mut(&mut self) -> (&mut [T], &mut [T], &mut [T]) {
