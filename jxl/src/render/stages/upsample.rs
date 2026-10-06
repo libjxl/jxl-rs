@@ -375,7 +375,9 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let input = &input_rows[0];
+        let input: [&[f32]; 5] =
+            std::array::from_fn(|r| input_rows.get_row_slice(0, r as isize - 2, 2));
+        let mut output = output_rows.get_channel_rows_mut(0, N);
         let state: &mut UpsampleState = state.unwrap().downcast_mut().unwrap();
         state.ensure_capacity(xsize);
 
@@ -384,38 +386,38 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
         match N {
             2 => {
                 upsample_2x_simd_dispatch(
-                    input,
+                    &input,
                     xsize,
                     self.flat_kernels.as_slice(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
                     &mut state.maxs,
-                    &mut output_rows[0],
+                    &mut output,
                 );
             }
             4 => {
                 upsample_4x_simd_dispatch(
-                    input,
+                    &input,
                     xsize,
                     self.flat_kernels.as_slice(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
                     &mut state.maxs,
-                    &mut output_rows[0],
+                    &mut output,
                 );
             }
             8 => {
                 upsample_8x_simd_dispatch(
-                    input,
+                    &input,
                     xsize,
                     self.flat_kernels.as_slice(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
                     &mut state.maxs,
-                    &mut output_rows[0],
+                    &mut output,
                 );
             }
             _ => unreachable!(),

@@ -43,15 +43,15 @@ simd_function!(
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
     ) {
-        let row_out = &mut output_rows[0][0];
+        let row_out = output_rows.get_single_row_mut(0);
 
         let w0 = D::F32Vec::splat(d, stage.weight0);
         let w1 = D::F32Vec::splat(d, stage.weight1);
         let w2 = D::F32Vec::splat(d, stage.weight2);
 
-        let [row_top, row_center, row_bottom] = input_rows[0] else {
-            unreachable!();
-        };
+        let row_top = input_rows.get_row_slice(0, -1, 1);
+        let row_center = input_rows.get_row_slice(0, 0, 1);
+        let row_bottom = input_rows.get_row_slice(0, 1, 1);
 
         // These asserts help the compiler skip checks in the loop.
         assert_eq!(row_top.len(), row_center.len());

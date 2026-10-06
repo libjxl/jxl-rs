@@ -18,6 +18,7 @@ use crate::frame::{HfGlobalState, HfMetadata, LfGlobalState};
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::permutation::Permutation;
 use crate::image::{Image, ImageRect, Rect};
+use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::util::tracing_wrappers::*;
 use crate::util::{
     CacheLine, CeilLog2, ShiftRightCeil, SmallVec, num_cache_lines_for, slice_from_cachelines_mut,
@@ -33,8 +34,7 @@ pub struct VarDctBuffers {
     /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
     pub coeffs_storage: Vec<CacheLine>,
     pub num_nzeros_storage: Vec<[u8; 32]>,
-    pub lf_upsample_out: [Vec<f32>; 8],
-    pub lf_upsample_in: [Vec<f32>; 5],
+    pub lf_upsample_bufs: Option<(RowBuffer, RowBuffer, usize)>,
 }
 
 impl VarDctBuffers {
@@ -44,8 +44,7 @@ impl VarDctBuffers {
             transform_buffer: [vec![], vec![], vec![]],
             coeffs_storage: vec![],
             num_nzeros_storage: vec![],
-            lf_upsample_out: std::array::from_fn(|_| vec![]),
-            lf_upsample_in: std::array::from_fn(|_| vec![]),
+            lf_upsample_bufs: None,
         }
     }
 

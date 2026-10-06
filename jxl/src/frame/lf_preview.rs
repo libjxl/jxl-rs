@@ -18,7 +18,7 @@ use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::save::SaveStage;
 use crate::render::stages::{OutputColorInfo, Upsample8x, XybColorConvertStage};
 use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
-use crate::util::{SmallVec, mirror};
+use crate::util::mirror;
 
 impl Frame {
     #[allow(clippy::too_many_arguments)]
@@ -112,25 +112,21 @@ impl Frame {
 
             // Upsample.
             for c in 0..3 {
-                let off = RowBuffer::x0_offset::<f32>() - 2;
-                let input_rows_refs = [
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET - 2)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET - 1)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET + 1)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET + 2)[off..],
-                ]
-                .into_iter()
-                .collect();
-                let input_channels = Channels::new(input_rows_refs, 1, 5);
-
-                let mut output_rows_refs = SmallVec::new();
-                upsampled_rows[c].get_rows_mut(
-                    y * 8..y * 8 + 8,
-                    RowBuffer::x0_offset::<f32>(),
-                    &mut output_rows_refs,
+                let x0_off = RowBuffer::x0_offset::<f32>();
+                let lf_row_ref = &lf_rows[c];
+                let input_channels = Channels::from_row_buffers(
+                    std::slice::from_ref(&lf_row_ref),
+                    x0_off,
+                    y + LF_ROW_OFFSET,
+                    lf_size.1 + LF_ROW_OFFSET + 2,
+                    2,
                 );
-                let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 8);
+                let mut output_channels = ChannelsMut::from_row_buffers(
+                    std::slice::from_mut(&mut upsampled_rows[c]),
+                    x0_off,
+                    y * 8,
+                    8,
+                );
 
                 upsample_stage.process_row_chunk(
                     (0, 0),

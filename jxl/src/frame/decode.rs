@@ -38,10 +38,11 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, Image, OwnedRawImage, Rect};
+use crate::image::{BufferRecycler, DataTypeTag, Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
+use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
 use crate::util::sync::{Arc, Mutex, RwLock};
@@ -70,22 +71,16 @@ fn upsample_lf_group(
 
     let max_width = pixels.iter().map(|x| x.size().0).max().unwrap();
 
-    let out_len = max_width + 128;
-    for buf in buffers.lf_upsample_out.iter_mut() {
-        if buf.len() < out_len {
-            buf.resize(out_len, 0.0);
-        }
+    if buffers
+        .lf_upsample_bufs
+        .as_ref()
+        .is_none_or(|(_, _, w)| *w < max_width)
+    {
+        let temp_out_buf = RowBuffer::new(DataTypeTag::F32, 0, 3, 3, max_width)?;
+        let input_rows_storage = RowBuffer::new(DataTypeTag::F32, 2, 0, 0, max_width.div_ceil(8))?;
+        buffers.lf_upsample_bufs = Some((temp_out_buf, input_rows_storage, max_width));
     }
-
-    let in_len = max_width / 8 + 32;
-    for buf in buffers.lf_upsample_in.iter_mut() {
-        if buf.len() < in_len {
-            buf.resize(in_len, 0.0);
-        }
-    }
-
-    let temp_out_buf = &mut buffers.lf_upsample_out;
-    let input_rows_storage = &mut buffers.lf_upsample_in;
+    let (temp_out_buf, input_rows_storage, _) = buffers.lf_upsample_bufs.as_mut().unwrap();
 
     for c in 0..3 {
         let lf_img = &lf_image[c];
@@ -117,6 +112,8 @@ fn upsample_lf_group(
         let ix2 = to_storage_x(mirror(lf_x1 as isize, lf_width));
         let ix3 = to_storage_x(mirror(lf_x1 as isize + 1, lf_width));
 
+        let x0_off = RowBuffer::x0_offset::<f32>();
+
         for y in 0..lf_group_dim_y {
             let cy = lf_y0 + y;
 
@@ -125,21 +122,21 @@ fn upsample_lf_group(
                 let iy = mirror(iy, lf_height);
                 let row = lf_img.row(to_storage_y(iy));
 
-                let storage = &mut input_rows_storage[(dy + 2) as usize];
-                storage[0] = row[ix0];
-                storage[1] = row[ix1];
-                storage[2..2 + num_blocks].copy_from_slice(&row[phys_x0..phys_x0 + num_blocks]);
-                storage[2 + num_blocks] = row[ix2];
-                storage[2 + num_blocks + 1] = row[ix3];
+                let storage = input_rows_storage.get_row_mut::<f32>((dy + 2) as usize);
+                storage[x0_off - 2] = row[ix0];
+                storage[x0_off - 1] = row[ix1];
+                storage[x0_off..x0_off + num_blocks]
+                    .copy_from_slice(&row[phys_x0..phys_x0 + num_blocks]);
+                storage[x0_off + num_blocks] = row[ix2];
+                storage[x0_off + num_blocks + 1] = row[ix3];
             }
 
-            let input_rows_refs = input_rows_storage.iter().map(|x| &x[..]).collect();
-            let input_channels = Channels::new(input_rows_refs, 1, 5);
-
+            let input_ref = &*input_rows_storage;
+            let input_channels =
+                Channels::from_row_buffers(std::slice::from_ref(&input_ref), x0_off, 2, 5, 2);
             {
-                // Prepare output refs
-                let output_rows_refs = temp_out_buf.iter_mut().map(|x| &mut x[..]).collect();
-                let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 8);
+                let mut output_channels =
+                    ChannelsMut::from_row_buffers(std::slice::from_mut(temp_out_buf), x0_off, 0, 8);
 
                 upsample.process_row_chunk(
                     (0, 0),
@@ -153,10 +150,12 @@ fn upsample_lf_group(
 
             // Copy back to out_img
             let base_y = y * 8;
-            for (i, buf) in temp_out_buf.iter().enumerate() {
+            for i in 0..8 {
                 let out_y = base_y + i;
                 if out_y < out_height {
-                    out_img.row_mut(out_y)[..out_width].copy_from_slice(&buf[..out_width]);
+                    let buf = temp_out_buf.get_row::<f32>(i);
+                    out_img.row_mut(out_y)[..out_width]
+                        .copy_from_slice(&buf[x0_off..x0_off + out_width]);
                 }
             }
         }
