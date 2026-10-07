@@ -210,13 +210,8 @@ impl Frame {
         frame_header: FrameHeader,
         toc: Toc,
         mut decoder_state: DecoderState,
+        frame_counters: (usize, usize),
     ) -> Result<Box<Self>> {
-        if frame_header.is_visible() {
-            decoder_state.visible_frame_index += 1;
-            decoder_state.nonvisible_frame_index = 0;
-        } else {
-            decoder_state.nonvisible_frame_index += 1;
-        }
         if frame_header.frame_type == FrameType::LFFrame && frame_header.lf_level == 1 {
             decoder_state.lf_frame_was_rendered = false;
         }
@@ -307,6 +302,7 @@ impl Frame {
             lf_image,
             hf_meta,
             decoder_state,
+            frame_counters,
             render_pipeline: None,
             reference_frame_data,
             lf_frame_data,
@@ -684,8 +680,8 @@ impl Frame {
 
                 // Create RNG with this subregion's seed - shared across all 3 channels
                 let mut rng = Xorshift128Plus::new_with_seeds(
-                    self.decoder_state.visible_frame_index as u32,
-                    self.decoder_state.nonvisible_frame_index as u32,
+                    self.frame_counters.0 as u32,
+                    self.frame_counters.1 as u32,
                     x0,
                     y0,
                 );

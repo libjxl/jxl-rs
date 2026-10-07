@@ -6,12 +6,14 @@
 use crate::api::box_parser::CodestreamInput;
 use crate::api::codestream_parser::frame_info::FrameInfo;
 use crate::api::codestream_parser::frame_scan_info::FrameScanInfo;
+pub(crate) use crate::api::codestream_parser::frame_scan_info::FrameStartInfo;
 use crate::api::codestream_parser::image_info::ImageInfo;
 use crate::api::{
-    Event, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
-    ProfileLevel, SmallBuffer,
+    BoxParserCheckpoint, Event, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer,
+    JxlParallelRunner, JxlPixelFormat, ProfileLevel, SmallBuffer, VisibleFrameSeekTarget,
 };
 use crate::error::{Error, Result};
+use crate::headers::frame_header::FrameHeader;
 
 mod frame_info;
 mod frame_scan_info;
@@ -110,9 +112,22 @@ pub(super) struct CodestreamParser {
     pub output_color_profile: Option<JxlColorProfile>,
     pub pixel_format: Option<JxlPixelFormat>,
 
-    /// Number of visible frames still to skip before returning to the caller.
-    /// Set via `start_new_frame` when seeking to a non-keyframe.
-    visible_frames_to_skip: usize,
+    /// While seeking: the number of visible frames still to skip before the target.
+    visible_frames_to_skip: Option<usize>,
+    /// Index (in file order, previews not counted) of the next frame.
+    next_frame_index: usize,
+    /// For each stored frame of the decoder state (see `stored_slot`), the frame whose result it
+    /// is (as in a sequential decode, unless a seek has not reached its target yet).
+    slot_frames: [Option<usize>; 8],
+}
+
+/// Where a frame is stored: reference frame 0-3, or LF frame 0-3 as 4-7.
+pub(super) fn stored_slot(header: &FrameHeader) -> Option<usize> {
+    if header.can_be_referenced {
+        Some(header.save_as_reference as usize)
+    } else {
+        (header.lf_level != 0).then(|| 3 + header.lf_level as usize)
+    }
 }
 
 impl CodestreamParser {
@@ -125,7 +140,9 @@ impl CodestreamParser {
             local_buffer: SmallBuffer::new(4096),
             header_needed_bytes: None,
             frame_info: FrameInfo::new(),
-            visible_frames_to_skip: 0,
+            visible_frames_to_skip: None,
+            next_frame_index: 0,
+            slot_frames: [None; 8],
             frame_scan_info: FrameScanInfo::new(),
             file_length: None,
         }
@@ -133,16 +150,43 @@ impl CodestreamParser {
 
     pub(super) fn start_new_frame(
         &mut self,
-        visible_frames_to_skip: usize,
-        consumed_codestream: u64,
-        frame_counters: (usize, usize),
-    ) {
-        self.frame_info.reset(frame_counters);
+        seek_target: &VisibleFrameSeekTarget,
+    ) -> BoxParserCheckpoint {
+        // On the way to a seek target, frames that do not matter for it can be decoded wrong,
+        // so stored frames are only usable when not in the middle of a frame or a seek.
+        let mid_frame = matches!(self.state, ParserState::Sections { .. });
+        let usable = !mid_frame && self.visible_frames_to_skip.is_none();
+        let have = if usable { self.slot_frames } else { [None; 8] };
+        // The stored frames that the decoder already has are kept, unless a frame decoded from
+        // `start` on would overwrite them. The decode starts where the others can be
+        // reconstructed; starting earlier can make more of them needed, so this repeats.
+        let wanted = &seek_target.stored_frames;
+        let kept = |s: usize, start: &FrameStartInfo| {
+            wanted[s].is_some_and(|(f, _)| have[s] == Some(f) && f < start.frame_index)
+        };
+        let mut start = seek_target.target;
+        while let Some(from) = (0..8)
+            .filter(|&s| !kept(s, &start))
+            .filter_map(|s| Some(wanted[s]?.1))
+            .filter(|from| from.frame_index < start.frame_index)
+            .min_by_key(|from| from.frame_index)
+        {
+            start = from;
+        }
+        self.slot_frames = std::array::from_fn(|s| have[s].filter(|_| kept(s, &start)));
+        let keep = (0..8)
+            .filter(|&s| self.slot_frames[s].is_some())
+            .fold(0, |mask, s| mask | 1 << s);
+        self.frame_info.reset(start.frame_counters, keep);
         self.local_buffer = SmallBuffer::new(4096);
-        self.local_buffer.mark_consumed(consumed_codestream);
-        self.visible_frames_to_skip = visible_frames_to_skip;
+        self.local_buffer
+            .mark_consumed(start.box_parser_checkpoint.consumed_codestream);
+        self.visible_frames_to_skip =
+            Some(seek_target.target.frame_counters.0 - start.frame_counters.0);
+        self.next_frame_index = start.frame_index;
         self.state = ParserState::FrameHeader { is_preview: false };
         self.header_needed_bytes = None;
+        start.box_parser_checkpoint
     }
 
     fn has_more_frames(&self) -> bool {
@@ -285,13 +329,27 @@ impl CodestreamParser {
                         process_mode = ProcessMode::Skip(false);
                     }
 
-                    if !self.frame_info.current_frame_header().unwrap().is_visible() {
+                    let header = self.frame_info.current_frame_header().unwrap();
+                    if !header.is_visible() {
                         process_mode = ProcessMode::SkipOutput;
-                    } else if self.visible_frames_to_skip > 0 {
-                        self.visible_frames_to_skip -= 1;
-                        process_mode = ProcessMode::SkipOutput;
+                    } else if let Some(n) = self.visible_frames_to_skip.as_mut() {
+                        if *n > 0 {
+                            *n -= 1;
+                            // A frame that is not stored does not affect later frames.
+                            process_mode = if stored_slot(header).is_some() {
+                                ProcessMode::SkipOutput
+                            } else {
+                                ProcessMode::Skip(false)
+                            };
+                        } else {
+                            // The seek target: what is stored is now as in a sequential decode.
+                            self.visible_frames_to_skip = None;
+                        }
                     }
 
+                    if !is_preview {
+                        self.next_frame_index += 1;
+                    }
                     if decode_options.scan_frames_only && process_mode == ProcessMode::Process {
                         process_mode = ProcessMode::Skip(true);
                     }
@@ -356,11 +414,23 @@ impl CodestreamParser {
                         }?;
                     }
 
-                    let is_last = self.frame_info.current_frame_header().unwrap().is_last;
-                    if is_last {
-                        self.frame_info.reset((0, 0));
-                    } else {
+                    let header = self.frame_info.current_frame_header().unwrap();
+                    let is_last = header.is_last;
+                    if !is_preview
+                        && !matches!(process_mode, ProcessMode::Skip(_))
+                        && let Some(slot) = stored_slot(header)
+                    {
+                        self.slot_frames[slot] = Some(self.next_frame_index - 1);
+                    }
+                    // After the last frame, the decoder state is dropped, except for a looping
+                    // animation, which will likely be decoded again (seeking can reuse it).
+                    let animation = &self.image_info.file_header().image_metadata.animation;
+                    let looping = animation.as_ref().is_some_and(|a| a.num_loops != 1);
+                    if !is_last || (looping && !is_preview) {
                         self.frame_info.clear();
+                    } else {
+                        self.frame_info.reset((0, 0), 0);
+                        self.slot_frames = [None; 8];
                     }
                     if !is_last {
                         self.state = ParserState::FrameHeader { is_preview };

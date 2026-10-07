@@ -3,17 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::codestream_parser::CodestreamParser;
+use crate::api::codestream_parser::{CodestreamParser, stored_slot};
 use crate::api::{BoxParserCheckpoint, VisibleFrameInfo, VisibleFrameSeekTarget};
 use crate::frame::DecoderState;
 use crate::headers::Animation;
 use crate::headers::frame_header::FrameHeader;
 
-#[derive(Clone, Copy)]
-struct FrameStartInfo {
-    box_parser_checkpoint: BoxParserCheckpoint,
-    visible_count_before: usize,
-    nonvisible_count_before: usize,
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FrameStartInfo {
+    pub(crate) box_parser_checkpoint: BoxParserCheckpoint,
+    pub(crate) frame_counters: (usize, usize),
+    pub(crate) frame_index: usize,
 }
 
 pub(super) struct FrameScanInfo {
@@ -26,12 +26,9 @@ pub(super) struct FrameScanInfo {
     /// File offsets and visibility info for every non-preview frame (visible
     /// and non-visible), in parse order.
     frame_starts: Vec<FrameStartInfo>,
-    /// For each reference slot, earliest frame index required to reconstruct
-    /// the current contents of that slot.
-    reference_slot_decode_start: [Option<usize>; DecoderState::MAX_STORED_FRAMES],
-    /// For each LF slot, earliest frame index required to reconstruct the
-    /// current contents of that slot.
-    lf_slot_decode_start: [Option<usize>; DecoderState::NUM_LF_FRAMES],
+    /// For each reference slot and LF slot (see `stored_slot`), the frame stored there so far,
+    /// and the earliest frame index required to reconstruct it.
+    stored_frames: [Option<(usize, usize)>; 8],
     /// Box parser state where the current frame header parse started.
     /// Set when we begin parsing a frame header.
     current_frame_box_parser_checkpoint: Option<BoxParserCheckpoint>,
@@ -44,8 +41,7 @@ impl FrameScanInfo {
             visible_frame_index: 0,
             nonvisible_frame_index: 0,
             frame_starts: Vec::new(),
-            reference_slot_decode_start: [None; DecoderState::MAX_STORED_FRAMES],
-            lf_slot_decode_start: [None; DecoderState::NUM_LF_FRAMES],
+            stored_frames: [None; 8],
             current_frame_box_parser_checkpoint: None,
         }
     }
@@ -63,11 +59,12 @@ impl FrameScanInfo {
 
         let current_frame_index = self.frame_starts.len();
         let is_visible = header.is_visible();
-        self.frame_starts.push(FrameStartInfo {
+        let target = FrameStartInfo {
             box_parser_checkpoint,
-            visible_count_before: self.visible_frame_index,
-            nonvisible_count_before: self.nonvisible_frame_index,
-        });
+            frame_counters: (self.visible_frame_index, self.nonvisible_frame_index),
+            frame_index: current_frame_index,
+        };
+        self.frame_starts.push(target);
         if is_visible {
             self.nonvisible_frame_index = 0;
         } else {
@@ -95,17 +92,27 @@ impl FrameScanInfo {
         }
 
         for (slot, used) in used_reference_slots.iter().enumerate() {
-            if *used && let Some(dep_start) = self.reference_slot_decode_start[slot] {
+            if *used && let Some((_, dep_start)) = self.stored_frames[slot] {
                 decode_start_frame_index = decode_start_frame_index.min(dep_start);
             }
         }
 
         if header.has_lf_frame() {
             let lf_slot = header.lf_level as usize;
-            if let Some(dep_start) = self.lf_slot_decode_start[lf_slot] {
+            if let Some((_, dep_start)) =
+                self.stored_frames[DecoderState::MAX_STORED_FRAMES + lf_slot]
+            {
                 decode_start_frame_index = decode_start_frame_index.min(dep_start);
             }
         }
+
+        // A seek to this frame also restores everything else that is stored (except what this frame
+        // overwrites), since the frames after it may read it.
+        let overwritten = stored_slot(header);
+        let seek_start_frame_index = (0..self.stored_frames.len())
+            .filter(|&slot| Some(slot) != overwritten)
+            .filter_map(|slot| Some(self.stored_frames[slot]?.1))
+            .fold(decode_start_frame_index, usize::min);
 
         if is_visible {
             let duration_ticks = header.duration;
@@ -120,19 +127,14 @@ impl FrameScanInfo {
                 0.0
             };
 
-            let decode_start = self.frame_starts[decode_start_frame_index];
+            let decode_start = self.frame_starts[seek_start_frame_index];
             let seek_target = VisibleFrameSeekTarget {
-                decode_start_file_offset: decode_start.box_parser_checkpoint.file_position,
-                box_parser_checkpoint: decode_start.box_parser_checkpoint,
-                visible_frames_to_skip: self
-                    .visible_frame_index
-                    .saturating_sub(decode_start.visible_count_before),
-                decode_start_frame_counters: (
-                    decode_start.visible_count_before,
-                    decode_start.nonvisible_count_before,
-                ),
+                target,
+                stored_frames: self.stored_frames.map(|s| {
+                    s.map(|(f, from)| (f, self.frame_starts[from.max(seek_start_frame_index)]))
+                }),
             };
-            let is_keyframe = seek_target.visible_frames_to_skip == 0;
+            let is_keyframe = decode_start.frame_counters.0 == target.frame_counters.0;
 
             self.scanned_frames.push(VisibleFrameInfo {
                 index: self.visible_frame_index,
@@ -148,15 +150,8 @@ impl FrameScanInfo {
             self.visible_frame_index += 1;
         }
 
-        // Update slot dependency origins after processing this frame.
-        if header.can_be_referenced {
-            let slot = header.save_as_reference as usize;
-            self.reference_slot_decode_start[slot] = Some(decode_start_frame_index);
-        }
-
-        if header.lf_level != 0 {
-            let slot = (header.lf_level - 1) as usize;
-            self.lf_slot_decode_start[slot] = Some(decode_start_frame_index);
+        if let Some(slot) = stored_slot(header) {
+            self.stored_frames[slot] = Some((current_frame_index, decode_start_frame_index));
         }
     }
 }

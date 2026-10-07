@@ -126,8 +126,6 @@ pub struct DecoderState {
     pub use_simple_pipeline: bool,
     #[cfg(test)]
     pub allow_16bit_modular_buffers: bool,
-    pub visible_frame_index: usize,
-    pub nonvisible_frame_index: usize,
     pub high_precision: bool,
     pub premultiply_output: bool,
     pub adjust_orientation: bool,
@@ -143,14 +141,26 @@ impl DecoderState {
     pub const MAX_STORED_FRAMES: usize = 4;
     pub const NUM_LF_FRAMES: usize = 4;
 
-    /// A decoder state with no reference frames, for a frame preceded by `frame_counters`
-    /// (visible frames, and non-visible frames since the last visible one).
-    pub fn new(
-        file_header: FileHeader,
-        options: &JxlDecoderOptions,
-        level5_limits: bool,
-        frame_counters: (usize, usize),
-    ) -> Self {
+    /// Drops the stored frames not in `slots` (bit i for reference frame i, bit 4 + i for LF
+    /// frame i).
+    pub fn keep_slots(&mut self, slots: u8) {
+        if slots == u8::MAX {
+            return;
+        }
+        let reference_frames = Arc::get_mut(&mut self.reference_frames)
+            .expect("remaining references to reference_frames");
+        let lf_frames = self.lf_frames.iter_mut();
+        for (i, (frame, lf_frame)) in reference_frames.iter_mut().zip(lf_frames).enumerate() {
+            if slots & (1 << i) == 0 {
+                *frame = None;
+            }
+            if slots & (1 << (Self::MAX_STORED_FRAMES + i)) == 0 {
+                *lf_frame = None;
+            }
+        }
+    }
+
+    pub fn new(file_header: FileHeader, options: &JxlDecoderOptions, level5_limits: bool) -> Self {
         Self {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
@@ -160,8 +170,6 @@ impl DecoderState {
             use_simple_pipeline: options.test_options.use_simple_pipeline,
             #[cfg(test)]
             allow_16bit_modular_buffers: !options.test_options.disable_16bit_modular_buffers,
-            visible_frame_index: frame_counters.0,
-            nonvisible_frame_index: frame_counters.1,
             high_precision: options.high_precision,
             premultiply_output: options.premultiply_output,
             adjust_orientation: options.adjust_orientation,
@@ -332,6 +340,7 @@ pub struct Frame {
     buffer_recycler: Arc<BufferRecycler>,
     // LF groups that received data or have modified neighbors and need to be previewed.
     lf_preview_dirty_groups: BTreeSet<usize>,
+    frame_counters: (usize, usize),
 }
 
 impl Frame {
@@ -398,7 +407,7 @@ impl Frame {
         Ok(())
     }
 
-    pub fn finalize(mut self: Box<Self>) -> Result<Option<DecoderState>> {
+    pub fn finalize(mut self: Box<Self>) -> Result<DecoderState> {
         // First, drop the render pipeline to ensure that no other references to the reference
         // frames are around.
         self.render_pipeline = None;
@@ -420,12 +429,7 @@ impl Frame {
         if self.header.lf_level != 0 {
             self.decoder_state.lf_frames[(self.header.lf_level - 1) as usize] = self.lf_frame_data;
         }
-        let decoder_state = if self.header.is_last {
-            None
-        } else {
-            Some(self.decoder_state)
-        };
-        Ok(decoder_state)
+        Ok(self.decoder_state)
     }
 
     fn modular_color_channels(&self) -> usize {

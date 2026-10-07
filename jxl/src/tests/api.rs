@@ -741,8 +741,8 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
 
             let expected = &sequential_frames[target_visible_index];
 
-            decoder.start_new_frame(seek_target).unwrap();
-            let mut input = &data[seek_target.decode_start_file_offset as usize..];
+            let offset = decoder.start_new_frame(seek_target).unwrap();
+            let mut input = &data[offset as usize..];
 
             assert_eq!(
                 decoder.process(&mut input, None, None).unwrap(),
@@ -804,8 +804,8 @@ fn test_seek_every_frame_noise_references() {
         let seek_target = scanned_frames[target].seek_target;
         let expected = &sequential_frames[target];
 
-        decoder.start_new_frame(seek_target).unwrap();
-        let mut input = &data[seek_target.decode_start_file_offset as usize..];
+        let offset = decoder.start_new_frame(seek_target).unwrap();
+        let mut input = &data[offset as usize..];
         assert_eq!(
             decoder.process(&mut input, None, None).unwrap(),
             Event::FrameHeader
@@ -903,10 +903,6 @@ fn test_scan_bare_animation() {
 
     assert!(frames.last().unwrap().is_last);
     assert!(frames[0].is_keyframe);
-    assert_eq!(
-        frames[0].seek_target.decode_start_file_offset,
-        frames[0].file_offset as u64
-    );
 }
 
 #[test]
@@ -945,8 +941,6 @@ fn test_scan_keyframe_detection_still() {
     assert_eq!(frames.len(), 1);
     let f = &frames[0];
     assert!(f.is_keyframe);
-    assert_eq!(f.seek_target.decode_start_file_offset, f.file_offset as u64);
-    assert_eq!(f.seek_target.visible_frames_to_skip, 0);
 }
 
 #[test]
@@ -957,17 +951,22 @@ fn test_scan_decode_start_file_offset_consistency() {
     let frames = scan_frames(&data, usize::MAX);
 
     for frame in &frames {
+        // (a new decoder has nothing to reuse, so it starts at the decode start)
+        let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+        let mut input = &data[..];
+        while decoder.process(&mut input, None, None).unwrap() != Event::BasicInfo {}
+        let decode_start_offset = decoder.start_new_frame(frame.seek_target).unwrap();
         assert!(
-            frame.seek_target.decode_start_file_offset <= frame.file_offset,
-            "frame {}: decode_start_file_offset {} > file_offset {}",
+            decode_start_offset <= frame.file_offset,
+            "frame {}: decode start offset {} > file_offset {}",
             frame.index,
-            frame.seek_target.decode_start_file_offset,
+            decode_start_offset,
             frame.file_offset,
         );
         assert_eq!(
             frame.is_keyframe,
-            frame.seek_target.visible_frames_to_skip == 0,
-            "frame {}: keyframe flag should match visible_frames_to_skip",
+            decode_start_offset == frame.file_offset,
+            "frame {}: keyframe flag should match decoding starting at the frame",
             frame.index,
         );
     }
@@ -1489,9 +1488,9 @@ fn aux_box_seek() {
     assert_eq!(decoder.aux_boxes(ty_bar).len(), 2);
 
     let seek_target = decoder.scanned_frames()[0].seek_target;
-    decoder.start_new_frame(seek_target).unwrap();
+    let offset = decoder.start_new_frame(seek_target).unwrap();
 
-    let mut buf = &data[(seek_target.decode_start_file_offset as usize)..];
+    let mut buf = &data[(offset as usize)..];
     process_to_complete(&mut decoder, &mut buf);
     assert!(decoder.aux_boxes(ty_foo).is_empty());
     assert_eq!(decoder.aux_boxes(ty_bar).len(), 2);

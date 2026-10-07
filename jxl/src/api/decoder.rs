@@ -4,11 +4,11 @@
 // license that can be found in the LICENSE file.
 
 use super::box_parser::{BoxParser, CodestreamInput};
-use super::codestream_parser::CodestreamParser;
+use super::codestream_parser::{CodestreamParser, FrameStartInfo};
 use super::{
-    BoxParserCheckpoint, Event, JxlAuxBox, JxlAuxBoxType, JxlBasicInfo, JxlBitstreamInput,
-    JxlColorProfile, JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner,
-    JxlParallelRunnerFun, JxlPixelFormat,
+    Event, JxlAuxBox, JxlAuxBoxType, JxlBasicInfo, JxlBitstreamInput, JxlColorProfile,
+    JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner, JxlParallelRunnerFun,
+    JxlPixelFormat,
 };
 use crate::error::{Error, Result};
 
@@ -38,8 +38,6 @@ pub struct VisibleFrameInfo {
     /// Whether this is the last frame in the codestream.
     pub is_last: bool,
     /// Whether this frame is a seek-keyframe for visible-frame playback.
-    ///
-    /// This is equivalent to `seek_target.visible_frames_to_skip == 0`.
     pub is_keyframe: bool,
     /// Precomputed seek inputs for this visible frame.
     pub seek_target: VisibleFrameSeekTarget,
@@ -47,20 +45,15 @@ pub struct VisibleFrameInfo {
     pub name: String,
 }
 
-/// Computed seek inputs for a target visible frame.
+/// Precomputed seek inputs for a target visible frame.
 #[derive(Debug, Clone, Copy)]
 pub struct VisibleFrameSeekTarget {
-    /// File byte offset to start feeding input from.
-    pub decode_start_file_offset: u64,
-    /// State of the box parser at the file offset we want to seek to.
-    /// Pass this to [`JxlDecoder::start_new_frame`].
-    pub box_parser_checkpoint: BoxParserCheckpoint,
-    /// Number of visible frames to skip after seek-start before decoding the
-    /// requested target frame.
-    pub visible_frames_to_skip: usize,
-    /// Visible frames before the decode-start frame, and non-visible frames since the last visible
-    /// one: the frame counters the decoder starts from (they seed the noise of each frame).
-    pub decode_start_frame_counters: (usize, usize),
+    /// Start of the target frame itself.
+    pub(crate) target: FrameStartInfo,
+    /// For each reference frame (0-3) and LF frame (4-7), the index of the frame stored in that
+    /// slot at the start of the target frame, and the start of the earliest frame required to
+    /// reconstruct it (from the decode start on: before it, only what the target overwrites).
+    pub(crate) stored_frames: [Option<(usize, FrameStartInfo)>; 8],
 }
 
 /// JPEG XL decoder.
@@ -204,24 +197,22 @@ impl JxlDecoder {
         self.box_parser.trailing_box()
     }
 
-    /// Resets frame-level state to prepare for decoding a new frame.
+    /// Resets frame-level state to prepare for decoding a new frame, and returns the file byte
+    /// offset from which raw file input must be provided next.
+    ///
     /// After seeking the first time, scanned frame information will no longer be updated,
     /// since frames may be decoded out of order and not all frames may be visited.
     ///
-    /// After calling this, provide raw file input starting from
-    /// `seek_target.decode_start_file_offset`.
-    pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) -> Result<()> {
+    /// The stored frames that the decoder state already holds are kept; this seeks to the latest
+    /// frame from which the others can be reconstructed (the target itself if none are missing),
+    /// and on the way to the target, frames that are not stored are skipped.
+    pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) -> Result<u64> {
         if !self.codestream_parser.image_info.is_complete() {
             return Err(Error::ApiUsageError("cannot seek before BasicInfo"));
         }
-        self.box_parser
-            .reset_to_checkpoint(seek_target.box_parser_checkpoint);
-        self.codestream_parser.start_new_frame(
-            seek_target.visible_frames_to_skip,
-            seek_target.box_parser_checkpoint.consumed_codestream,
-            seek_target.decode_start_frame_counters,
-        );
-        Ok(())
+        let checkpoint = self.codestream_parser.start_new_frame(&seek_target);
+        self.box_parser.reset_to_checkpoint(checkpoint);
+        Ok(checkpoint.file_position)
     }
 
     /// Returns the total length of the JPEG XL file, once decoding is finished.
