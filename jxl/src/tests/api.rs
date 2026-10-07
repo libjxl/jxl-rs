@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::api::{
     Event, JxlAuxBoxType, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
-    JxlPixelFormat, JxlTransferFunction,
+    JxlPixelFormat, JxlTransferFunction, VisibleFrameInfo,
 };
 use crate::error::Error;
 use crate::image::{Image, ImageDataType};
@@ -828,6 +828,138 @@ fn test_seek_every_frame_noise_references() {
             &seek_decoded,
         );
     }
+}
+
+/// Decodes the next frame and compares it with `expected`.
+fn decode_next_and_compare(
+    decoder: &mut JxlDecoder,
+    input: &mut &[u8],
+    expected: &[Image<f32>],
+    name: &str,
+    index: usize,
+) {
+    let event = decoder.process(input, None, None).unwrap();
+    assert_eq!(event, Event::FrameHeader, "{name}: frame {index}");
+    let mut decoded: Vec<Image<f32>> = expected
+        .iter()
+        .map(|img| Image::new(img.size()).unwrap())
+        .collect();
+    let mut buffers = as_output_buffers(&mut decoded);
+    assert!(matches!(
+        decoder.process(input, Some(&mut buffers), None),
+        Ok(Event::FrameComplete { .. })
+    ));
+    compare_frames(Path::new(name), index, expected, &decoded);
+}
+
+fn decode_whole_file(data: &[u8]) -> JxlDecoder {
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let mut input = data;
+    while decoder.process(&mut input, None, None).unwrap() != Event::Complete {}
+    decoder
+}
+
+/// Seeks to `target` with `start_new_frame` and returns the input to continue from.
+fn seek<'a>(decoder: &mut JxlDecoder, data: &'a [u8], target: &VisibleFrameInfo) -> &'a [u8] {
+    let offset = decoder.start_new_frame(target.seek_target).unwrap();
+    &data[offset as usize..]
+}
+
+fn new_decoder_at_basic_info(data: &[u8]) -> JxlDecoder {
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let mut input = data;
+    while decoder.process(&mut input, None, None).unwrap() != Event::BasicInfo {}
+    decoder
+}
+
+// Seeks to frames in different orders, each followed by some frames in order: all must match a
+// sequential decode. The decoder keeps its state where it can: seeking back after three frames,
+// seeking forward over a frame, and (as a reference) seeking with a new decoder. The files have
+// noise, saved and unsaved displayed frames, blending, cropped frames, patches from sprite sheets,
+// and a frame that reads no slot followed by frames that read a sheet saved before it.
+#[test]
+fn test_seek_matches_sequential() {
+    for path in [
+        "animation_seek_noise_references.jxl",
+        "animation_seek_sprite_sheets.jxl",
+        "animation_seek_keyframe_then_patches.jxl",
+        "animation_seek_empty.jxl",
+        "animation_seek_interrupted.jxl",
+        "conformance_test_images/animation_icos4d.jxl",
+        "conformance_test_images/animation_newtons_cradle.jxl",
+        "conformance_test_images/animation_spline.jxl",
+        "cropped_traffic_light.jxl",
+    ] {
+        let data = std::fs::read(format!("resources/test/{path}")).unwrap();
+        let frames = scan_frames(&data, usize::MAX);
+        let sequential = decode(&data, Default::default()).unwrap();
+        let backward = (0..frames.len()).rev().map(|target| (target, 3));
+        let forward = (0..frames.len()).step_by(2).map(|target| (target, 1));
+        let mut decoder = decode_whole_file(&data);
+        for (target, count) in backward.chain(forward) {
+            let mut fresh = new_decoder_at_basic_info(&data);
+            for (decoder, how) in [
+                (&mut decoder, "seek"),
+                (&mut fresh, "seek with a new decoder"),
+            ] {
+                let mut input = seek(decoder, &data, &frames[target]);
+                for (i, expected) in sequential.iter().enumerate().skip(target).take(count) {
+                    let name = format!("{path}: {how}");
+                    decode_next_and_compare(decoder, &mut input, expected, &name, i);
+                }
+            }
+        }
+    }
+}
+
+// A seek that is interrupted after decoding a frame that it does not get right (X, which adds A,
+// but the seek to the last frame starts after A), then a seek to the frame that shows X: it must
+// not take X from the interrupted seek.
+#[test]
+fn test_seek_after_interrupted_seek() {
+    let data = std::fs::read("resources/test/animation_seek_interrupted.jxl").unwrap();
+    let frames = scan_frames(&data, usize::MAX);
+    let sequential = decode(&data, Default::default()).unwrap();
+    let mut decoder = new_decoder_at_basic_info(&data);
+    let offset = decoder.start_new_frame(frames[1].seek_target).unwrap();
+    let mut input = &data[offset as usize..frames[0].file_offset as usize];
+    while !matches!(
+        decoder.process(&mut input, None, None).unwrap(),
+        Event::NeedMoreInput { .. }
+    ) {}
+    let mut input = seek(&mut decoder, &data, &frames[0]);
+    decode_next_and_compare(&mut decoder, &mut input, &sequential[0], "interrupted", 0);
+}
+
+// Sprite sheet A in slot 1, frames 0-5 patch from it, sheet B replaces it, frames 6-11 patch from
+// that (file order: A, 0-5, B, 6-11). A seek decodes only the target and the sheet it needs, and
+// not even the sheet when the decoder still has it.
+#[test]
+fn test_seek_decodes_only_needed_frames() {
+    let data = std::fs::read("resources/test/animation_seek_sprite_sheets.jxl").unwrap();
+    let frames = scan_frames(&data, usize::MAX);
+    let frames_decoded_by_seek = |decoder: &mut JxlDecoder, target: usize| {
+        let before = decoder.frames_decoded();
+        let mut input = seek(decoder, &data, &frames[target]);
+        while !matches!(
+            decoder.process(&mut input, None, None).unwrap(),
+            Event::FrameComplete { .. }
+        ) {}
+        decoder.frames_decoded() - before
+    };
+    let mut decoder = decode_whole_file(&data);
+    assert_eq!(decoder.frames_decoded(), 14);
+    // The animation loops, so the decoder keeps its state after the last frame, with sheet B. It
+    // needs sheet A again for 3; 5 continues after 3, and 6 continues through sheet B.
+    for (target, cost) in [(9, 1), (7, 1), (3, 2), (1, 1), (5, 1), (6, 2)] {
+        assert_eq!(
+            frames_decoded_by_seek(&mut decoder, target),
+            cost,
+            "frame {target}"
+        );
+    }
+    let mut fresh = new_decoder_at_basic_info(&data);
+    assert_eq!(frames_decoded_by_seek(&mut fresh, 9), 2);
 }
 
 #[test]

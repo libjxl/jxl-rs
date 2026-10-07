@@ -119,6 +119,10 @@ pub(super) struct CodestreamParser {
     /// For each stored frame of the decoder state (see `stored_slot`), the frame whose result it
     /// is (as in a sequential decode, unless a seek has not reached its target yet).
     slot_frames: [Option<usize>; 8],
+
+    /// Number of frames decoded (not skipped), for tests.
+    #[cfg(test)]
+    pub(super) frames_decoded: usize,
 }
 
 /// Where a frame is stored: reference frame 0-3, or LF frame 0-3 as 4-7.
@@ -143,6 +147,8 @@ impl CodestreamParser {
             visible_frames_to_skip: None,
             next_frame_index: 0,
             slot_frames: [None; 8],
+            #[cfg(test)]
+            frames_decoded: 0,
             frame_scan_info: FrameScanInfo::new(),
             file_length: None,
         }
@@ -352,6 +358,10 @@ impl CodestreamParser {
                     }
                     if decode_options.scan_frames_only && process_mode == ProcessMode::Process {
                         process_mode = ProcessMode::Skip(true);
+                    }
+                    #[cfg(test)]
+                    if !matches!(process_mode, ProcessMode::Skip(_)) {
+                        self.frames_decoded += 1;
                     }
 
                     self.state = ParserState::Sections {

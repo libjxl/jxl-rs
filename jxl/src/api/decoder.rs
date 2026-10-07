@@ -89,6 +89,11 @@ impl JxlDecoder {
     }
 
     #[cfg(test)]
+    pub(crate) fn frames_decoded(&self) -> usize {
+        self.codestream_parser.frames_decoded
+    }
+
+    #[cfg(test)]
     pub(crate) fn toc(&self) -> Option<&crate::headers::toc::Toc> {
         self.codestream_parser.frame_info.current_toc()
     }
