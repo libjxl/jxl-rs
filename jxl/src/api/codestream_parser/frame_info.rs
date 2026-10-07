@@ -71,8 +71,12 @@ pub struct FrameInfo {
     hf_sections: Vec<Vec<Option<SectionBuffer>>>,
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
-    // The frame counters that a decoder state created from scratch starts from.
-    start_frame_counters: (usize, usize),
+    // The frame counters before the next frame (visible frames, and non-visible frames since the
+    // last visible one), which seed its noise. They are counted here rather than in the decoder
+    // state so that frames skipped by a seek count too.
+    frame_counters: (usize, usize),
+    // Which stored frames to keep in the next frame's decoder state (see `reset`).
+    keep_slots: [bool; 8],
 }
 
 impl FrameInfo {
@@ -91,17 +95,20 @@ impl FrameInfo {
             hf_sections: vec![],
             candidate_hf_sections: HashSet::new(),
             pixels_dirty: false,
-            start_frame_counters: (0, 0),
+            frame_counters: (0, 0),
+            keep_slots: [true; 8],
         }
     }
 
-    /// Drops the current frame and decoder state: the next frame starts from a new decoder state,
-    /// preceded by `start_frame_counters` (visible frames, and non-visible frames since the last
-    /// visible one).
-    pub fn reset(&mut self, start_frame_counters: (usize, usize)) {
+    /// Prepares for a next frame preceded by `frame_counters`, keeping only the stored frames in
+    /// `keep_slots`.
+    pub fn reset(&mut self, frame_counters: (usize, usize), keep_slots: [bool; 8]) {
         self.clear();
-        self.frame = None;
-        self.start_frame_counters = start_frame_counters;
+        if keep_slots == [false; 8] {
+            self.frame = None;
+        }
+        self.frame_counters = frame_counters;
+        self.keep_slots = keep_slots;
     }
 
     pub fn clear(&mut self) {
@@ -213,6 +220,11 @@ impl FrameInfo {
         self.candidate_hf_sections.clear();
         self.hf_sections.clear();
 
+        self.frame_counters = if self.frame_header.as_ref().unwrap().is_visible() {
+            (self.frame_counters.0 + 1, 0)
+        } else {
+            (self.frame_counters.0, self.frame_counters.1 + 1)
+        };
         if !matches!(process_mode, ProcessMode::Skip(_)) {
             // If we have a previous frame, compute the decoder state from there.
             // Otherwise, compute a new decoder state.
@@ -224,18 +236,17 @@ impl FrameInfo {
                 .take()
                 .map(|x| x.finalize())
                 .transpose()?
-                .flatten()
                 .unwrap_or_else(|| {
-                    DecoderState::new(
-                        file_header.clone(),
-                        decode_options,
-                        level5_limits,
-                        self.start_frame_counters,
-                    )
+                    DecoderState::new(file_header.clone(), decode_options, level5_limits)
                 });
             decoder_state.level5_limits = level5_limits;
-            let mut frame =
-                Frame::from_header_and_toc(self.frame_header.take().unwrap(), toc, decoder_state)?;
+            decoder_state.keep_slots(std::mem::replace(&mut self.keep_slots, [true; 8]));
+            let mut frame = Frame::from_header_and_toc(
+                self.frame_header.take().unwrap(),
+                toc,
+                decoder_state,
+                self.frame_counters,
+            )?;
 
             let num_groups = frame.header().num_groups();
             let num_passes = frame.header().passes.num_passes as usize;
