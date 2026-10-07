@@ -131,9 +131,9 @@ impl JxlAuxBox {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct BoxParserCheckpoint {
+pub(crate) struct BoxParserCheckpoint {
     box_type: CodestreamBoxType,
-    pub(super) file_position: u64,
+    pub(crate) file_position: u64,
     codestream_left: Option<u64>,
     is_valid_checkpoint: bool,
     pub(super) consumed_codestream: u64,
