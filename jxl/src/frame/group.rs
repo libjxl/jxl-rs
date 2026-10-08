@@ -685,9 +685,20 @@ pub fn decode_vardct_group(
     let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let use_i16 = hf_global.use_i16;
-    let is_multi_pass = !hf_global.hf_coefficients.is_empty();
+    let is_multi_pass =
+        !hf_global.hf_coefficients.is_empty() && pass_info.len() < hf_global.passes.len();
     let mut locked_coeffs = if is_multi_pass {
-        Some(hf_global.hf_coefficients[group].try_lock().unwrap())
+        let mut guard = hf_global.hf_coefficients[group].try_lock().unwrap();
+        if guard.is_empty() {
+            let num_cache_lines = if use_i16 {
+                num_cache_lines_for::<i16>(GROUP_DIM * GROUP_DIM * 3)
+            } else {
+                num_cache_lines_for::<i32>(GROUP_DIM * GROUP_DIM * 3)
+            };
+            guard.try_reserve_exact(num_cache_lines)?;
+            guard.resize(num_cache_lines, CacheLine::default());
+        }
+        Some(guard)
     } else {
         None
     };
