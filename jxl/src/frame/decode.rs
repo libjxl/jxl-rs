@@ -19,7 +19,6 @@ use super::quant_weights::DequantMatrices;
 use super::quantizer::{LfQuantFactors, QuantizerParams};
 use super::render::pipeline;
 use super::{HfMetaSplitter, HfMetaViews, LfImageSplitter};
-use crate::GROUP_DIM;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Histograms;
 use crate::error::{Error, Result};
@@ -47,10 +46,7 @@ use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
 use crate::util::sync::{Arc, Mutex, RwLock};
 use crate::util::tracing_wrappers::*;
-use crate::util::{
-    CacheLine, CeilLog2, NewWithCapacity, PerThreadStorage, ShiftRightCeil, Xorshift128Plus,
-    mirror, num_cache_lines_for,
-};
+use crate::util::{CeilLog2, PerThreadStorage, ShiftRightCeil, Xorshift128Plus, mirror};
 
 fn upsample_lf_group(
     group: usize,
@@ -601,22 +597,13 @@ impl Frame {
                 .max()
                 .unwrap_or(0);
             let use_i16 = max_num_bits < 16;
-            // Since the render pipeline keeps finalized channels, we don't need to store
-            // HF coefficients if there is a single pass.
+            // Since the render pipeline keeps finalized channels, we only need to store
+            // HF coefficients across calls if passes are decoded incrementally.
             let hf_coefficients = if passes.len() <= 1 {
                 vec![]
             } else {
-                let num_cache_lines = if use_i16 {
-                    num_cache_lines_for::<i16>(GROUP_DIM * GROUP_DIM * 3)
-                } else {
-                    num_cache_lines_for::<i32>(GROUP_DIM * GROUP_DIM * 3)
-                };
                 (0..self.header.num_groups())
-                    .map(|_| {
-                        let mut v = Vec::new_with_capacity(num_cache_lines)?;
-                        v.resize(num_cache_lines, CacheLine::default());
-                        Ok(Mutex::new(v))
-                    })
+                    .map(|_| Ok(Mutex::new(Vec::new())))
                     .collect::<Result<_>>()?
             };
 
