@@ -140,3 +140,19 @@ fn f32_f64_conv() {
         Ok(())
     });
 }
+
+#[test]
+fn reshape_and_recycle() -> Result<()> {
+    let recycler = super::BufferRecycler::new();
+    let mut img = recycler.get_buffer::<i32>((64, 128))?;
+    let ptr = img.row(0).as_ptr() as usize;
+    img.reshape((128, 64));
+    assert_eq!(img.size(), (128, 64));
+    assert_eq!(img.row(0).as_ptr() as usize, ptr);
+    recycler.recycle_buffer(img);
+
+    let img2 = recycler.get_buffer::<i16>((256, 64))?;
+    assert_eq!(img2.size(), (256, 64));
+    assert_eq!(img2.row(0).as_ptr() as usize, ptr);
+    Ok(())
+}

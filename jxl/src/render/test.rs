@@ -104,7 +104,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
         downsampling_shift,
         LOG_GROUP_SIZE,
         chunk_size,
-        Arc::new(BufferRecycler::new(1 << LOG_GROUP_SIZE)),
+        Arc::new(BufferRecycler::new()),
     )
     .add_stage_internal(stage);
 

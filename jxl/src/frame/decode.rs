@@ -282,8 +282,6 @@ impl Frame {
 
         let num_extra_channels = image_metadata.extra_channel_info.len();
 
-        let group_dim = frame_header.group_dim();
-
         Ok(Box::new(Self {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
@@ -309,7 +307,7 @@ impl Frame {
             color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
             epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
-            buffer_recycler: Arc::new(BufferRecycler::new(group_dim)),
+            buffer_recycler: Arc::new(BufferRecycler::new()),
             lf_preview_dirty_groups: BTreeSet::new(),
         }))
     }
