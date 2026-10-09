@@ -12,7 +12,6 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
-use crate::util::NewWithCapacity;
 use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
@@ -221,6 +220,15 @@ impl SymbolReader {
         br: &mut BitReader,
         image_width: Option<usize>,
     ) -> Result<Self> {
+        Self::new_with_lz77_scratch(histograms, br, image_width, &mut Vec::new())
+    }
+
+    pub fn new_with_lz77_scratch(
+        histograms: &Histograms,
+        br: &mut BitReader,
+        image_width: Option<usize>,
+        lz77_window_scratch: &mut Vec<u32>,
+    ) -> Result<Self> {
         let ans_reader = if matches!(histograms.codes, Codes::Ans(_)) {
             AnsReader::init(br)?
         } else {
@@ -237,12 +245,18 @@ impl SymbolReader {
             let min_symbol = min_symbol.unwrap();
             let min_length = min_length.unwrap();
             let dist_multiplier = image_width.unwrap_or(0) as u32;
+            let mut window = std::mem::take(lz77_window_scratch);
+            window.clear();
+            let window_cap = 1 << Lz77State::LOG_WINDOW_SIZE;
+            if window.capacity() < window_cap {
+                window.try_reserve(window_cap)?;
+            }
 
             SymbolReaderState::Lz77(Lz77State {
                 min_symbol,
                 min_length,
                 dist_multiplier,
-                window: Vec::new_with_capacity(1 << Lz77State::LOG_WINDOW_SIZE)?,
+                window,
                 num_to_copy: 0,
                 copy_pos: 0,
                 num_decoded: 0,
@@ -546,6 +560,19 @@ impl SymbolReader {
     }
 
     pub fn check_final_state(self, histograms: &Histograms, br: &mut BitReader) -> Result<()> {
+        let mut dummy = Vec::new();
+        self.check_final_state_with_lz77_scratch(histograms, br, &mut dummy)
+    }
+
+    pub fn check_final_state_with_lz77_scratch(
+        self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        lz77_window_scratch: &mut Vec<u32>,
+    ) -> Result<()> {
+        if let SymbolReaderState::Lz77(mut lz77_state) = self.state {
+            *lz77_window_scratch = std::mem::take(&mut lz77_state.window);
+        }
         self.errors.check_for_error()?;
         br.check_for_error()?;
         match &histograms.codes {

@@ -217,17 +217,37 @@ pub struct WeightedPredictorState {
     p3c: [u8; 5],
 }
 
+#[derive(Debug, Default)]
+pub struct WeightedPredictorScratch {
+    pred_errors_buffer: Vec<[u32; NUM_PREDICTORS]>,
+    error: Vec<i32>,
+}
+
 impl WeightedPredictorState {
     pub fn new(wp_header: &WeightedHeader, xsize: usize) -> WeightedPredictorState {
+        Self::new_with_scratch(wp_header, xsize, &mut WeightedPredictorScratch::default())
+    }
+
+    pub fn new_with_scratch(
+        wp_header: &WeightedHeader,
+        xsize: usize,
+        scratch: &mut WeightedPredictorScratch,
+    ) -> WeightedPredictorState {
         let num_errors = xsize.checked_add(1).unwrap().checked_mul(2).unwrap();
+        let mut pred_errors_buffer = std::mem::take(&mut scratch.pred_errors_buffer);
+        pred_errors_buffer.clear();
+        pred_errors_buffer.resize(num_errors, [0; NUM_PREDICTORS]);
+        let mut error = std::mem::take(&mut scratch.error);
+        error.clear();
+        error.resize(num_errors, 0);
         WeightedPredictorState {
             prediction: [0; NUM_PREDICTORS],
             pred: 0,
             // Safety note: safety invariant is true by construction (we checked no
             // overflows above)
             xsize,
-            pred_errors_buffer: vec![[0; NUM_PREDICTORS]; num_errors],
-            error: vec![0; num_errors],
+            pred_errors_buffer,
+            error,
             // These casts are lossless because w fits in 4 bits and p fits in 5 by
             // bitstream constraints.
             w: [
@@ -246,6 +266,11 @@ impl WeightedPredictorState {
                 wp_header.p3ce as u8,
             ],
         }
+    }
+
+    pub fn save_scratch(mut self, scratch: &mut WeightedPredictorScratch) {
+        scratch.pred_errors_buffer = std::mem::take(&mut self.pred_errors_buffer);
+        scratch.error = std::mem::take(&mut self.error);
     }
 
     pub fn save_state(&self, wp_image: &mut Image<i32>) {

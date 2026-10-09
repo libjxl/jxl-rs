@@ -13,7 +13,7 @@ use crate::frame::modular::tree::TreeNode;
 use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, ScratchSpace, Tree};
 use crate::headers::JxlHeader;
 use crate::headers::modular::GroupHeader;
-use crate::image::ImageRectMut;
+use crate::image::{BufferRecycler, ImageRectMut};
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.
@@ -212,6 +212,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
     scratch_space: &mut ScratchSpace,
+    recycler: &BufferRecycler,
     level5_limits: bool,
 ) -> Result<()> {
     // Skip decoding if all grids are zero-sized.
@@ -225,99 +226,117 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     let mut buffer_storage = vec![];
 
     let buffers = buffers.into_iter().collect::<Vec<_>>();
-    let (header, mut buffers) = match header {
-        Some(h) => (h, buffers),
-        None => {
-            let h = GroupHeader::read(br)?;
-            if !h.transforms.is_empty() {
-                // Note: reassigning to `buffers` here convinces the borrow checker that the borrow of
-                // `buffer_storage` ought to outlive `buffers[..]`'s lifetime, which obviously breaks
-                // applying transforms later.
-                let new_bufs;
-                (new_bufs, transform_steps) = meta_apply_local_transforms(
-                    buffers,
-                    &mut buffer_storage,
-                    &h,
-                    storage,
-                    level5_limits,
-                )?;
-                (h, new_bufs)
-            } else {
-                (h, buffers)
-            }
-        }
-    };
-
-    if header.use_global_tree && global_tree.is_none() {
-        return Err(Error::NoGlobalTree);
-    }
-    let local_tree = if !header.use_global_tree {
-        let num_local_samples = buffers
-            .iter()
-            .map(|buf| {
-                let (width, height) = buf.channel_info(storage).size;
-                width * height
-            })
-            .sum::<usize>();
-        let size_limit = (1024 + num_local_samples).min(1 << 20);
-        Some(Tree::read(br, size_limit, level5_limits)?)
-    } else {
-        None
-    };
-    let tree = if header.use_global_tree {
-        global_tree.as_ref().unwrap()
-    } else {
-        local_tree.as_ref().unwrap()
-    };
-
-    let image_width = buffers
-        .iter()
-        .map(|info| info.channel_info(storage).size.0)
-        .max()
-        .unwrap_or(0);
-
-    if can_decode_fast_lossless(tree) {
-        decode_fast_lossless(buffers, tree, br, partial_decoded_buffers, storage)?
-    } else {
-        let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
-
-        let mut last_safe_buf = 0;
-        for i in 0..buffers.len() {
-            // Keep channel numbering stable, but skip actually decoding empty channels.
-            // This matches libjxl, which continues the loop without renumbering.
-            let (w, h) = buffers[i].size(storage);
-            if w == 0 || h == 0 {
-                continue;
-            }
-            if br.total_bits_available() >= DECODE_SAFETY_MARGIN {
-                last_safe_buf = i;
-            }
-            if let Err(e) = decode_modular_channel(
-                &mut buffers,
-                i,
-                stream_id,
-                &header,
-                tree,
-                &mut reader,
-                br,
-                storage,
-                scratch_space,
-            ) {
-                if let Some(p) = partial_decoded_buffers {
-                    *p = last_safe_buf;
+    let res = (|| -> Result<()> {
+        let (header, mut buffers) = match header {
+            Some(h) => (h, buffers),
+            None => {
+                let h = GroupHeader::read(br)?;
+                if !h.transforms.is_empty() {
+                    // Note: reassigning to `buffers` here convinces the borrow checker that the borrow of
+                    // `buffer_storage` ought to outlive `buffers[..]`'s lifetime, which obviously breaks
+                    // applying transforms later.
+                    let new_bufs;
+                    (new_bufs, transform_steps) = meta_apply_local_transforms(
+                        buffers,
+                        &mut buffer_storage,
+                        &h,
+                        storage,
+                        recycler,
+                        level5_limits,
+                    )?;
+                    (h, new_bufs)
+                } else {
+                    (h, buffers)
                 }
-                return Err(e);
             }
+        };
+
+        if header.use_global_tree && global_tree.is_none() {
+            return Err(Error::NoGlobalTree);
+        }
+        let local_tree = if !header.use_global_tree {
+            let num_local_samples = buffers
+                .iter()
+                .map(|buf| {
+                    let (width, height) = buf.channel_info(storage).size;
+                    width * height
+                })
+                .sum::<usize>();
+            let size_limit = (1024 + num_local_samples).min(1 << 20);
+            Some(Tree::read(br, size_limit, level5_limits)?)
+        } else {
+            None
+        };
+        let tree = if header.use_global_tree {
+            global_tree.as_ref().unwrap()
+        } else {
+            local_tree.as_ref().unwrap()
+        };
+
+        let image_width = buffers
+            .iter()
+            .map(|info| info.channel_info(storage).size.0)
+            .max()
+            .unwrap_or(0);
+
+        if can_decode_fast_lossless(tree) {
+            decode_fast_lossless(buffers, tree, br, partial_decoded_buffers, storage)?
+        } else {
+            let mut reader = SymbolReader::new_with_lz77_scratch(
+                &tree.histograms,
+                br,
+                Some(image_width),
+                &mut scratch_space.lz77_window_scratch,
+            )?;
+
+            let mut last_safe_buf = 0;
+            for i in 0..buffers.len() {
+                // Keep channel numbering stable, but skip actually decoding empty channels.
+                // This matches libjxl, which continues the loop without renumbering.
+                let (w, h) = buffers[i].size(storage);
+                if w == 0 || h == 0 {
+                    continue;
+                }
+                if br.total_bits_available() >= DECODE_SAFETY_MARGIN {
+                    last_safe_buf = i;
+                }
+                if let Err(e) = decode_modular_channel(
+                    &mut buffers,
+                    i,
+                    stream_id,
+                    &header,
+                    tree,
+                    &mut reader,
+                    br,
+                    storage,
+                    scratch_space,
+                ) {
+                    if let Some(p) = partial_decoded_buffers {
+                        *p = last_safe_buf;
+                    }
+                    return Err(e);
+                }
+            }
+
+            reader.check_final_state_with_lz77_scratch(
+                &tree.histograms,
+                br,
+                &mut scratch_space.lz77_window_scratch,
+            )?;
+
+            drop(buffers);
         }
 
-        reader.check_final_state(&tree.histograms, br)?;
+        for step in transform_steps.iter().rev() {
+            step.local_apply(&mut buffer_storage, scratch_space, storage, recycler)?;
+        }
 
-        drop(buffers);
+        Ok(())
+    })();
+
+    for buf in buffer_storage {
+        buf.recycle(recycler);
     }
 
-    for step in transform_steps.iter().rev() {
-        step.local_apply(&mut buffer_storage, scratch_space, storage)?;
-    }
-
-    Ok(())
+    res
 }

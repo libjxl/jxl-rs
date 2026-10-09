@@ -3,16 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use super::Predictor;
 use super::predict::WeightedPredictorState;
 use crate::error::Result;
 use crate::frame::modular::Tree;
+use crate::frame::modular::decode::common::References;
 use crate::frame::modular::predict::PredictionData;
 use crate::frame::modular::tree::{PredictionResult, TreeNode, compute_properties};
-use crate::image::Image;
-use crate::util::NewWithCapacity;
 
 /// Flattened tree node for optimized traversal.
 /// Stores parent + info about both children to evaluate 3 nodes per iteration.
@@ -38,7 +38,7 @@ pub(super) fn predict_flat(
     prediction_data: PredictionData,
     wp_state: Option<&mut WeightedPredictorState>,
     pos: (usize, usize),
-    references: &Image<i32>,
+    references: &References<'_>,
     property_buffer: &mut [i32; 256],
 ) -> PredictionResult {
     let wp_pred = compute_properties(
@@ -90,15 +90,19 @@ pub(super) fn predict_flat(
 impl Tree {
     /// Build flat tree using BFS traversal.
     /// Each flat node stores parent + both children info to reduce branches.
-    pub(super) fn build_flat_tree(nodes: &[TreeNode]) -> Result<Vec<FlatTreeNode>> {
-        use std::collections::VecDeque;
-
+    pub(super) fn build_flat_tree_into(
+        nodes: &[TreeNode],
+        flat_nodes: &mut Vec<FlatTreeNode>,
+        queue: &mut VecDeque<usize>,
+    ) -> Result<()> {
+        flat_nodes.clear();
+        queue.clear();
         if nodes.is_empty() {
-            return Ok(vec![]);
+            return Ok(());
         }
 
-        let mut flat_nodes = Vec::new_with_capacity(nodes.len())?;
-        let mut queue: VecDeque<usize> = VecDeque::new();
+        flat_nodes.try_reserve(nodes.len())?;
+        queue.try_reserve(nodes.len())?;
         queue.push_back(0); // Start with root
 
         while let Some(cur_idx) = queue.pop_front() {
@@ -160,6 +164,6 @@ impl Tree {
             }
         }
 
-        Ok(flat_nodes)
+        Ok(())
     }
 }

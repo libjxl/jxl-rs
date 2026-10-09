@@ -3,17 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::common::precompute_references;
+use super::common::{References, make_pixel, precompute_references};
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::Result;
-use crate::frame::modular::decode::common::make_pixel;
 use crate::frame::modular::decode::specialized_trees::run_on_specialized_tree;
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict};
-use crate::frame::modular::{ModularChannel, ModularStorage, ScratchSpace, Tree};
+use crate::frame::modular::{ModularChannel, ModularStorage, ScratchSpace, Tree, TreeScratch};
 use crate::headers::modular::{GroupHeader, WeightedHeader};
-use crate::image::{Image, ImageRectMut};
+use crate::image::ImageRectMut;
 use crate::util::tracing_wrappers::*;
 
 const SMALL_CHANNEL_THRESHOLD: usize = 64;
@@ -167,15 +166,15 @@ pub(super) trait ModularChannelDecoder {
     }
 }
 
-struct FullTree<'a> {
+struct FullTree<'a, 'b> {
     tree: &'a Tree,
-    references: Image<i32>,
-    property_buffer: Box<[i32; 256]>,
+    references: References<'b>,
+    property_buffer: &'b mut [i32; 256],
     wp_state: WeightedPredictorState,
     storage: ModularStorage,
 }
 
-impl<'a> FullTree<'a> {
+impl<'a, 'b> FullTree<'a, 'b> {
     fn new(
         tree: &'a Tree,
         wp_header: &WeightedHeader,
@@ -183,28 +182,33 @@ impl<'a> FullTree<'a> {
         stream: usize,
         xsize: usize,
         storage: ModularStorage,
-    ) -> Result<Self> {
+        scratch: &'b mut TreeScratch,
+    ) -> Self {
         let num_ref_props = tree
             .num_properties
             .saturating_sub(NUM_NONREF_PROPERTIES)
-            .next_multiple_of(PROPERTIES_PER_PREVCHAN);
-        let references = Image::<i32>::new((num_ref_props, xsize))?;
-        let mut property_buffer = Box::new([0; 256]);
+            .next_multiple_of(PROPERTIES_PER_PREVCHAN)
+            .min(channel * PROPERTIES_PER_PREVCHAN);
+        let references = References::new(&mut scratch.references, num_ref_props, xsize);
+        let property_buffer = &mut scratch.property_buffer;
+        property_buffer.fill(0);
 
         property_buffer[0] = channel as i32;
         property_buffer[1] = stream as i32;
 
-        Ok(Self {
+        let wp_state = WeightedPredictorState::new_with_scratch(wp_header, xsize, &mut scratch.wp);
+
+        Self {
             tree,
             references,
             property_buffer,
-            wp_state: WeightedPredictorState::new(wp_header, xsize),
+            wp_state,
             storage,
-        })
+        }
     }
 }
 
-impl<'a> ModularChannelDecoder for FullTree<'a> {
+impl ModularChannelDecoder for FullTree<'_, '_> {
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         precompute_references(buffers, chan, y, &mut self.references, self.storage);
         self.property_buffer[9] = 0;
@@ -313,12 +317,21 @@ pub(super) fn decode_modular_channel(
     let size = buffers[chan].size(storage);
     let ScratchSpace {
         decode_row_scratch,
-        tree_lut_scratch,
+        tree_scratch,
         ..
     } = scratch_space;
+    let tree_scratch = tree_scratch.get_or_insert_with(|| Box::new(TreeScratch::new()));
     if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
-        let mut decoder = FullTree::new(tree, &header.wp_header, chan, stream_id, size.0, storage)?;
-        decode_modular_channel_impl(
+        let mut decoder = FullTree::new(
+            tree,
+            &header.wp_header,
+            chan,
+            stream_id,
+            size.0,
+            storage,
+            tree_scratch,
+        );
+        let res = decode_modular_channel_impl(
             &mut decoder,
             buffers,
             chan,
@@ -327,7 +340,9 @@ pub(super) fn decode_modular_channel(
             br,
             storage,
             decode_row_scratch,
-        )?;
+        );
+        decoder.wp_state.save_scratch(&mut tree_scratch.wp);
+        res?;
         br.check_for_error()?;
         return Ok(());
     }
@@ -339,7 +354,7 @@ pub(super) fn decode_modular_channel(
         size.0,
         header,
         storage,
-        tree_lut_scratch,
+        tree_scratch,
         |t| {
             decode_modular_channel_impl(
                 t,
