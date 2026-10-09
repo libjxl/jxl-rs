@@ -236,6 +236,7 @@ impl QuantEncoding {
                         &lf_global.tree,
                         br,
                         &mut scratch,
+                        &lf_global.modular_global.recycler,
                         lf_global.modular_global.storage(),
                         lf_global.modular_global.level5_limits,
                     )?,

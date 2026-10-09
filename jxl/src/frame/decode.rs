@@ -503,6 +503,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
+                &lf_global.modular_global.recycler,
                 decoder_state.level5_limits,
             )?;
         }
@@ -534,6 +535,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
+                &lf_global.modular_global.recycler,
                 decoder_state.level5_limits,
             )?;
         }
