@@ -12,6 +12,7 @@ use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
 use crate::frame::modular::decode::References;
 use crate::frame::modular::predict::PredictionData;
+use crate::image::BufferRecycler;
 use crate::util::tracing_wrappers::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -286,12 +287,17 @@ pub(super) fn predict(
 }
 
 impl Tree {
-    #[instrument(level = "debug", skip(br), err)]
-    pub fn read(br: &mut BitReader, size_limit: usize, level5_limits: bool) -> Result<Tree> {
+    #[instrument(level = "debug", skip(br, recycler), err)]
+    pub fn read(
+        br: &mut BitReader,
+        size_limit: usize,
+        level5_limits: bool,
+        recycler: &BufferRecycler,
+    ) -> Result<Tree> {
         assert!(size_limit <= u32::MAX as usize);
         trace!(pos = br.total_bits_read());
-        let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true)?;
-        let mut tree_reader = SymbolReader::new(&tree_histograms, br, None)?;
+        let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true, recycler)?;
+        let mut tree_reader = SymbolReader::new(&tree_histograms, br, None, recycler)?;
         // TODO(veluca): consider early-exiting for trees known to be infinite.
         let mut tree: Vec<TreeNode> = vec![];
         let mut to_decode = 1;
@@ -359,7 +365,7 @@ impl Tree {
         let max_depth = if level5_limits { 64 } else { 2048 };
         validate_tree(&tree, num_properties, max_depth)?;
 
-        let histograms = Histograms::decode(tree.len().div_ceil(2), br, true)?;
+        let histograms = Histograms::decode(tree.len().div_ceil(2), br, true, recycler)?;
 
         Ok(Tree {
             nodes: tree,

@@ -9,7 +9,7 @@ use jxl_transforms::transform_map::*;
 use num_traits::Float;
 
 use crate::bit_reader::BitReader;
-use crate::entropy_coding::decode::{Histograms, SymbolReader};
+use crate::entropy_coding::decode::{Histograms, ScopedSymbolReader, SymbolReader};
 use crate::error::{Error, Result};
 use crate::frame::block_context_map::*;
 use crate::frame::color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS;
@@ -17,7 +17,7 @@ use crate::frame::quant_weights::DequantMatrices;
 use crate::frame::{HfGlobalState, HfMetadata, LfGlobalState};
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::permutation::Permutation;
-use crate::image::{Image, ImageRect, Rect};
+use crate::image::{BufferRecycler, Image, ImageRect, Rect};
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::util::tracing_wrappers::*;
 use crate::util::{
@@ -503,7 +503,7 @@ simd_function!(
 
 struct PassInfo<'a, 'b> {
     histogram_index: usize,
-    reader: Option<SymbolReader>,
+    reader: Option<ScopedSymbolReader<'a>>,
     br: &'a mut BitReader<'b>,
     shift: u32,
     pass: usize,
@@ -517,6 +517,7 @@ impl<'a, 'b> PassInfo<'a, 'b> {
         pass: usize,
         br: &'a mut BitReader<'b>,
         num_nzeros: &'a mut [[u8; 32]; 3],
+        recycler: &'a BufferRecycler,
     ) -> Result<Self> {
         let num_histo_bits = hf_global.num_histograms.ceil_log2();
         debug!(?pass);
@@ -536,6 +537,7 @@ impl<'a, 'b> PassInfo<'a, 'b> {
             &hf_global.passes[pass].histograms,
             br,
             None,
+            recycler,
         )?);
         let shift = if pass < frame_header.passes.shift.len() {
             frame_header.passes.shift[pass]
@@ -567,6 +569,7 @@ pub fn decode_vardct_group(
     quant_biases: &[f32; 4],
     pixels: &mut Option<[Image<f32>; 3]>,
     buffers: &mut VarDctBuffers,
+    recycler: &BufferRecycler,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
@@ -580,7 +583,7 @@ pub fn decode_vardct_group(
     let mut pass_info = passes
         .iter_mut()
         .zip(pass_chunks)
-        .map(|((pass, br), nz)| PassInfo::new(hf_global, frame_header, *pass, br, nz))
+        .map(|((pass, br), nz)| PassInfo::new(hf_global, frame_header, *pass, br, nz, recycler))
         .collect::<Result<SmallVec<_, 4>>>()?;
 
     let scratch = &mut buffers.scratch;

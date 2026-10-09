@@ -216,7 +216,7 @@ pub fn decode_modular_subbitstream(
             })
             .sum::<usize>();
         let size_limit = (1024 + num_local_samples).min(1 << 20);
-        Some(Tree::read(br, size_limit, level5_limits)?)
+        Some(Tree::read(br, size_limit, level5_limits, recycler)?)
     } else {
         None
     };
@@ -235,7 +235,7 @@ pub fn decode_modular_subbitstream(
     if can_decode_fast_lossless(tree) {
         decode_fast_lossless(buffers, tree, br, partial_decoded_buffers, storage)?
     } else {
-        let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
+        let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width), recycler)?;
 
         let mut last_safe_buf = 0;
         for i in 0..buffers.len() {

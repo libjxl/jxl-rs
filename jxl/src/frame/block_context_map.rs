@@ -8,6 +8,7 @@ use crate::entropy_coding::context_map::*;
 use crate::entropy_coding::decode::unpack_signed;
 use crate::error::{Error, Result};
 use crate::frame::coeff_order::NUM_ORDERS;
+use crate::image::BufferRecycler;
 use crate::util::ShiftRightCeil;
 
 pub const NON_ZERO_BUCKETS: usize = 37;
@@ -58,7 +59,7 @@ impl BlockContextMap {
     pub fn num_ac_contexts(&self) -> usize {
         self.num_contexts * (NON_ZERO_BUCKETS + ZERO_DENSITY_CONTEXT_COUNT)
     }
-    pub fn read(br: &mut BitReader) -> Result<BlockContextMap, Error> {
+    pub fn read(br: &mut BitReader, recycler: &BufferRecycler) -> Result<BlockContextMap, Error> {
         if br.read(1)? == 1 {
             Ok(BlockContextMap {
                 lf_thresholds: [vec![], vec![], vec![]],
@@ -107,7 +108,7 @@ impl BlockContextMap {
                 ));
             }
             let context_map_size = 3 * NUM_ORDERS * num_lf_contexts * (num_qf_thresholds + 1);
-            let context_map = decode_context_map(context_map_size, br)?;
+            let context_map = decode_context_map(context_map_size, br, recycler)?;
             assert_eq!(context_map.len(), context_map_size);
             let num_contexts = *context_map.iter().max().unwrap() as usize + 1;
             if num_contexts > 16 {

@@ -79,7 +79,7 @@ pub struct FrameInfo {
     frame_counters: (usize, usize),
     // Which stored frames to keep in the next frame's decoder state (see `reset`).
     keep_slots: [bool; 8],
-    buffer_recycler: Arc<BufferRecycler>,
+    pub(super) buffer_recycler: Arc<BufferRecycler>,
 }
 
 impl FrameInfo {
@@ -193,7 +193,7 @@ impl FrameInfo {
         let toc_parser = self.toc_parser.as_mut().unwrap();
         *bits = br.total_bits_read();
         while !toc_parser.is_complete() {
-            match toc_parser.read_step(br) {
+            match toc_parser.read_step(br, &self.buffer_recycler) {
                 Ok(()) => *bits = br.total_bits_read(),
                 Err(Error::OutOfBounds(c)) => {
                     return Err(Error::OutOfBounds(c));

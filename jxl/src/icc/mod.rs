@@ -11,6 +11,7 @@ use crate::bit_reader::*;
 use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
+use crate::image::BufferRecycler;
 use crate::util::NewWithCapacity;
 use crate::util::tracing_wrappers::warn;
 
@@ -125,7 +126,7 @@ pub struct IncrementalIccReader {
 }
 
 impl IncrementalIccReader {
-    pub fn new(br: &mut BitReader) -> Result<Self> {
+    pub fn new(br: &mut BitReader, recycler: &BufferRecycler) -> Result<Self> {
         let len = u64::read_unconditional(&(), br, &Empty {})?;
         if len > 1u64 << 24 {
             return Err(Error::IccTooLarge);
@@ -133,10 +134,10 @@ impl IncrementalIccReader {
 
         let len = len as usize;
 
-        let histograms = Histograms::decode(ICC_CONTEXTS, br, true)?;
-        let reader = SymbolReader::new(&histograms, br, None)?;
+        let histograms = Histograms::decode(ICC_CONTEXTS, br, true, recycler)?;
         let initial_alloc = len.min(64 * 1024);
         let out_buf = Vec::new_with_capacity(initial_alloc)?;
+        let reader = SymbolReader::new_owned(&histograms, br, None, recycler)?;
         Ok(Self {
             histograms,
             reader,
@@ -219,9 +220,10 @@ impl IncrementalIccReader {
         Ok(())
     }
 
-    pub fn finalize(self, br: &mut BitReader) -> Result<Vec<u8>> {
+    pub fn finalize(self, br: &mut BitReader, recycler: &BufferRecycler) -> Result<Vec<u8>> {
         assert_eq!(self.num_coded_bytes(), self.out_buf.len());
-        self.reader.check_final_state(&self.histograms, br)?;
+        self.reader
+            .check_final_state(&self.histograms, br, recycler)?;
         let mut stream = IccStream::new(self.out_buf);
         let profile = read_icc_inner(&mut stream)?;
         stream.finalize()?;

@@ -18,6 +18,7 @@ pub(crate) struct BufferRecycler {
     buckets: Mutex<HashMap<usize, Vec<OwnedRawImage>>>,
     modular_scratch: PerThreadStorage<ScratchSpace>,
     vardct_buffers: PerThreadStorage<VarDctBuffers>,
+    lz77_windows: PerThreadStorage<Vec<u32>>,
 }
 
 impl Default for BufferRecycler {
@@ -32,6 +33,7 @@ impl BufferRecycler {
             buckets: Mutex::new(HashMap::new()),
             modular_scratch: PerThreadStorage::new(ScratchSpace::new),
             vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
+            lz77_windows: PerThreadStorage::new(Vec::new),
         }
     }
 
@@ -41,6 +43,10 @@ impl BufferRecycler {
 
     pub(crate) fn get_vardct_buffers(&self) -> PerThreadStorageRef<'_, VarDctBuffers> {
         self.vardct_buffers.get()
+    }
+
+    pub(crate) fn get_lz77_window(&self) -> PerThreadStorageRef<'_, Vec<u32>> {
+        self.lz77_windows.get()
     }
 
     fn can_recycle(&self, alloc_size: usize) -> bool {

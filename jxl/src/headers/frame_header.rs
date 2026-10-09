@@ -258,11 +258,6 @@ impl RestorationFilter {
     }
 }
 
-pub struct PermutationNonserialized {
-    pub num_entries: u32,
-    pub permuted: bool,
-}
-
 pub struct FrameHeaderNonserialized {
     pub xyb_encoded: bool,
     pub num_extra_channels: u32,
