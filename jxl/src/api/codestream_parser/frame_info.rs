@@ -21,7 +21,9 @@ use crate::headers::FileHeader;
 use crate::headers::encodings::UnconditionalCoder;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::{IncrementalTocReader, Toc};
+use crate::image::BufferRecycler;
 use crate::util::NewWithCapacity;
+use crate::util::sync::Arc;
 
 struct SectionBuffer {
     len: usize,
@@ -77,6 +79,7 @@ pub struct FrameInfo {
     frame_counters: (usize, usize),
     // Which stored frames to keep in the next frame's decoder state (see `reset`).
     keep_slots: [bool; 8],
+    pub(super) buffer_recycler: Arc<BufferRecycler>,
 }
 
 impl FrameInfo {
@@ -97,6 +100,7 @@ impl FrameInfo {
             pixels_dirty: false,
             frame_counters: (0, 0),
             keep_slots: [true; 8],
+            buffer_recycler: Arc::new(BufferRecycler::new()),
         }
     }
 
@@ -104,8 +108,11 @@ impl FrameInfo {
     /// `keep_slots`.
     pub fn reset(&mut self, frame_counters: (usize, usize), keep_slots: [bool; 8]) {
         self.clear();
-        if keep_slots == [false; 8] {
-            self.frame = None;
+        if keep_slots == [false; 8]
+            && let Some(frame) = self.frame.take()
+            && let Ok(mut state) = frame.finalize()
+        {
+            state.keep_slots([false; 8]);
         }
         self.frame_counters = frame_counters;
         self.keep_slots = keep_slots;
@@ -186,7 +193,7 @@ impl FrameInfo {
         let toc_parser = self.toc_parser.as_mut().unwrap();
         *bits = br.total_bits_read();
         while !toc_parser.is_complete() {
-            match toc_parser.read_step(br) {
+            match toc_parser.read_step(br, &self.buffer_recycler) {
                 Ok(()) => *bits = br.total_bits_read(),
                 Err(Error::OutOfBounds(c)) => {
                     return Err(Error::OutOfBounds(c));
@@ -237,7 +244,12 @@ impl FrameInfo {
                 .map(|x| x.finalize())
                 .transpose()?
                 .unwrap_or_else(|| {
-                    DecoderState::new(file_header.clone(), decode_options, level5_limits)
+                    DecoderState::new(
+                        file_header.clone(),
+                        decode_options,
+                        level5_limits,
+                        self.buffer_recycler.clone(),
+                    )
                 });
             decoder_state.level5_limits = level5_limits;
             decoder_state.keep_slots(std::mem::replace(&mut self.keep_slots, [true; 8]));

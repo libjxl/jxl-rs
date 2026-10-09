@@ -109,8 +109,6 @@ fn get_small_squeeze_kernel(shift_diff: (usize, usize)) -> &'static [[f32; 25]] 
 #[derive(Debug, Default)]
 pub struct SmoothUpsampleScratch {
     buffer: [Vec<f32>; 5],
-    ibuf: Vec<i32>,
-    out_buf: Vec<i32>,
     kernel_storage: Vec<f32>,
     row_float: Vec<f32>,
 }
@@ -120,8 +118,6 @@ impl SmoothUpsampleScratch {
         for b in &mut self.buffer {
             b.resize(in_len, 0.0);
         }
-        self.ibuf.resize(in_len, 0);
-        self.out_buf.resize(out_len, 0);
         self.row_float.resize(out_len, 0.0);
         self.kernel_storage.resize(kernel_len, 0.0);
     }
@@ -268,6 +264,7 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     output: &mut OwnedRawImage,
     storage: ModularStorage,
     scratch: &mut SmoothUpsampleScratch,
+    i32_rows: &mut [Vec<i32>; 2],
 ) {
     let (dx, dy) = shift_diff;
     let (fx, fy) = (1usize << dx, 1usize << dy);
@@ -294,15 +291,18 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
         0
     };
     scratch.init(in_len, out_len, kernel_len);
+    let [ibuf, out_buf] = i32_rows;
+    ibuf.resize(in_len, 0);
+    out_buf.resize(out_len, 0);
 
     for (dy_idx, buf) in scratch.buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy_idx) as isize - 2;
         if storage == ModularStorage::I16 {
-            input.load_row_to_scratch::<i16>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+            input.load_row_to_scratch::<i16>(yg, col_offset, in_xs + 4, ibuf);
         } else {
-            input.load_row_to_scratch::<i32>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+            input.load_row_to_scratch::<i32>(yg, col_offset, in_xs + 4, ibuf);
         }
-        make_float(d, &scratch.ibuf, buf);
+        make_float(d, ibuf, buf);
     }
 
     let is_small = dx < SMALL_SHIFT_LIMIT && dy < SMALL_SHIFT_LIMIT;
@@ -317,11 +317,11 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     for iy_center in 0..in_ys {
         let yg = (row_offset + iy_center) as isize + 2;
         if storage == ModularStorage::I16 {
-            input.load_row_to_scratch::<i16>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+            input.load_row_to_scratch::<i16>(yg, col_offset, in_xs + 4, ibuf);
         } else {
-            input.load_row_to_scratch::<i32>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+            input.load_row_to_scratch::<i32>(yg, col_offset, in_xs + 4, ibuf);
         }
-        make_float(d, &scratch.ibuf, &mut scratch.buffer[4]);
+        make_float(d, ibuf, &mut scratch.buffer[4]);
 
         for oy in 0..fy {
             let yout = fy * iy_center + oy;
@@ -387,7 +387,7 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
 
             let mut img;
             let out_row = if storage == ModularStorage::I16 {
-                &mut scratch.out_buf
+                out_buf.as_mut_slice()
             } else {
                 img = ImageRectMut::<i32>::from_raw(output.as_rect_mut());
                 img.row(yout)
@@ -396,7 +396,7 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
             let mut img;
             if storage == ModularStorage::I16 {
                 img = ImageRectMut::<i16>::from_raw(output.as_rect_mut());
-                for (dst, &src) in img.row(yout).iter_mut().zip(&scratch.out_buf) {
+                for (dst, &src) in img.row(yout).iter_mut().zip(out_buf.iter()) {
                     *dst = src as i16;
                 }
             }
@@ -417,9 +417,10 @@ simd_function!(
         output: &mut OwnedRawImage,
         storage: ModularStorage,
         scratch: &mut SmoothUpsampleScratch,
+        i32_rows: &mut [Vec<i32>; 2],
     ) {
         smooth_upsample_simd_impl(
-            d, input, shift_diff, dither, rect, output, storage, scratch,
+            d, input, shift_diff, dither, rect, output, storage, scratch, i32_rows,
         );
     }
 );

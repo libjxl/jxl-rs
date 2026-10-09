@@ -3,22 +3,25 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::VecDeque;
 use std::ops::Range;
 
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::Result;
 use crate::frame::modular::decode::channel::{ModularChannelDecoder, sync_scratch};
-use crate::frame::modular::decode::common::{make_pixel, precompute_references};
+use crate::frame::modular::decode::common::{References, make_pixel, precompute_references};
 use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
-use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, clamped_gradient};
+use crate::frame::modular::predict::{
+    PredictionData, WeightedPredictorState, WpScratch, clamped_gradient,
+};
 use crate::frame::modular::tree::{
     NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, PredictionResult, TreeNode,
 };
-use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, Tree};
+use crate::frame::modular::{
+    ChannelDecodeScratch, ModularChannel, ModularStorage, Predictor, Tree,
+};
 use crate::headers::modular::GroupHeader;
-use crate::image::{Image, ImageRectMut};
+use crate::image::ImageRectMut;
 
 trait MaybeWeightedPredictor: Sized {
     fn predict(
@@ -26,7 +29,7 @@ trait MaybeWeightedPredictor: Sized {
         nodes: &[FlatTreeNode],
         prediction_data: PredictionData,
         pos: (usize, usize),
-        references: &Image<i32>,
+        references: &References<'_>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult;
     fn update_errors(&mut self, _val: i32, _pos: (usize, usize)) {}
@@ -39,21 +42,21 @@ impl MaybeWeightedPredictor for () {
         nodes: &[FlatTreeNode],
         prediction_data: PredictionData,
         pos: (usize, usize),
-        references: &Image<i32>,
+        references: &References<'_>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult {
         predict_flat(nodes, prediction_data, None, pos, references, prop_buffer)
     }
 }
 
-impl MaybeWeightedPredictor for WeightedPredictorState {
+impl MaybeWeightedPredictor for WeightedPredictorState<'_> {
     #[inline(always)]
     fn predict(
         &mut self,
         nodes: &[FlatTreeNode],
         prediction_data: PredictionData,
         pos: (usize, usize),
-        references: &Image<i32>,
+        references: &References<'_>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult {
         predict_flat(
@@ -116,16 +119,21 @@ impl Reader for ReaderGeneric {
     }
 }
 
-struct FlatTreeInner {
-    nodes: Vec<FlatTreeNode>,
-    references: Image<i32>,
-    property_buffer: Box<[i32; 256]>,
+struct FlatTreeInner<'a> {
+    nodes: &'a [FlatTreeNode],
+    references: References<'a>,
+    property_buffer: &'a mut [i32; 256],
     storage: ModularStorage,
 }
 
-impl FlatTreeInner {
+#[allow(clippy::too_many_arguments)]
+impl<'a> FlatTreeInner<'a> {
     fn new(
-        nodes: Vec<TreeNode>,
+        nodes: &[TreeNode],
+        flat_nodes: &'a mut Vec<FlatTreeNode>,
+        queue: &mut Vec<u32>,
+        references_storage: &'a mut Vec<i32>,
+        property_buffer_storage: &'a mut Option<Box<[i32; 256]>>,
         max_property_count: usize,
         channel: usize,
         stream: usize,
@@ -135,14 +143,18 @@ impl FlatTreeInner {
         let num_ref_props = max_property_count
             .saturating_sub(NUM_NONREF_PROPERTIES)
             .next_multiple_of(PROPERTIES_PER_PREVCHAN);
-        let references = Image::<i32>::new((num_ref_props, xsize))?;
-        let mut property_buffer = Box::new([0; 256]);
+        let references = References::new(references_storage, num_ref_props, xsize)?;
+        let property_buffer =
+            property_buffer_storage.get_or_insert_with(|| crate::util::box_array(0i32));
+        property_buffer.fill(0);
 
         property_buffer[0] = channel as i32;
         property_buffer[1] = stream as i32;
 
+        Tree::build_flat_tree(nodes, flat_nodes, queue)?;
+
         Ok(Self {
-            nodes: Tree::build_flat_tree(&nodes)?,
+            nodes: flat_nodes,
             references,
             property_buffer,
             storage,
@@ -150,14 +162,14 @@ impl FlatTreeInner {
     }
 }
 
-struct FlatTree<WP, R> {
-    inner: FlatTreeInner,
+struct FlatTree<'a, WP, R> {
+    inner: FlatTreeInner<'a>,
     reader: R,
     wp_state: WP,
 }
 
-impl<WP: MaybeWeightedPredictor, R: Reader> FlatTree<WP, R> {
-    fn new(inner: FlatTreeInner, reader: R, wp_state: WP) -> Self {
+impl<'a, WP: MaybeWeightedPredictor, R: Reader> FlatTree<'a, WP, R> {
+    fn new(inner: FlatTreeInner<'a>, reader: R, wp_state: WP) -> Self {
         Self {
             inner,
             reader,
@@ -166,7 +178,7 @@ impl<WP: MaybeWeightedPredictor, R: Reader> FlatTree<WP, R> {
     }
 }
 
-impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<WP, R> {
+impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<'_, WP, R> {
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         precompute_references(
             buffers,
@@ -188,11 +200,11 @@ impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<W
         histograms: &Histograms,
     ) -> i32 {
         let prediction_result = self.wp_state.predict(
-            &self.inner.nodes,
+            self.inner.nodes,
             prediction_data,
             pos,
             &self.inner.references,
-            &mut self.inner.property_buffer,
+            self.inner.property_buffer,
         );
         let dec = self
             .reader
@@ -261,7 +273,7 @@ fn make_lut<'a>(
 
 struct WpOnly<'a, R> {
     lut: &'a [u8; LUT_TABLE_SIZE],
-    wp_state: WeightedPredictorState,
+    wp_state: WeightedPredictorState<'a>,
     reader: R,
 }
 
@@ -271,10 +283,11 @@ impl<'a, R: Reader> WpOnly<'a, R> {
         header: &GroupHeader,
         xsize: usize,
         reader: R,
-        lut: &'a mut [u8; LUT_TABLE_SIZE],
+        lut: &'a mut Option<Box<[u8; LUT_TABLE_SIZE]>>,
+        wp_scratch: &'a mut WpScratch,
     ) -> Option<Self> {
-        let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
-        let lut = make_lut(tree, lut)?;
+        let lut = make_lut(tree, lut.get_or_insert_with(|| crate::util::box_array(0u8)))?;
+        let wp_state = WeightedPredictorState::new(&header.wp_header, xsize, wp_scratch);
         Some(Self {
             lut,
             wp_state,
@@ -283,7 +296,7 @@ impl<'a, R: Reader> WpOnly<'a, R> {
     }
 }
 
-impl<'a, R: Reader> ModularChannelDecoder for WpOnly<'a, R> {
+impl<R: Reader> ModularChannelDecoder for WpOnly<'_, R> {
     #[inline(always)]
     fn decode_one(
         &mut self,
@@ -313,8 +326,12 @@ struct GradientOnly<'a, R> {
 }
 
 impl<'a, R: Reader> GradientOnly<'a, R> {
-    fn new(tree: &[TreeNode], reader: R, lut: &'a mut [u8; LUT_TABLE_SIZE]) -> Option<Self> {
-        let lut = make_lut(tree, lut)?;
+    fn new(
+        tree: &[TreeNode],
+        reader: R,
+        lut: &'a mut Option<Box<[u8; LUT_TABLE_SIZE]>>,
+    ) -> Option<Self> {
+        let lut = make_lut(tree, lut.get_or_insert_with(|| crate::util::box_array(0u8)))?;
         Some(Self { lut, reader })
     }
 }
@@ -466,15 +483,26 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
     xsize: usize,
     header: &GroupHeader,
     storage: ModularStorage,
-    lut_scratch: &mut [u8; LUT_TABLE_SIZE],
+    scratch: &mut ChannelDecodeScratch,
     run: F,
 ) -> Result<()> {
+    let ChannelDecodeScratch {
+        tree_lut,
+        references,
+        property_buffer,
+        wp,
+        pruned_tree,
+        tree_queue: queue,
+        flat_tree_nodes,
+    } = scratch;
+
     // TODO(veluca): consider skipping the pruning if header.uses_global_tree is true.
-    let mut pruned_tree = Vec::new();
-    let mut queue = VecDeque::new();
+    pruned_tree.clear();
+    queue.clear();
     pruned_tree.try_reserve(tree.nodes.len())?;
     queue.try_reserve(tree.nodes.len())?;
-    queue.push_front(0);
+    queue.push(0);
+    let mut queue_pos = 0;
 
     let mut uses_wp = false;
     let mut uses_non_wp = false;
@@ -491,20 +519,26 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
     // Obtain a pruned tree without nodes that are not relevant in the current channel and stream.
     // Proceed in BFS order, so that we know that the children of a node will be adjacent.
     // Also re-maps context IDs to cluster IDs.
-    while let Some(v) = queue.pop_front() {
-        let mut node = tree.nodes[v as usize];
-        match node {
-            TreeNode::Split {
+    while queue_pos < queue.len() {
+        let mut v = queue[queue_pos];
+        queue_pos += 1;
+        let mut node = loop {
+            let node = tree.nodes[v as usize];
+            if let TreeNode::Split {
                 property,
                 val,
                 left,
                 right,
-            } if property < 2 => {
-                // If the node splits on static properties, re-enqueue its correct child immediately.
+            } = node
+                && property < 2
+            {
                 let vv = if property == 0 { channel } else { stream };
-                queue.push_front(if vv as i32 > val { left } else { right });
-                continue;
+                v = if vv as i32 > val { left } else { right };
+            } else {
+                break node;
             }
+        };
+        match node {
             TreeNode::Split {
                 property,
                 val,
@@ -515,15 +549,15 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
                 uses_non_wp |= property != WEIGHTED_PROPERTY;
                 uses_non_gradient |= property != GRADIENT_PROPERTY;
                 max_property_count = max_property_count.max(property as usize + 1);
-                let base = (queue.len() + pruned_tree.len() + 1) as u32;
+                let base = (queue.len() - queue_pos + pruned_tree.len() + 1) as u32;
                 pruned_tree.push(TreeNode::Split {
                     property,
                     val,
                     left: base,
                     right: base + 1,
                 });
-                queue.push_back(left);
-                queue.push_back(right);
+                queue.push(left);
+                queue.push(right);
             }
             TreeNode::Leaf { predictor, .. } => {
                 uses_wp |= predictor == Predictor::Weighted;
@@ -566,7 +600,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
             offset,
             id,
         },
-    ] = &*pruned_tree
+    ] = &**pruned_tree
     {
         return run(&mut NoTreeZero {
             clustered_ctx: *id as usize,
@@ -583,7 +617,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
             offset: 0,
             id,
         },
-    ] = &*pruned_tree
+    ] = &**pruned_tree
     {
         return run(&mut SingleGradientOnly {
             clustered_ctx: *id as usize,
@@ -595,14 +629,15 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
 
     if !uses_non_wp
         && !uses_non420
-        && let Some(mut wp) = WpOnly::new(&pruned_tree, header, xsize, Reader420NoLz, lut_scratch)
+        && let Some(mut wp_only) =
+            WpOnly::new(pruned_tree, header, xsize, Reader420NoLz, tree_lut, wp)
     {
-        return run(&mut wp);
+        return run(&mut wp_only);
     }
 
     if !uses_non_gradient
         && !uses_non420
-        && let Some(mut grad) = GradientOnly::new(&pruned_tree, Reader420NoLz, lut_scratch)
+        && let Some(mut grad) = GradientOnly::new(pruned_tree, Reader420NoLz, tree_lut)
     {
         return run(&mut grad);
     }
@@ -611,6 +646,10 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
 
     let inner = FlatTreeInner::new(
         pruned_tree,
+        flat_tree_nodes,
+        queue,
+        references,
+        property_buffer,
         max_property_count,
         channel,
         stream,
@@ -629,7 +668,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
         return run(&mut FlatTree::new(inner, ReaderGeneric, ()));
     }
 
-    let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
+    let wp_state = WeightedPredictorState::new(&header.wp_header, xsize, wp);
 
     if let Some(ss) = single_symbol {
         return run(&mut FlatTree::new(inner, ss, wp_state));

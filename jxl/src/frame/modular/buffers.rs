@@ -39,8 +39,13 @@ pub(super) struct ModularChannel {
 }
 
 impl ModularChannel {
-    pub fn new(size: (usize, usize), storage: ModularStorage, bit_depth: BitDepth) -> Result<Self> {
-        Self::new_with_shift(size, storage, Some((0, 0)), bit_depth)
+    pub fn new(
+        size: (usize, usize),
+        storage: ModularStorage,
+        bit_depth: BitDepth,
+        recycler: &BufferRecycler,
+    ) -> Result<Self> {
+        Self::new_with_shift(size, storage, Some((0, 0)), bit_depth, recycler)
     }
 
     pub fn new_with_shift(
@@ -48,18 +53,24 @@ impl ModularChannel {
         storage: ModularStorage,
         shift: Option<(usize, usize)>,
         bit_depth: BitDepth,
+        recycler: &BufferRecycler,
     ) -> Result<Self> {
         let sample_size = storage.sample_size();
         Ok(ModularChannel {
-            data: OwnedRawImage::new((size.0 * sample_size, size.1))?,
+            data: recycler.get_raw_buffer((size.0 * sample_size, size.1), false)?,
             shift,
             bit_depth,
         })
     }
 
-    fn try_clone(&self) -> Result<Self> {
+    fn try_clone(&self, recycler: &BufferRecycler) -> Result<Self> {
+        let sz = self.data.byte_size();
+        let mut data = recycler.get_raw_buffer(sz, false)?;
+        for y in 0..sz.1 {
+            data.row_mut(y).copy_from_slice(self.data.row(y));
+        }
         Ok(ModularChannel {
-            data: self.data.try_clone()?,
+            data,
             shift: self.shift,
             bit_depth: self.bit_depth,
         })
@@ -282,7 +293,13 @@ impl ModularBuffer {
         recycler: &BufferRecycler,
     ) -> Result<ModularChannel> {
         if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
-            return ModularChannel::try_clone(self.data.try_read().unwrap().as_ref().unwrap());
+            return self
+                .data
+                .try_read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .try_clone(recycler);
         }
         let mut ret = None;
         #[allow(deprecated)]
@@ -300,7 +317,7 @@ impl ModularBuffer {
                             .try_read()
                             .unwrap()
                             .as_ref()
-                            .map(ModularChannel::try_clone);
+                            .map(|chan| chan.try_clone(recycler));
                     }
                 } else if remaining == 0 {
                     let old_data = self.data.try_write().unwrap().take();
@@ -349,7 +366,7 @@ impl ModularBuffer {
         if prev == 1 {
             let tb = self.topbottom.try_write().unwrap().take();
             let lr = self.leftright.try_write().unwrap().take();
-            let _ = self.auxiliary_data.try_write().unwrap().take();
+            let aux = self.auxiliary_data.try_write().unwrap().take();
             let d = self.data.try_write().unwrap().take();
             if let Some(chan) = d {
                 recycler.recycle_raw_buffer(chan.data);
@@ -359,6 +376,9 @@ impl ModularBuffer {
             }
             if let Some(lr_img) = lr {
                 recycler.recycle_raw_buffer(lr_img);
+            }
+            if let Some(aux_img) = aux {
+                recycler.recycle_buffer(aux_img);
             }
         }
     }

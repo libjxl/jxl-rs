@@ -10,8 +10,9 @@ use super::predict::WeightedPredictorState;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
+use crate::frame::modular::decode::References;
 use crate::frame::modular::predict::PredictionData;
-use crate::image::Image;
+use crate::image::BufferRecycler;
 use crate::util::tracing_wrappers::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -189,7 +190,7 @@ pub(super) fn compute_properties(
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
-    references: &Image<i32>,
+    references: &References<'_>,
     property_buffer: &mut [i32],
 ) -> i64 {
     assert!(property_buffer.len() >= NUM_NONREF_PROPERTIES);
@@ -232,10 +233,18 @@ pub(super) fn compute_properties(
     property_buffer[15] = wp_prop;
 
     // Reference properties.
-    let num_refs = references.size().0;
+    let num_refs = references.num_ref_props;
     if num_refs != 0 {
-        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-        ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
+        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..][..num_refs];
+        let ref_row = &references.data[x * num_refs..][..num_refs];
+        for (dst, src) in ref_properties
+            .as_chunks_mut::<PROPERTIES_PER_PREVCHAN>()
+            .0
+            .iter_mut()
+            .zip(ref_row.as_chunks::<PROPERTIES_PER_PREVCHAN>().0)
+        {
+            *dst = *src;
+        }
     }
 
     wp_pred
@@ -251,7 +260,7 @@ pub(super) fn predict(
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
-    references: &Image<i32>,
+    references: &References<'_>,
     property_buffer: &mut [i32],
 ) -> PredictionResult {
     let wp_pred = compute_properties(prediction_data, wp_state, x, y, references, property_buffer);
@@ -278,12 +287,17 @@ pub(super) fn predict(
 }
 
 impl Tree {
-    #[instrument(level = "debug", skip(br), err)]
-    pub fn read(br: &mut BitReader, size_limit: usize, level5_limits: bool) -> Result<Tree> {
+    #[instrument(level = "debug", skip(br, recycler), err)]
+    pub fn read(
+        br: &mut BitReader,
+        size_limit: usize,
+        level5_limits: bool,
+        recycler: &BufferRecycler,
+    ) -> Result<Tree> {
         assert!(size_limit <= u32::MAX as usize);
         trace!(pos = br.total_bits_read());
-        let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true)?;
-        let mut tree_reader = SymbolReader::new(&tree_histograms, br, None)?;
+        let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true, recycler)?;
+        let mut tree_reader = SymbolReader::new(&tree_histograms, br, None, recycler)?;
         // TODO(veluca): consider early-exiting for trees known to be infinite.
         let mut tree: Vec<TreeNode> = vec![];
         let mut to_decode = 1;
@@ -351,7 +365,7 @@ impl Tree {
         let max_depth = if level5_limits { 64 } else { 2048 };
         validate_tree(&tree, num_properties, max_depth)?;
 
-        let histograms = Histograms::decode(tree.len().div_ceil(2), br, true)?;
+        let histograms = Histograms::decode(tree.len().div_ceil(2), br, true, recycler)?;
 
         Ok(Tree {
             nodes: tree,

@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
 use crate::error::Error;
+use crate::image::BufferRecycler;
 
 fn move_to_front(v: &mut [u8], index: u8) {
     let value = v[index as usize];
@@ -40,7 +41,11 @@ fn verify_context_map(ctx_map: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec<u8>, Error> {
+pub fn decode_context_map(
+    num_contexts: usize,
+    br: &mut BitReader,
+    recycler: &BufferRecycler,
+) -> Result<Vec<u8>, Error> {
     let is_simple = br.read(1)? != 0;
     if is_simple {
         let bits_per_entry = br.read(2)? as usize;
@@ -57,8 +62,9 @@ pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec
         Ok(ctx_map)
     } else {
         let use_mtf = br.read(1)? != 0;
-        let histograms = Histograms::decode(1, br, /*allow_lz77=*/ num_contexts > 2)?;
-        let mut reader = SymbolReader::new(&histograms, br, None)?;
+        let histograms =
+            Histograms::decode(1, br, /*allow_lz77=*/ num_contexts > 2, recycler)?;
+        let mut reader = SymbolReader::new(&histograms, br, None, recycler)?;
 
         let mut ctx_map: Vec<u8> = (0..num_contexts)
             .map(|_| {

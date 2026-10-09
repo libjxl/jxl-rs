@@ -9,7 +9,6 @@ use std::ptr::null_mut;
 
 use super::Rect;
 use crate::error::{Error, Result};
-use crate::util::CACHE_LINE_BYTE_SIZE;
 use crate::util::tracing_wrappers::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -39,6 +38,8 @@ unsafe impl Send for RawImageBuffer {}
 // SAFETY: RawImageBuffer does not use any kind of interior mutability, so it is safe to share
 // between threads.
 unsafe impl Sync for RawImageBuffer {}
+
+pub(super) const MAX_IMAGE_ALIGN: usize = 8;
 
 impl RawImageBuffer {
     pub(super) fn check_vals(num_rows: usize, bytes_per_row: usize, bytes_between_rows: usize) {
@@ -103,14 +104,50 @@ impl RawImageBuffer {
         }
     }
 
-    /// Returns the minimum size that the allocation containing the image data must have, or 0 if
-    /// this is an empty image.
-    pub(super) fn minimum_allocation_size(&self) -> usize {
-        if self.num_rows == 0 {
-            0
+    pub(super) fn allocation_size(byte_size: (usize, usize)) -> Option<usize> {
+        let (bytes_per_row, num_rows) = byte_size;
+        if bytes_per_row == 0 || num_rows == 0 {
+            return Some(0);
+        }
+        // These limits let us not worry about overflows.
+        if bytes_per_row as u64 >= i64::MAX as u64 / 4 || num_rows as u64 >= i64::MAX as u64 / 4 {
+            return None;
+        }
+        let bytes_between_rows = bytes_per_row.div_ceil(MAX_IMAGE_ALIGN) * MAX_IMAGE_ALIGN;
+        let alloc_len = num_rows.checked_mul(bytes_between_rows)?;
+        if alloc_len > isize::MAX as usize {
+            return None;
+        }
+        Some(alloc_len)
+    }
+
+    /// Returns the size of the owned allocation for this image, or 0 if this is an empty image.
+    #[inline(always)]
+    pub(super) fn owned_allocation_size(&self) -> usize {
+        self.num_rows * self.bytes_between_rows
+    }
+
+    /// Reshapes an owning buffer that was allocated by `try_allocate` to `byte_size`.
+    /// Panics if the allocation size for `byte_size` does not match `self.owned_allocation_size()`.
+    ///
+    /// # Safety
+    /// The data referenced by `self` must have been allocated with `Self::try_allocate`,
+    /// and all `self.owned_allocation_size()` bytes starting from `self.buf` must be initialized.
+    pub(super) unsafe fn reshape(&mut self, byte_size: (usize, usize)) {
+        assert_eq!(
+            Self::allocation_size(byte_size),
+            Some(self.owned_allocation_size())
+        );
+        let (bytes_per_row, num_rows) = byte_size;
+        if bytes_per_row == 0 || num_rows == 0 {
+            debug_assert!(self.buf.is_null());
+            *self = Self::empty();
         } else {
-            // Note: the safety invariant guarantees no overflow.
-            (self.num_rows - 1) * self.bytes_between_rows + self.bytes_per_row
+            let bytes_between_rows = bytes_per_row.div_ceil(MAX_IMAGE_ALIGN) * MAX_IMAGE_ALIGN;
+            Self::check_vals(num_rows, bytes_per_row, bytes_between_rows);
+            self.bytes_per_row = bytes_per_row;
+            self.num_rows = num_rows;
+            self.bytes_between_rows = bytes_between_rows;
         }
     }
 
@@ -188,13 +225,13 @@ impl RawImageBuffer {
     }
 
     /// Returns zeroed memory if `copy_from` is `None`, otherwise it returns memory initialized
-    /// with the contents of `copy_from`. The returned buffer is aligned to CACHE_LINE_BYTE_SIZE bytes.
+    /// with the contents of `copy_from`. The returned buffer is aligned to MAX_IMAGE_ALIGN bytes.
     /// The returned RawImageBuffer owns the memory it references, which belongs to a single
-    /// allocation of size minimum_allocation_size().
+    /// allocation of size `owned_allocation_size()`.
     ///
     /// # Safety
     /// If `copy_from` is not None, the caller must ensure that the data it
-    /// references -- *all* minimum_allocation_size() bytes starting from buf,
+    /// references -- *all* `owned_allocation_size()` bytes starting from buf,
     /// not just the accessible bytes -- can be read.
     pub(super) unsafe fn try_allocate(
         byte_size: (usize, usize),
@@ -206,22 +243,16 @@ impl RawImageBuffer {
         if bytes_per_row == 0 || num_rows == 0 {
             return Ok(RawImageBuffer::empty());
         }
-        // These limits let us not worry about overflows.
-        if bytes_per_row as u64 >= i64::MAX as u64 / 4 || num_rows as u64 >= i64::MAX as u64 / 4 {
-            return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
-        }
-        debug!("trying to allocate image");
-        let bytes_between_rows =
-            bytes_per_row.div_ceil(CACHE_LINE_BYTE_SIZE) * CACHE_LINE_BYTE_SIZE;
-        // Note: matches RawImageBuffer::minimum_allocation_size.
-        let Some(allocation_len) = (num_rows - 1)
-            .checked_mul(bytes_between_rows)
-            .and_then(|x| x.checked_add(bytes_per_row))
-        else {
+        let Some(allocation_len) = Self::allocation_size(byte_size) else {
             return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
         };
+        debug!("trying to allocate image");
+        let bytes_between_rows = bytes_per_row.div_ceil(MAX_IMAGE_ALIGN) * MAX_IMAGE_ALIGN;
         assert_ne!(allocation_len, 0);
-        let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE)
+        // Use MAX_IMAGE_ALIGN (8 bytes <= MIN_ALIGN) and ensure size >= align so that
+        // std::alloc::System::alloc_zeroed dispatches to OS calloc() instead of
+        // posix_memalign() + unconditional user-space memset().
+        let layout = Layout::from_size_align(allocation_len, MAX_IMAGE_ALIGN)
             .map_err(|_| Error::ImageSizeTooLarge(bytes_per_row, num_rows))?;
         let memory = if let Some(src) = copy_from {
             // SAFETY: we just checked that allocation_len is not 0.
@@ -233,8 +264,8 @@ impl RawImageBuffer {
             assert_eq!(src.bytes_per_row, bytes_per_row);
             assert_eq!(src.bytes_between_rows, bytes_between_rows);
             assert_eq!(src.num_rows, num_rows);
-            let data_len = src.minimum_allocation_size();
-            // SAFETY: both `src` and `memory` have at least `data_len` bytes, and they are
+            let data_len = src.owned_allocation_size();
+            // SAFETY: both `src` and `memory` have `data_len` bytes, and they are
             // non-overlapping because `memory` was just allocated.
             // The caller ensures that `src` is valid for reads of `data_len` bytes.
             unsafe { std::ptr::copy_nonoverlapping(src.buf, memory, data_len) };
@@ -247,7 +278,7 @@ impl RawImageBuffer {
             }
             memory
         };
-        // SAFETY: `memory` points to a contiguous array of size minimum_allocation_size() which
+        // SAFETY: `memory` points to a contiguous array of size `owned_allocation_size()` which
         // was just initialized, and we transfer ownership so the validity requirements are satisfied.
         Ok(unsafe {
             RawImageBuffer::new_from_ptr(memory, num_rows, bytes_per_row, bytes_between_rows)
@@ -263,7 +294,7 @@ impl RawImageBuffer {
     ///
     /// # Safety
     /// The caller must ensure that the data referenced by self -- *all*
-    /// self.minimum_allocation_size() bytes starting from self.buf, not just the accessible bytes
+    /// `self.owned_allocation_size()` bytes starting from `self.buf`, not just the accessible bytes
     /// -- can be read.
     pub(super) unsafe fn try_clone(&self) -> Result<Self> {
         // SAFETY: the safety requirement of this method matches the safety requirement
@@ -277,8 +308,8 @@ impl RawImageBuffer {
     /// The data referenced by `self` must have been allocated with Self::try_allocate.
     pub(super) unsafe fn deallocate(&mut self) {
         if !self.buf.is_null() {
-            let allocation_len = self.minimum_allocation_size();
-            let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE).unwrap();
+            let allocation_len = self.owned_allocation_size();
+            let layout = Layout::from_size_align(allocation_len, MAX_IMAGE_ALIGN).unwrap();
             // SAFETY: the buffer was allocated in `try_allocate` with the same layout.
             unsafe {
                 dealloc(self.buf, layout);

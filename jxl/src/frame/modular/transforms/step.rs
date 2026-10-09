@@ -692,6 +692,7 @@ impl TransformStepChunk {
         buffers: &[ModularBufferInfo],
         scratch_space: &mut ScratchSpace,
         recycler: &BufferRecycler,
+        pipeline_used_channels: &[bool],
         pass_to_pipeline: &dyn Fn(usize, usize, bool, OwnedRawImage) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
@@ -895,7 +896,10 @@ impl TransformStepChunk {
                                 && buffers[*buf_in].buffer_grid[out_grid].data_status
                                     == DataStatus::Partial,
                         }
-                        .run(&mut scratch_space.palette_row_scratch)?;
+                        .run(
+                            &mut scratch_space.row_scratch,
+                            &mut scratch_space.channel_decode_scratch.wp,
+                        )?;
                     }
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
@@ -945,7 +949,12 @@ impl TransformStepChunk {
                             assert!(!is_final);
                             assert_eq!(bufs.len(), 1);
                             let view = info.borrow_upsample_view(buffers, frame_header);
-                            let scratch = &mut scratch_space.smooth_upsample_scratch;
+                            let ScratchSpace {
+                                smooth_upsample_scratch,
+                                row_scratch,
+                                ..
+                            } = scratch_space;
+                            let i32_rows = row_scratch.first_chunk_mut::<2>().unwrap();
                             let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
                                 && !buffers[*buf_out].info.followed_by_palette;
                             smooth_upsample(
@@ -955,7 +964,8 @@ impl TransformStepChunk {
                                 out_rect,
                                 &mut bufs[0].data,
                                 storage,
-                                scratch,
+                                smooth_upsample_scratch,
+                                i32_rows,
                             );
                         }
                         SqueezeInfo::Regular {
@@ -1014,40 +1024,38 @@ impl TransformStepChunk {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
                 let buf = &buffers[*buf_in].buffer_grid[out_grid];
                 let storage = buffers[*buf_in].storage;
-                if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
+                let channel_used = pipeline_used_channels
+                    .get(*channel)
+                    .copied()
+                    .unwrap_or(true);
+                if !channel_used {
+                    if buf.data_status != DataStatus::Zero || buf.has_buffer() {
+                        buf.mark_used(buf.can_consume(is_final), recycler);
+                    }
+                } else if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
                     let sz = rect.map(|x| x.size).unwrap_or(buf.size);
-                    let raw = match storage {
-                        ModularStorage::I16 => Image::<i16>::new(sz)?.into_raw(),
-                        ModularStorage::I32 => Image::<i32>::new(sz)?.into_raw(),
-                    };
+                    let sample_size = storage.sample_size();
+                    let raw = recycler.get_raw_buffer((sz.0 * sample_size, sz.1), true)?;
                     pass_to_pipeline(*channel, *group, is_final, raw)?;
                 } else {
-                    let modular_buf = buf.get_buffer(buf.can_consume(is_final), recycler)?;
                     let raw = if let Some(rect) = rect {
-                        match storage {
-                            ModularStorage::I16 => {
-                                let mut cropped = Image::<i16>::new(rect.size)?;
-                                let src_view =
-                                    ImageRect::<i16>::from_raw(modular_buf.data.as_rect())
-                                        .rect(*rect);
-                                for y in 0..rect.size.1 {
-                                    cropped.row_mut(y).copy_from_slice(src_view.row(y));
-                                }
-                                cropped.into_raw()
-                            }
-                            ModularStorage::I32 => {
-                                let mut cropped = Image::<i32>::new(rect.size)?;
-                                let src_view =
-                                    ImageRect::<i32>::from_raw(modular_buf.data.as_rect())
-                                        .rect(*rect);
-                                for y in 0..rect.size.1 {
-                                    cropped.row_mut(y).copy_from_slice(src_view.row(y));
-                                }
-                                cropped.into_raw()
+                        let sample_size = storage.sample_size();
+                        let byte_rect = Rect {
+                            origin: (rect.origin.0 * sample_size, rect.origin.1),
+                            size: (rect.size.0 * sample_size, rect.size.1),
+                        };
+                        let mut cropped = recycler.get_raw_buffer(byte_rect.size, false)?;
+                        {
+                            let data_guard = buf.data.try_read().unwrap();
+                            let src_view = data_guard.as_ref().unwrap().data.get_rect(byte_rect);
+                            for y in 0..byte_rect.size.1 {
+                                cropped.row_mut(y).copy_from_slice(src_view.row(y));
                             }
                         }
+                        buf.mark_used(buf.can_consume(is_final), recycler);
+                        cropped
                     } else {
-                        modular_buf.data
+                        buf.get_buffer(buf.can_consume(is_final), recycler)?.data
                     };
                     pass_to_pipeline(*channel, *group, is_final, raw)?;
                 }

@@ -12,7 +12,8 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
-use crate::util::NewWithCapacity;
+use crate::image::BufferRecycler;
+use crate::util::PerThreadStorageRef;
 use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
@@ -130,22 +131,18 @@ impl Lz77State {
         self.num_to_copy = num_to_copy;
     }
 
-    #[inline]
+    #[inline(always)]
     fn push_decoded_symbol(&mut self, token: u32) {
         let offset = (self.num_decoded & Self::WINDOW_MASK) as usize;
-        if let Some(slot) = self.window.get_mut(offset) {
-            *slot = token;
-        } else {
-            debug_assert_eq!(self.window.len(), offset);
-            self.window.push(token);
-        }
+        self.window[..1 << Self::LOG_WINDOW_SIZE][offset] = token;
         self.num_decoded += 1;
     }
 
-    #[inline]
+    #[inline(always)]
     fn pull_symbol(&mut self) -> Option<u32> {
         if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
-            let sym = self.window[(self.copy_pos & Self::WINDOW_MASK) as usize];
+            let sym = self.window[..1 << Self::LOG_WINDOW_SIZE]
+                [(self.copy_pos & Self::WINDOW_MASK) as usize];
             self.copy_pos += 1;
             self.num_to_copy = next_num_to_copy;
             Some(sym)
@@ -190,11 +187,77 @@ pub struct SymbolReader {
     errors: ErrorState,
 }
 
+pub struct ScopedSymbolReader<'a> {
+    reader: SymbolReader,
+    lz77_slot: Option<PerThreadStorageRef<'a, Vec<u32>>>,
+}
+
+impl std::ops::Deref for ScopedSymbolReader<'_> {
+    type Target = SymbolReader;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.reader
+    }
+}
+
+impl std::ops::DerefMut for ScopedSymbolReader<'_> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.reader
+    }
+}
+
+impl Drop for ScopedSymbolReader<'_> {
+    fn drop(&mut self) {
+        if let (Some(mut slot), SymbolReaderState::Lz77(lz77_state)) =
+            (self.lz77_slot.take(), &mut self.reader.state)
+        {
+            *slot = std::mem::take(&mut lz77_state.window);
+        }
+    }
+}
+
+impl ScopedSymbolReader<'_> {
+    pub fn check_final_state(self, histograms: &Histograms, br: &mut BitReader) -> Result<()> {
+        self.reader.check_final_state_ref(histograms, br)
+    }
+}
+
 impl SymbolReader {
-    pub fn new(
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new<'a>(
         histograms: &Histograms,
         br: &mut BitReader,
         image_width: Option<usize>,
+        recycler: &'a BufferRecycler,
+    ) -> Result<ScopedSymbolReader<'a>> {
+        let mut lz77_slot = histograms
+            .lz77_params
+            .enabled
+            .then(|| recycler.get_lz77_window());
+        let reader = Self::new_inner(histograms, br, image_width, lz77_slot.as_deref_mut())?;
+        Ok(ScopedSymbolReader { reader, lz77_slot })
+    }
+
+    pub fn new_owned(
+        histograms: &Histograms,
+        br: &mut BitReader,
+        image_width: Option<usize>,
+        recycler: &BufferRecycler,
+    ) -> Result<Self> {
+        let mut lz77_slot = histograms
+            .lz77_params
+            .enabled
+            .then(|| recycler.get_lz77_window());
+        Self::new_inner(histograms, br, image_width, lz77_slot.as_deref_mut())
+    }
+
+    fn new_inner(
+        histograms: &Histograms,
+        br: &mut BitReader,
+        image_width: Option<usize>,
+        lz77_scratch: Option<&mut Vec<u32>>,
     ) -> Result<Self> {
         let ans_reader = if matches!(histograms.codes, Codes::Ans(_)) {
             AnsReader::init(br)?
@@ -212,12 +275,18 @@ impl SymbolReader {
             let min_symbol = min_symbol.unwrap();
             let min_length = min_length.unwrap();
             let dist_multiplier = image_width.unwrap_or(0) as u32;
+            let window_size = 1 << Lz77State::LOG_WINDOW_SIZE;
+            let mut window = lz77_scratch.map(std::mem::take).unwrap_or_default();
+            if window.len() < window_size {
+                window.try_reserve(window_size - window.len())?;
+                window.resize(window_size, 0);
+            }
 
             SymbolReaderState::Lz77(Lz77State {
                 min_symbol,
                 min_length,
                 dist_multiplier,
-                window: Vec::new_with_capacity(1 << Lz77State::LOG_WINDOW_SIZE)?,
+                window,
                 num_to_copy: 0,
                 copy_pos: 0,
                 num_decoded: 0,
@@ -232,9 +301,6 @@ impl SymbolReader {
             errors: ErrorState::new(),
         })
     }
-}
-
-impl SymbolReader {
     #[inline(always)]
     pub fn read_unsigned_inline(
         &mut self,
@@ -387,12 +453,24 @@ impl SymbolReader {
         unpack_signed(unsigned)
     }
 
-    pub fn check_final_state(self, histograms: &Histograms, br: &mut BitReader) -> Result<()> {
+    pub fn check_final_state(
+        mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        recycler: &BufferRecycler,
+    ) -> Result<()> {
+        if let SymbolReaderState::Lz77(lz77_state) = &mut self.state {
+            *recycler.get_lz77_window() = std::mem::take(&mut lz77_state.window);
+        }
+        self.check_final_state_ref(histograms, br)
+    }
+
+    fn check_final_state_ref(&self, histograms: &Histograms, br: &mut BitReader) -> Result<()> {
         self.errors.check_for_error()?;
         br.check_for_error()?;
         match &histograms.codes {
             Codes::Huffman(_) => Ok(()),
-            Codes::Ans(_) => self.ans_reader.check_final_state(),
+            Codes::Ans(_) => self.ans_reader.checkpoint().check_final_state(),
         }
     }
 
@@ -403,17 +481,13 @@ impl SymbolReader {
                 let mut window = [0u32; N];
                 let start = (lz77_state.num_decoded & Lz77State::WINDOW_MASK) as usize;
                 let end = ((lz77_state.num_decoded + N as u32) & Lz77State::WINDOW_MASK) as usize;
-                if start < end {
-                    let window_first = &lz77_state.window[start..];
-                    let actual_size = window_first.len().min(N);
-                    window[..actual_size].copy_from_slice(&window_first[..actual_size]);
+                if start <= end {
+                    window.copy_from_slice(&lz77_state.window[start..end]);
                 } else {
                     let window_first = &lz77_state.window[start..];
-                    let first_len = window_first
-                        .len()
-                        .min((1 << Lz77State::LOG_WINDOW_SIZE) - start);
-                    window[..first_len].copy_from_slice(&window_first[..first_len]);
-                    window[N - end..].copy_from_slice(&lz77_state.window[..end]);
+                    let first_len = window_first.len();
+                    window[..first_len].copy_from_slice(window_first);
+                    window[first_len..].copy_from_slice(&lz77_state.window[..end]);
                 }
                 StateCheckpoint::Lz77 {
                     num_to_copy: lz77_state.num_to_copy,
@@ -474,7 +548,12 @@ impl SymbolReader {
 }
 
 impl Histograms {
-    pub fn decode(num_contexts: usize, br: &mut BitReader, allow_lz77: bool) -> Result<Histograms> {
+    pub fn decode(
+        num_contexts: usize,
+        br: &mut BitReader,
+        allow_lz77: bool,
+        recycler: &BufferRecycler,
+    ) -> Result<Histograms> {
         let lz77_params = Lz77Params::read_unconditional(&(), br, &Empty {})?;
         if !allow_lz77 && lz77_params.enabled {
             return Err(Error::Lz77Disallowed);
@@ -489,7 +568,7 @@ impl Histograms {
         };
 
         let context_map = if num_contexts > 1 {
-            decode_context_map(num_contexts, br)?
+            decode_context_map(num_contexts, br, recycler)?
         } else {
             vec![0]
         };

@@ -6,49 +6,60 @@
 use std::collections::HashMap;
 
 use crate::error::Result;
+use crate::frame::group::VarDctBuffers;
+use crate::frame::modular::ScratchSpace;
 use crate::image::{Image, ImageDataType, OwnedRawImage};
 use crate::util::sync::Mutex;
+use crate::util::{PerThreadStorage, PerThreadStorageRef};
 
-struct BufferBucket {
-    images: Mutex<Vec<OwnedRawImage>>,
+const MAX_RECYCLED_BUFFER_BYTES: usize = 1024 * 1024 * 4;
+
+pub(crate) struct BufferRecycler {
+    buckets: Mutex<HashMap<usize, Vec<OwnedRawImage>>>,
+    modular_scratch: PerThreadStorage<ScratchSpace>,
+    vardct_buffers: PerThreadStorage<VarDctBuffers>,
+    lz77_windows: PerThreadStorage<Vec<u32>>,
 }
 
-pub struct BufferRecycler {
-    buckets: HashMap<(usize, usize), BufferBucket>,
+impl Default for BufferRecycler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BufferRecycler {
-    pub fn new(group_dim: usize) -> Self {
-        let ty_sizes = [2, 4];
-        let group_shifts = [0, 1, 2, 3];
-        let modular_small_buffer_side = 4;
-        // actually scaled by 4.
-        let small_pipeline_buffer_sides = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let mut buckets = HashMap::new();
-        let mut add = |x, y| {
-            buckets.entry((x, y)).or_insert(BufferBucket {
-                images: Mutex::new(vec![]),
-            });
-        };
-        for ts in ty_sizes {
-            for gs in group_shifts {
-                let gsz = group_dim >> gs;
-                for ogs in group_shifts {
-                    add(gsz * ts, group_dim >> ogs);
-                }
-                add(gsz * ts, modular_small_buffer_side);
-                add(modular_small_buffer_side * ts, gsz);
-                for s in small_pipeline_buffer_sides {
-                    add(gsz * ts, s * 4);
-                    add(s * 4 * ts, gsz);
-                }
-            }
+    pub fn new() -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            modular_scratch: PerThreadStorage::new(ScratchSpace::new),
+            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
+            lz77_windows: PerThreadStorage::new(Vec::new),
         }
-        Self { buckets }
+    }
+
+    pub(crate) fn get_modular_scratch(&self) -> PerThreadStorageRef<'_, ScratchSpace> {
+        self.modular_scratch.get()
+    }
+
+    pub(crate) fn get_vardct_buffers(&self) -> PerThreadStorageRef<'_, VarDctBuffers> {
+        self.vardct_buffers.get()
+    }
+
+    pub(crate) fn get_lz77_window(&self) -> PerThreadStorageRef<'_, Vec<u32>> {
+        self.lz77_windows.get()
+    }
+
+    fn can_recycle(&self, alloc_size: usize) -> bool {
+        alloc_size != 0 && alloc_size <= MAX_RECYCLED_BUFFER_BYTES
     }
 
     pub fn get_buffer<T: ImageDataType>(&self, size: (usize, usize)) -> Result<Image<T>> {
         self.get_raw_buffer((std::mem::size_of::<T>() * size.0, size.1), false)
+            .map(Image::from_raw)
+    }
+
+    pub fn get_zeroed_buffer<T: ImageDataType>(&self, size: (usize, usize)) -> Result<Image<T>> {
+        self.get_raw_buffer((std::mem::size_of::<T>() * size.0, size.1), true)
             .map(Image::from_raw)
     }
 
@@ -57,16 +68,27 @@ impl BufferRecycler {
         byte_size: (usize, usize),
         zero_if_recycled: bool,
     ) -> Result<OwnedRawImage> {
-        self.buckets
-            .get(&byte_size)
-            .and_then(|x| x.images.lock().unwrap().pop())
-            .map(|mut img| {
-                if zero_if_recycled {
-                    img.fill_zero();
-                }
-                Ok(img)
-            })
-            .unwrap_or_else(|| OwnedRawImage::new(byte_size))
+        let Some(alloc_size) = OwnedRawImage::allocation_size(byte_size) else {
+            return OwnedRawImage::new(byte_size);
+        };
+        if !self.can_recycle(alloc_size) {
+            return OwnedRawImage::new(byte_size);
+        }
+        let popped = self
+            .buckets
+            .lock()
+            .unwrap()
+            .get_mut(&alloc_size)
+            .and_then(Vec::pop);
+        if let Some(mut img) = popped {
+            img.reshape(byte_size);
+            if zero_if_recycled {
+                img.fill_zero();
+            }
+            Ok(img)
+        } else {
+            OwnedRawImage::new(byte_size)
+        }
     }
 
     pub fn recycle_buffer<T: ImageDataType>(&self, buffer: Image<T>) {
@@ -75,10 +97,16 @@ impl BufferRecycler {
     }
 
     pub fn recycle_raw_buffer(&self, buffer: OwnedRawImage) {
-        let byte_size = buffer.byte_size();
-        if let Some(b) = self.buckets.get(&byte_size) {
-            b.images.lock().unwrap().push(buffer);
+        let alloc_size = buffer.owned_allocation_size();
+        if !self.can_recycle(alloc_size) {
+            return;
         }
+        self.buckets
+            .lock()
+            .unwrap()
+            .entry(alloc_size)
+            .or_default()
+            .push(buffer);
     }
 }
 

@@ -3,31 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_macros::UnconditionalCoder;
-
 use super::permutation::Permutation;
 use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
-use crate::headers::frame_header::PermutationNonserialized;
+use crate::image::BufferRecycler;
 
-pub struct TocNonserialized {
-    pub num_entries: u32,
-}
-
-#[derive(UnconditionalCoder, Debug, PartialEq, Clone)]
-#[nonserialized(TocNonserialized)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Toc {
-    #[default(false)]
     pub permuted: bool,
-
-    // Here we don't use `condition(permuted)`, because `jump_to_byte_boundary` needs to be executed in both cases
-    #[default(Permutation::default())]
-    #[nonserialized(num_entries: nonserialized.num_entries, permuted)]
     pub permutation: Permutation,
-
-    #[coder(u2S(Bits(10), Bits(14) + 1024, Bits(22) + 17408, Bits(30) + 4211712))]
-    #[size_coder(explicit(nonserialized.num_entries))]
     pub entries: Vec<u32>,
 }
 
@@ -60,9 +46,9 @@ impl IncrementalTocReader {
         self.permutation.is_some() && self.remaining_entries() == 0
     }
 
-    pub fn read_step(&mut self, br: &mut BitReader) -> Result<()> {
+    pub fn read_step(&mut self, br: &mut BitReader, recycler: &BufferRecycler) -> Result<()> {
         if self.permutation.is_none() {
-            return self.read_permutation(br);
+            return self.read_permutation(br, recycler);
         }
 
         let entry_coder = U32Coder::Select(
@@ -80,11 +66,13 @@ impl IncrementalTocReader {
         br.check_for_error()
     }
 
-    fn read_permutation(&mut self, br: &mut BitReader) -> Result<()> {
+    fn read_permutation(&mut self, br: &mut BitReader, recycler: &BufferRecycler) -> Result<()> {
         // If the TOC is permuted, avoid decoding a potentially large number of symbols
         // from a low-entropy codestream until we know that the bit reader has enough bytes
         // for the follow-up section size entries.
-        if self.permuted {
+        // TODO: This is quadratic when incrementally parsing byte by byte,
+        // we might want to find a better way of reading the permutation.
+        let permutation = if self.permuted {
             // Note that this is a lower bound.
             const MIN_BITS_PER_ENTRY: usize = 2 + 10;
             let needed = (self.num_entries as usize).saturating_mul(MIN_BITS_PER_ENTRY);
@@ -92,15 +80,13 @@ impl IncrementalTocReader {
             if needed > available {
                 return Err(Error::OutOfBounds((needed - available).div_ceil(8)));
             }
-        }
-        let permutation = Permutation::read_unconditional(
-            &(),
-            br,
-            &PermutationNonserialized {
-                num_entries: self.num_entries,
-                permuted: self.permuted,
-            },
-        )?;
+            let histograms = Histograms::decode(8, br, /*allow_lz77=*/ true, recycler)?;
+            let mut reader = SymbolReader::new(&histograms, br, None, recycler)?;
+            Permutation::decode(self.num_entries, 0, &histograms, br, &mut reader)?
+        } else {
+            Permutation::default()
+        };
+        br.jump_to_byte_boundary()?;
         self.permutation = Some(permutation);
         br.check_for_error()
     }
@@ -126,22 +112,25 @@ mod test {
 
     #[test]
     fn parse_arb() {
+        let recycler = BufferRecycler::new();
         arbtest::arbtest(|u| {
             // Not permuted
             let mut bytes = vec![0u8];
             let mut buf = 0u64;
             let mut buf_bits = 0u32;
             let mut num_entries = 0u32;
+            let mut expected_entries = Vec::new();
 
             u.arbitrary_loop(Some(1), Some(256), |u| {
                 let selector = u.int_in_range(0..=3)?;
-                let bits = match selector {
-                    0 => 10,
-                    1 => 14,
-                    2 => 22,
-                    _ => 30,
+                let (bits, off) = match selector {
+                    0 => (10, 0),
+                    1 => (14, 1024),
+                    2 => (22, 17408),
+                    _ => (30, 4211712),
                 };
                 let val = u.int_in_range(0u64..=((1 << bits) - 1))?;
+                expected_entries.push(val as u32 + off);
                 let val = (val << 2) | selector as u64;
 
                 buf |= val << buf_bits;
@@ -162,17 +151,20 @@ mod test {
             }
 
             let mut br = BitReader::new(&bytes);
-            let expected =
-                Toc::read_unconditional(&(), &mut br, &TocNonserialized { num_entries }).unwrap();
-
-            let mut br = BitReader::new(&bytes);
             let mut parser = IncrementalTocReader::new(num_entries, &mut br).unwrap();
             while !parser.is_complete() {
-                parser.read_step(&mut br).unwrap();
+                parser.read_step(&mut br, &recycler).unwrap();
             }
             let actual = parser.finalize();
 
-            assert_eq!(actual, expected);
+            assert_eq!(
+                actual,
+                Toc {
+                    permuted: false,
+                    permutation: Permutation::default(),
+                    entries: expected_entries,
+                }
+            );
             Ok(())
         });
     }

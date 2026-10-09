@@ -19,7 +19,6 @@ use super::quant_weights::DequantMatrices;
 use super::quantizer::{LfQuantFactors, QuantizerParams};
 use super::render::pipeline;
 use super::{HfMetaSplitter, HfMetaViews, LfImageSplitter};
-use crate::GROUP_DIM;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Histograms;
 use crate::error::{Error, Result};
@@ -38,7 +37,7 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, DataTypeTag, Image, OwnedRawImage, Rect};
+use crate::image::{DataTypeTag, Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -47,10 +46,7 @@ use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
 use crate::util::sync::{Arc, Mutex, RwLock};
 use crate::util::tracing_wrappers::*;
-use crate::util::{
-    CacheLine, CeilLog2, NewWithCapacity, PerThreadStorage, ShiftRightCeil, Xorshift128Plus,
-    mirror, num_cache_lines_for,
-};
+use crate::util::{CeilLog2, ShiftRightCeil, Xorshift128Plus, mirror};
 
 fn upsample_lf_group(
     group: usize,
@@ -219,6 +215,7 @@ impl Frame {
             && image_metadata.color_encoding.color_space == ColorSpace::Gray;
         let color_channels = if is_gray { 1 } else { 3 };
         let size_blocks = frame_header.size_blocks();
+        let recycler = &decoder_state.buffer_recycler;
         let lf_image = if frame_header.encoding == Encoding::VarDCT {
             if frame_header.has_lf_frame() {
                 if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
@@ -228,9 +225,9 @@ impl Frame {
                 }
             } else {
                 Some([
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
+                    recycler.get_zeroed_buffer(size_blocks)?,
+                    recycler.get_zeroed_buffer(size_blocks)?,
+                    recycler.get_zeroed_buffer(size_blocks)?,
                 ])
             }
         } else {
@@ -238,16 +235,15 @@ impl Frame {
         };
         let size_color_tiles = (size_blocks.0.div_ceil(8), size_blocks.1.div_ceil(8));
         let hf_meta = if frame_header.encoding == Encoding::VarDCT {
+            let mut transform_map = recycler.get_buffer(size_blocks)?;
+            transform_map.fill(HfTransformType::INVALID_TRANSFORM);
             Some(HfMetadata {
-                ytox_map: Image::new(size_color_tiles)?,
-                ytob_map: Image::new(size_color_tiles)?,
-                raw_quant_map: Image::new(size_blocks)?,
-                transform_map: Image::new_with_value(
-                    size_blocks,
-                    HfTransformType::INVALID_TRANSFORM,
-                )?,
-                epf_map: Image::new(size_blocks)?,
-                quant_lf: Image::new(size_blocks)?,
+                ytox_map: recycler.get_zeroed_buffer(size_color_tiles)?,
+                ytob_map: recycler.get_zeroed_buffer(size_color_tiles)?,
+                raw_quant_map: recycler.get_zeroed_buffer(size_blocks)?,
+                transform_map,
+                epf_map: recycler.get_zeroed_buffer(size_blocks)?,
+                quant_lf: recycler.get_zeroed_buffer(size_blocks)?,
             })
         } else {
             None
@@ -265,7 +261,7 @@ impl Frame {
             let num_ref_channels = 3 + image_metadata.extra_channel_info.len();
             Some(
                 (0..num_ref_channels)
-                    .map(|_| Image::new(sz))
+                    .map(|_| recycler.get_zeroed_buffer(sz))
                     .collect::<Result<Vec<_>>>()?,
             )
         } else {
@@ -275,7 +271,7 @@ impl Frame {
         let lf_frame_data = if frame_header.lf_level != 0 {
             Some(
                 (0..3)
-                    .map(|_| Image::new(frame_header.size_upsampled()))
+                    .map(|_| recycler.get_zeroed_buffer(frame_header.size_upsampled()))
                     .collect::<Result<Vec<_>, _>>()?
                     .try_into()
                     .unwrap(),
@@ -285,8 +281,7 @@ impl Frame {
         };
 
         let num_extra_channels = image_metadata.extra_channel_info.len();
-
-        let group_dim = frame_header.group_dim();
+        let buffer_recycler = decoder_state.buffer_recycler.clone();
 
         Ok(Box::new(Self {
             #[cfg(test)]
@@ -305,7 +300,6 @@ impl Frame {
             reference_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
-            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
             patches: Arc::new(RwLock::new(PatchesDictionary::new(num_extra_channels))),
             splines: Arc::new(RwLock::new(Splines::default())),
             noise: Arc::new(RwLock::new(Noise::default())),
@@ -313,7 +307,7 @@ impl Frame {
             color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
             epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
-            buffer_recycler: Arc::new(BufferRecycler::new(group_dim)),
+            buffer_recycler,
             lf_preview_dirty_groups: BTreeSet::new(),
         }))
     }
@@ -352,13 +346,18 @@ impl Frame {
                     self.decoder_state.extra_channel_info().len(),
                     &self.decoder_state.reference_frames[..],
                     self.decoder_state.level5_limits,
+                    &self.buffer_recycler,
                 )?;
                 *self.patches.try_write().unwrap() = p;
             }
 
             if self.header.has_splines() {
                 info!("decoding splines");
-                let s = Splines::read(br, self.header.width * self.header.height)?;
+                let s = Splines::read(
+                    br,
+                    self.header.width * self.header.height,
+                    &self.buffer_recycler,
+                )?;
                 *self.splines.try_write().unwrap() = s;
             }
 
@@ -382,7 +381,7 @@ impl Frame {
 
             let block_context_map = if self.header.encoding == Encoding::VarDCT {
                 info!("decoding block context map");
-                Some(BlockContextMap::read(br)?)
+                Some(BlockContextMap::read(br, &self.buffer_recycler)?)
             } else {
                 None
             };
@@ -421,6 +420,7 @@ impl Frame {
                     br,
                     size_limit,
                     self.decoder_state.level5_limits,
+                    &self.buffer_recycler,
                 )?)
             } else {
                 None
@@ -508,6 +508,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
+                &lf_global.modular_global.recycler,
                 decoder_state.level5_limits,
             )?;
         }
@@ -539,6 +540,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
+                &lf_global.modular_global.recycler,
                 decoder_state.level5_limits,
             )?;
         }
@@ -574,14 +576,15 @@ impl Frame {
                     _ => br.read(coeff_order::NUM_ORDERS)?,
                 } as u32;
                 debug!(used_orders);
-                let coeff_orders = decode_coeff_orders(used_orders, br)?;
+                let coeff_orders = decode_coeff_orders(used_orders, br, &self.buffer_recycler)?;
                 assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
                 let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
                 info!(
                     "Decoding histograms for pass {} with {} contexts",
                     i, num_contexts
                 );
-                let mut histograms = Histograms::decode(num_contexts, br, true)?;
+                let mut histograms =
+                    Histograms::decode(num_contexts, br, true, &self.buffer_recycler)?;
                 // Pad the context map to avoid index out of bounds in decode_vardct_group (group.rs#L514@752e6a4).
                 let padding = ZERO_DENSITY_CONTEXT_LIMIT - ZERO_DENSITY_CONTEXT_COUNT;
                 histograms.resize(num_contexts + padding);
@@ -601,22 +604,13 @@ impl Frame {
                 .max()
                 .unwrap_or(0);
             let use_i16 = max_num_bits < 16;
-            // Since the render pipeline keeps finalized channels, we don't need to store
-            // HF coefficients if there is a single pass.
+            // Since the render pipeline keeps finalized channels, we only need to store
+            // HF coefficients across calls if passes are decoded incrementally.
             let hf_coefficients = if passes.len() <= 1 {
                 vec![]
             } else {
-                let num_cache_lines = if use_i16 {
-                    num_cache_lines_for::<i16>(GROUP_DIM * GROUP_DIM * 3)
-                } else {
-                    num_cache_lines_for::<i32>(GROUP_DIM * GROUP_DIM * 3)
-                };
                 (0..self.header.num_groups())
-                    .map(|_| {
-                        let mut v = Vec::new_with_capacity(num_cache_lines)?;
-                        v.resize(num_cache_lines, CacheLine::default());
-                        Ok(Mutex::new(v))
-                    })
+                    .map(|_| Ok(Mutex::new(Vec::new())))
                     .collect::<Result<_>>()?
             };
 
@@ -783,7 +777,7 @@ impl Frame {
             self.lf_image.as_ref().unwrap()
         };
 
-        let mut vardct_buffers = self.vardct_buffers.get();
+        let mut vardct_buffers = self.buffer_recycler.get_vardct_buffers();
         if self.group_status.channel_status[group][0] == DataStatus::Zero && render_vardct {
             info!("Upsampling LF for group {group}");
             upsample_lf_group(
@@ -796,7 +790,9 @@ impl Frame {
             )?;
         } else {
             info!("Decoding VarDCT group {group}");
-            vardct_buffers.ensure_allocated()?;
+            if pixels.is_some() {
+                vardct_buffers.ensure_allocated()?;
+            }
             let hf_global = self.hf_global.as_ref().unwrap();
             decode_vardct_group(
                 group,
@@ -814,6 +810,7 @@ impl Frame {
                     .quant_biases,
                 &mut pixels,
                 &mut vardct_buffers,
+                &self.buffer_recycler,
             )?;
         }
         if let Some(pixels) = pixels {

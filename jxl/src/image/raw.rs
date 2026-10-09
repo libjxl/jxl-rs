@@ -11,10 +11,10 @@ use super::internal::RawImageBuffer;
 use crate::error::Result;
 
 pub struct OwnedRawImage {
-    // Safety invariant: all the accessible bytes of `self.data` are initialized, and
-    // belongs to a single allocation that lives until `self` is dropped.
-    // The data referenced by self.data was allocated by RawImageBuffer::try_allocate.
-    // `data.is_aligned(CACHE_LINE_BYTE_SIZE)` is true.
+    // Safety invariant: all `self.data.owned_allocation_size()` bytes starting at `self.data.buf`
+    // are initialized, and belong to a single allocation that lives until `self` is dropped.
+    // The data referenced by `self.data` was allocated by `RawImageBuffer::try_allocate`.
+    // `data.buf` and `data.bytes_between_rows` are multiples of `MAX_IMAGE_ALIGN`.
     pub(super) data: RawImageBuffer,
 }
 
@@ -26,6 +26,23 @@ impl OwnedRawImage {
             // SAFETY: `copy_from` is `None`.
             data: unsafe { RawImageBuffer::try_allocate(byte_size, None)? },
         })
+    }
+
+    pub fn allocation_size(byte_size: (usize, usize)) -> Option<usize> {
+        RawImageBuffer::allocation_size(byte_size)
+    }
+
+    #[inline(always)]
+    pub fn owned_allocation_size(&self) -> usize {
+        self.data.owned_allocation_size()
+    }
+
+    pub fn reshape(&mut self, byte_size: (usize, usize)) {
+        // SAFETY: `self.data` was allocated by `RawImageBuffer::try_allocate` and all
+        // `self.data.owned_allocation_size()` bytes are initialized.
+        unsafe {
+            self.data.reshape(byte_size);
+        }
     }
 
     pub fn get_rect_mut(&mut self, rect: Rect) -> RawImageRectMut<'_> {

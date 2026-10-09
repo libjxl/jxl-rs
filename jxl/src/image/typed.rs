@@ -8,8 +8,7 @@ use std::marker::PhantomData;
 
 use super::{ImageDataType, OwnedRawImage, RawImageRect, RawImageRectMut, Rect};
 use crate::error::Result;
-use crate::image::internal::DistinctRowsIndexes;
-use crate::util::CACHE_LINE_BYTE_SIZE;
+use crate::image::internal::{DistinctRowsIndexes, MAX_IMAGE_ALIGN};
 use crate::util::tracing_wrappers::*;
 
 #[repr(transparent)]
@@ -42,6 +41,12 @@ impl<T: ImageDataType> Image<T> {
         )
     }
 
+    pub fn reshape(&mut self, size: (usize, usize)) {
+        let s = T::DATA_TYPE_ID.size();
+        self.raw.reshape((size.0 * s, size.1));
+        debug_assert!(self.raw.data.is_aligned(s));
+    }
+
     pub fn fill(&mut self, v: T) {
         if self.size().0 == 0 {
             return;
@@ -68,7 +73,7 @@ impl<T: ImageDataType> Image<T> {
     }
 
     pub fn from_raw(raw: OwnedRawImage) -> Self {
-        const { assert!(CACHE_LINE_BYTE_SIZE.is_multiple_of(T::DATA_TYPE_ID.size())) };
+        const { assert!(MAX_IMAGE_ALIGN.is_multiple_of(T::DATA_TYPE_ID.size())) };
         assert!(raw.data.is_aligned(T::DATA_TYPE_ID.size()));
         Image {
             // Safety note: we just checked alignment.
@@ -161,7 +166,7 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
     }
 
     pub fn from_raw(raw: RawImageRect<'a>) -> Self {
-        const { assert!(CACHE_LINE_BYTE_SIZE.is_multiple_of(T::DATA_TYPE_ID.size())) };
+        const { assert!(MAX_IMAGE_ALIGN.is_multiple_of(T::DATA_TYPE_ID.size())) };
         assert!(raw.data.is_aligned(T::DATA_TYPE_ID.size()));
         ImageRect {
             // Safety note: we just checked alignment.
@@ -222,7 +227,7 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     }
 
     pub fn from_raw(raw: RawImageRectMut<'a>) -> Self {
-        const { assert!(CACHE_LINE_BYTE_SIZE.is_multiple_of(T::DATA_TYPE_ID.size())) };
+        const { assert!(MAX_IMAGE_ALIGN.is_multiple_of(T::DATA_TYPE_ID.size())) };
         assert!(raw.data.is_aligned(T::DATA_TYPE_ID.size()));
         ImageRectMut {
             // Safety note: we just checked alignment.

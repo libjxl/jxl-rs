@@ -285,8 +285,13 @@ impl CodestreamParser {
 
                 ParserState::ColorEncoding => {
                     self.refill_and_parse(input, |c, _| {
-                        c.local_buffer
-                            .with_br(|br, bits| c.image_info.parse_color_encoding(br, bits))
+                        c.local_buffer.with_br(|br, bits| {
+                            c.image_info.parse_color_encoding(
+                                br,
+                                bits,
+                                &c.frame_info.buffer_recycler,
+                            )
+                        })
                     })?;
                     self.update_default_output_options();
                     self.state = ParserState::FrameHeader {

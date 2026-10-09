@@ -13,6 +13,7 @@ use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::{Error, Result};
 use crate::frame::color_correlation_map::ColorCorrelationParams;
+use crate::image::BufferRecycler;
 use crate::util::tracing_wrappers::*;
 use crate::util::{CeilLog2, NewWithCapacity, fast_cos, fast_erff_simd};
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
@@ -833,11 +834,11 @@ impl Splines {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(br), ret, err)]
-    pub fn read(br: &mut BitReader, num_pixels: u32) -> Result<Splines> {
+    #[instrument(level = "debug", skip(br, recycler), ret, err)]
+    pub fn read(br: &mut BitReader, num_pixels: u32, recycler: &BufferRecycler) -> Result<Splines> {
         trace!(pos = br.total_bits_read());
-        let splines_histograms = Histograms::decode(NUM_SPLINE_CONTEXTS, br, true)?;
-        let mut splines_reader = SymbolReader::new(&splines_histograms, br, None)?;
+        let splines_histograms = Histograms::decode(NUM_SPLINE_CONTEXTS, br, true, recycler)?;
+        let mut splines_reader = SymbolReader::new(&splines_histograms, br, None, recycler)?;
         let num_splines = splines_reader
             .read_unsigned(&splines_histograms, br, NUM_SPLINES_CONTEXT)
             .saturating_add(1);
