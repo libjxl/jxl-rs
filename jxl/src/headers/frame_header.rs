@@ -677,14 +677,14 @@ impl FrameHeader {
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if let Some((dim_shift, effective_upsampling)) = nonserialized
-                .extra_channel_info
-                .iter()
-                .zip(&self.ec_upsampling)
-                .find_map(|(info, ec_upsampling)| {
-                    let effective_upsampling = ec_upsampling << info.dim_shift();
-                    ((effective_upsampling < self.upsampling) || (effective_upsampling > 8))
-                        .then_some((info.dim_shift(), effective_upsampling))
-                })
+            .extra_channel_info
+            .iter()
+            .zip(&self.ec_upsampling)
+            .find_map(|(info, ec_upsampling)| {
+                let effective_upsampling = ec_upsampling << info.dim_shift();
+                ((effective_upsampling < self.upsampling) || (effective_upsampling > 8))
+                    .then_some((info.dim_shift(), effective_upsampling))
+            })
         {
             return Err(Error::InvalidEcUpsampling(
                 self.upsampling,
@@ -869,48 +869,6 @@ mod test_frame_header {
 
         let err = frame_header.check(&nonserialized).unwrap_err();
         assert!(matches!(err, Error::InvalidEcUpsampling(8, 3, 32)));
-    }
-
-    fn with_dim_shift(nonserialized: &mut FrameHeaderNonserialized, dim_shift: u32) {
-        nonserialized.extra_channel_info[0] = ExtraChannelInfo::new(
-            false,
-            ExtraChannel::Alpha,
-            BitDepth::integer_samples(8),
-            dim_shift,
-            String::new(),
-            false,
-            None,
-            None,
-        );
-    }
-
-    #[test]
-    fn test_dim_shift_without_upsampling() {
-        let (file_header, mut frame_header, _) =
-            read_headers_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
-                .unwrap();
-        let mut nonserialized = file_header.frame_header_nonserialized();
-        with_dim_shift(&mut nonserialized, 2);
-
-        assert_eq!(frame_header.upsampling, 1);
-        frame_header.ec_upsampling[0] = 2;
-        frame_header.check(&nonserialized).unwrap();
-        frame_header.postprocess(&nonserialized);
-        assert_eq!(frame_header.ec_upsampling, vec![8]);
-    }
-
-    #[test]
-    fn test_invalid_ec_upsampling_after_dim_shift_without_upsampling() {
-        let (file_header, mut frame_header, _) =
-            read_headers_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
-                .unwrap();
-        let mut nonserialized = file_header.frame_header_nonserialized();
-        with_dim_shift(&mut nonserialized, 3);
-
-        frame_header.ec_upsampling[0] = 2;
-
-        let err = frame_header.check(&nonserialized).unwrap_err();
-        assert!(matches!(err, Error::InvalidEcUpsampling(1, 3, 16)));
     }
 
     #[test]

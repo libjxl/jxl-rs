@@ -1297,6 +1297,52 @@ fn test_fuzzer_modular_palette_empty_meta_channel() {
     assert!(decode::<f32>(data, Default::default()).is_err());
 }
 
+/// An alpha channel at half resolution (`dim_shift = 1`) in a frame without upsampling: the channel
+/// is 32x24 for a 64x48 image, opaque where its x > 2 and y > 1, and must be upsampled 2x. (It used
+/// to be decoded at the size of the image and not upsampled, since `dim_shift` was applied only
+/// when the frame itself was upsampled.)
+#[test]
+fn test_ec_dim_shift_without_upsampling() {
+    let data = include_bytes!("../../tests/testdata/ec_dim_shift_no_upsampling.jxl");
+    for use_simple_pipeline in [false, true] {
+        let frames = decode::<f32>(
+            data,
+            DecodeParams {
+                use_simple_pipeline,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let alpha = &frames[0][1];
+        assert_eq!(alpha.size(), (64, 48));
+        // Image pixel (3, 2) is channel sample (1, 1): transparent (at full resolution it would be
+        // inside the opaque rectangle); (40, 30) is well inside it.
+        assert!(
+            alpha.row(2)[3] < 0.01,
+            "alpha at (3, 2): {}",
+            alpha.row(2)[3]
+        );
+        assert!(
+            alpha.row(30)[40] > 0.99,
+            "alpha at (40, 30): {}",
+            alpha.row(30)[40]
+        );
+    }
+}
+
+/// `dim_shift = 3` with `ec_upsampling = 2` is a cumulative extra channel upsampling of 16, which is
+/// rejected (at most 8) also when the frame itself is not upsampled.
+#[test]
+fn test_ec_upsampling_too_large_without_upsampling() {
+    let data = include_bytes!("../../tests/testdata/ec_upsampling16_no_upsampling.jxl");
+    let result = decode::<f32>(data, Default::default());
+    assert!(
+        matches!(result, Err(Error::InvalidEcUpsampling(1, 3, 16))),
+        "expected an extra channel upsampling error, got {:?}",
+        result.map(|_| "a decoded image")
+    );
+}
+
 /// Regression test: a frame with patches that declares `upsampling = 4` and `ec_upsampling = [4]`
 /// for an extra channel with `dim_shift = 1`. The declared amounts match, so the guard against
 /// mixing patches with differing upsampling used to pass, and `postprocess` then shifted the
