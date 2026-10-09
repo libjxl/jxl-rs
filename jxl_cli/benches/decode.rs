@@ -58,9 +58,10 @@ fn decode_benches(c: &mut Criterion) {
             BenchmarkId::from_parameter(path.to_string_lossy()),
             &bytes,
             |b, bytes| {
+                let mut last_output = None;
                 b.iter(|| {
                     let mut input = bytes.as_slice();
-                    decode_frames(
+                    let (output, _) = decode_frames(
                         &mut input,
                         JxlDecoderOptions::default(),
                         None,
@@ -76,8 +77,10 @@ fn decode_benches(c: &mut Criterion) {
                         false,
                         None,
                         false,
+                        last_output.take(),
                     )
                     .unwrap();
+                    last_output = Some(output);
                 })
             },
         );

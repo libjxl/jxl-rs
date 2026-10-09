@@ -80,6 +80,7 @@ mod tests {
             false,
             None,
             false,
+            None,
         )
         .unwrap()
         .0
@@ -192,6 +193,7 @@ mod tests {
                 false,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }

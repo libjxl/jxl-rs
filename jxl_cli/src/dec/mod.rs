@@ -142,8 +142,10 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     linear_output: bool,
     render_interval: Option<usize>,
     allow_partial_files: bool,
+    prev_output: Option<DecodeOutput>,
 ) -> Result<(DecodeOutput, Duration)> {
     let start = Instant::now();
+    let mut alloc_duration = Duration::ZERO;
     let total_bytes = input.available_bytes()?;
 
     let mut decoder = JxlDecoder::new(decoder_options);
@@ -262,15 +264,28 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         samples_per_pixel
     };
 
-    let make_outputs = || -> Result<Vec<OwnedRawImage>> {
+    let mut reusable_frames = prev_output
+        .map(|p| std::collections::VecDeque::from(p.frames))
+        .unwrap_or_default();
+
+    let mut make_outputs = || -> Result<Vec<OwnedRawImage>> {
         let byte_size = (info.size.0 * output_type.bits_per_sample() / 8, info.size.1);
-        let mut outputs = vec![OwnedRawImage::new((
-            byte_size.0 * samples_per_pixel,
-            byte_size.1,
-        ))?];
+        let color_byte_size = (byte_size.0 * samples_per_pixel, byte_size.1);
+        if let Some(frame) = reusable_frames.pop_front()
+            && frame.channels.len() == 1 + extra_channels
+            && frame.channels[0].byte_size() == color_byte_size
+            && frame.channels[1..]
+                .iter()
+                .all(|c| c.byte_size() == byte_size)
+        {
+            return Ok(frame.channels);
+        }
+        let alloc_start = Instant::now();
+        let mut outputs = vec![OwnedRawImage::new(color_byte_size)?];
         for _ in 0..extra_channels {
             outputs.push(OwnedRawImage::new(byte_size)?);
         }
+        alloc_duration += alloc_start.elapsed();
         Ok(outputs)
     };
 
@@ -392,7 +407,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         }
     }
 
-    Ok((image_data, start.elapsed()))
+    Ok((image_data, start.elapsed().saturating_sub(alloc_duration)))
 }
 
 #[allow(clippy::too_many_arguments)]
