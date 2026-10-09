@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::error::Result;
-use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
+use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, WpScratch};
 use crate::frame::modular::{ModularChannel, ModularStorage, Predictor};
 use crate::headers::bit_depth::BitDepth;
 use crate::headers::modular::WeightedHeader;
@@ -247,7 +247,7 @@ fn get_border_pixel(img: &OwnedRawImage, x: usize, y: usize, storage: ModularSto
 }
 
 impl<'a, 'b> PaletteStep<'a, 'b> {
-    pub fn run(self, scratch: &mut [Vec<i32>; 4]) -> Result<()> {
+    pub fn run(self, scratch: &mut [Vec<i32>; 4], wp_scratch: &mut WpScratch) -> Result<()> {
         let PaletteStep {
             buf_in,
             buf_pal,
@@ -343,7 +343,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             let out_row_idx = c * grid_xsize;
             let palette = Palette::new(&buf_out[out_row_idx].bit_depth, c, buf_pal, storage);
             let mut wp_state = if predictor == Predictor::Weighted {
-                let mut state = WeightedPredictorState::new(wp_header, total_w);
+                let mut state = WeightedPredictorState::new(wp_header, total_w, wp_scratch);
                 if let Some(Some(aux_img)) = prev_aux.and_then(|aux| aux.get(c)) {
                     state.restore_state(aux_img);
                 }

@@ -10,8 +10,8 @@ use super::predict::WeightedPredictorState;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
+use crate::frame::modular::decode::References;
 use crate::frame::modular::predict::PredictionData;
-use crate::image::Image;
 use crate::util::tracing_wrappers::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -189,7 +189,7 @@ pub(super) fn compute_properties(
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
-    references: &Image<i32>,
+    references: &References<'_>,
     property_buffer: &mut [i32],
 ) -> i64 {
     assert!(property_buffer.len() >= NUM_NONREF_PROPERTIES);
@@ -232,10 +232,18 @@ pub(super) fn compute_properties(
     property_buffer[15] = wp_prop;
 
     // Reference properties.
-    let num_refs = references.size().0;
+    let num_refs = references.num_ref_props;
     if num_refs != 0 {
-        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-        ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
+        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..][..num_refs];
+        let ref_row = &references.data[x * num_refs..][..num_refs];
+        for (dst, src) in ref_properties
+            .as_chunks_mut::<PROPERTIES_PER_PREVCHAN>()
+            .0
+            .iter_mut()
+            .zip(ref_row.as_chunks::<PROPERTIES_PER_PREVCHAN>().0)
+        {
+            *dst = *src;
+        }
     }
 
     wp_pred
@@ -251,7 +259,7 @@ pub(super) fn predict(
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
-    references: &Image<i32>,
+    references: &References<'_>,
     property_buffer: &mut [i32],
 ) -> PredictionResult {
     let wp_pred = compute_properties(prediction_data, wp_state, x, y, references, property_buffer);

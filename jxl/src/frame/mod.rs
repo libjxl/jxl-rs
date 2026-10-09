@@ -26,7 +26,6 @@ use crate::headers::permutation::Permutation;
 use crate::headers::toc::Toc;
 use crate::image::{BufferRecycler, Image, Rect};
 use crate::render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter};
-use crate::util::PerThreadStorage;
 use crate::util::sync::{Arc, Mutex, RwLock};
 use crate::util::tracing_wrappers::*;
 
@@ -35,7 +34,7 @@ mod block_context_map;
 mod coeff_order;
 pub mod color_correlation_map;
 pub mod decode;
-mod group;
+pub(crate) mod group;
 pub mod lf_preview;
 pub mod modular;
 mod quant_weights;
@@ -339,8 +338,6 @@ pub struct Frame {
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
     section0_render_up_to_date: bool,
-    /// Reusable buffers for VarDCT group decoding.
-    vardct_buffers: PerThreadStorage<group::VarDctBuffers>,
     group_status: GroupStatus,
     patches: Arc<RwLock<PatchesDictionary>>,
     splines: Arc<RwLock<Splines>>,

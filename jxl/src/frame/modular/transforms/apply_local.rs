@@ -335,7 +335,10 @@ impl TransformStep {
                         storage,
                         is_partial: false,
                     }
-                    .run(&mut scratch_space.palette_row_scratch)?;
+                    .run(
+                        &mut scratch_space.row_scratch,
+                        &mut scratch_space.channel_decode_scratch.wp,
+                    )?;
                 }
                 img_in.recycle(recycler);
                 img_pal.recycle(recycler);

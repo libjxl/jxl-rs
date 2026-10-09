@@ -46,7 +46,7 @@ use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
 use crate::util::sync::{Arc, Mutex, RwLock};
 use crate::util::tracing_wrappers::*;
-use crate::util::{CeilLog2, PerThreadStorage, ShiftRightCeil, Xorshift128Plus, mirror};
+use crate::util::{CeilLog2, ShiftRightCeil, Xorshift128Plus, mirror};
 
 fn upsample_lf_group(
     group: usize,
@@ -300,7 +300,6 @@ impl Frame {
             reference_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
-            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
             patches: Arc::new(RwLock::new(PatchesDictionary::new(num_extra_channels))),
             splines: Arc::new(RwLock::new(Splines::default())),
             noise: Arc::new(RwLock::new(Noise::default())),
@@ -771,7 +770,7 @@ impl Frame {
             self.lf_image.as_ref().unwrap()
         };
 
-        let mut vardct_buffers = self.vardct_buffers.get();
+        let mut vardct_buffers = self.buffer_recycler.get_vardct_buffers();
         if self.group_status.channel_status[group][0] == DataStatus::Zero && render_vardct {
             info!("Upsampling LF for group {group}");
             upsample_lf_group(
@@ -784,7 +783,9 @@ impl Frame {
             )?;
         } else {
             info!("Decoding VarDCT group {group}");
-            vardct_buffers.ensure_allocated()?;
+            if pixels.is_some() {
+                vardct_buffers.ensure_allocated()?;
+            }
             let hf_global = self.hf_global.as_ref().unwrap();
             decode_vardct_group(
                 group,

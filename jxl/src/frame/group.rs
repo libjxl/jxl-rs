@@ -64,10 +64,6 @@ impl VarDctBuffers {
             b.try_reserve_exact(64 * 64)?;
             b.resize(64 * 64, 0.0);
         }
-        let num_cache_lines = num_cache_lines_for::<i32>(3 * 64 * 64);
-        self.coeffs_storage.try_reserve_exact(num_cache_lines)?;
-        self.coeffs_storage
-            .resize(num_cache_lines, CacheLine::default());
         Ok(())
     }
 }

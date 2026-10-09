@@ -6,13 +6,18 @@
 use std::collections::HashMap;
 
 use crate::error::Result;
+use crate::frame::group::VarDctBuffers;
+use crate::frame::modular::ScratchSpace;
 use crate::image::{Image, ImageDataType, OwnedRawImage};
 use crate::util::sync::Mutex;
+use crate::util::{PerThreadStorage, PerThreadStorageRef};
 
 const MAX_RECYCLED_BUFFER_BYTES: usize = 1024 * 1024 * 4;
 
 pub(crate) struct BufferRecycler {
     buckets: Mutex<HashMap<usize, Vec<OwnedRawImage>>>,
+    modular_scratch: PerThreadStorage<ScratchSpace>,
+    vardct_buffers: PerThreadStorage<VarDctBuffers>,
 }
 
 impl Default for BufferRecycler {
@@ -25,7 +30,17 @@ impl BufferRecycler {
     pub fn new() -> Self {
         Self {
             buckets: Mutex::new(HashMap::new()),
+            modular_scratch: PerThreadStorage::new(ScratchSpace::new),
+            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
         }
+    }
+
+    pub(crate) fn get_modular_scratch(&self) -> PerThreadStorageRef<'_, ScratchSpace> {
+        self.modular_scratch.get()
+    }
+
+    pub(crate) fn get_vardct_buffers(&self) -> PerThreadStorageRef<'_, VarDctBuffers> {
+        self.vardct_buffers.get()
     }
 
     fn can_recycle(&self, alloc_size: usize) -> bool {

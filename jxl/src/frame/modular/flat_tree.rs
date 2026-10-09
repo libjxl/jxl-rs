@@ -9,10 +9,9 @@ use super::Predictor;
 use super::predict::WeightedPredictorState;
 use crate::error::Result;
 use crate::frame::modular::Tree;
+use crate::frame::modular::decode::References;
 use crate::frame::modular::predict::PredictionData;
 use crate::frame::modular::tree::{PredictionResult, TreeNode, compute_properties};
-use crate::image::Image;
-use crate::util::NewWithCapacity;
 
 /// Flattened tree node for optimized traversal.
 /// Stores parent + info about both children to evaluate 3 nodes per iteration.
@@ -38,7 +37,7 @@ pub(super) fn predict_flat(
     prediction_data: PredictionData,
     wp_state: Option<&mut WeightedPredictorState>,
     pos: (usize, usize),
-    references: &Image<i32>,
+    references: &References<'_>,
     property_buffer: &mut [i32; 256],
 ) -> PredictionResult {
     let wp_pred = compute_properties(
@@ -87,18 +86,24 @@ pub(super) fn predict_flat(
 impl Tree {
     /// Build flat tree using BFS traversal.
     /// Each flat node stores parent + both children info to reduce branches.
-    pub(super) fn build_flat_tree(nodes: &[TreeNode]) -> Result<Vec<FlatTreeNode>> {
-        use std::collections::VecDeque;
-
+    pub(super) fn build_flat_tree(
+        nodes: &[TreeNode],
+        flat_nodes: &mut Vec<FlatTreeNode>,
+        queue: &mut Vec<u32>,
+    ) -> Result<()> {
+        flat_nodes.clear();
         if nodes.is_empty() {
-            return Ok(vec![]);
+            return Ok(());
         }
 
-        let mut flat_nodes = Vec::new_with_capacity(nodes.len())?;
-        let mut queue: VecDeque<usize> = VecDeque::new();
-        queue.push_back(0); // Start with root
+        flat_nodes.try_reserve(nodes.len())?;
+        queue.clear();
+        queue.push(0); // Start with root
+        let mut queue_pos = 0;
 
-        while let Some(cur_idx) = queue.pop_front() {
+        while queue_pos < queue.len() {
+            let cur_idx = queue[queue_pos] as usize;
+            queue_pos += 1;
             match nodes[cur_idx] {
                 TreeNode::Leaf {
                     predictor,
@@ -120,18 +125,18 @@ impl Tree {
                     right,
                 } => {
                     // childID points to first of 4 grandchildren in output
-                    let child_id = (flat_nodes.len() + queue.len() + 1) as u32;
+                    let child_id = queue.len() as u32;
 
                     let mut splitvals = [val, 0, 0];
                     let mut properties = [property, 0, 0];
 
                     // Process left (i=0) and right (i=1) children
-                    for (i, &child_idx) in [left as usize, right as usize].iter().enumerate() {
-                        match &nodes[child_idx] {
+                    for (i, &child_idx) in [left, right].iter().enumerate() {
+                        match &nodes[child_idx as usize] {
                             TreeNode::Leaf { .. } => {
                                 // Child is leaf: enqueue leaf twice
-                                queue.push_back(child_idx);
-                                queue.push_back(child_idx);
+                                queue.push(child_idx);
+                                queue.push(child_idx);
                             }
                             TreeNode::Split {
                                 property: cp,
@@ -142,8 +147,8 @@ impl Tree {
                                 // Child is split: store property/splitval and enqueue grandchildren
                                 properties[i + 1] = *cp;
                                 splitvals[i + 1] = *cv;
-                                queue.push_back(*cl as usize);
-                                queue.push_back(*cr as usize);
+                                queue.push(*cl);
+                                queue.push(*cr);
                             }
                         }
                     }
@@ -157,6 +162,6 @@ impl Tree {
             }
         }
 
-        Ok(flat_nodes)
+        Ok(())
     }
 }

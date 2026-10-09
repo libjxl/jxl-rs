@@ -873,9 +873,10 @@ pub fn do_hsqueeze_step(
     out_prev: Option<&RawImageRect<'_>>,
     buffers: &mut [&mut ModularChannel],
     storage: ModularStorage,
-    scratch_i16: &mut [i16; 2048],
+    scratch_i16: &mut Option<Box<[i16; 2048]>>,
 ) {
     if storage == ModularStorage::I16 {
+        let scratch_i16 = scratch_i16.get_or_insert_with(|| crate::util::box_array(0i16));
         do_hsqueeze_step_i16(
             &ImageRect::<i16>::from_raw(*in_avg),
             &ImageRect::<i16>::from_raw(*in_res),

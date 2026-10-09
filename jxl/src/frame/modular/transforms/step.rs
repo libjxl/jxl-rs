@@ -896,7 +896,10 @@ impl TransformStepChunk {
                                 && buffers[*buf_in].buffer_grid[out_grid].data_status
                                     == DataStatus::Partial,
                         }
-                        .run(&mut scratch_space.palette_row_scratch)?;
+                        .run(
+                            &mut scratch_space.row_scratch,
+                            &mut scratch_space.channel_decode_scratch.wp,
+                        )?;
                     }
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
@@ -946,7 +949,12 @@ impl TransformStepChunk {
                             assert!(!is_final);
                             assert_eq!(bufs.len(), 1);
                             let view = info.borrow_upsample_view(buffers, frame_header);
-                            let scratch = &mut scratch_space.smooth_upsample_scratch;
+                            let ScratchSpace {
+                                smooth_upsample_scratch,
+                                row_scratch,
+                                ..
+                            } = scratch_space;
+                            let i32_rows = row_scratch.first_chunk_mut::<2>().unwrap();
                             let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
                                 && !buffers[*buf_out].info.followed_by_palette;
                             smooth_upsample(
@@ -956,7 +964,8 @@ impl TransformStepChunk {
                                 out_rect,
                                 &mut bufs[0].data,
                                 storage,
-                                scratch,
+                                smooth_upsample_scratch,
+                                i32_rows,
                             );
                         }
                         SqueezeInfo::Regular {
