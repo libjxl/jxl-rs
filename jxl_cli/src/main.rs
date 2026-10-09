@@ -14,10 +14,6 @@ use jxl::api::{Event, JxlDecoder, JxlDecoderOptions, ProfileLevel};
 use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
-use mimalloc::MiMalloc;
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 
 const VERSION_STRING: &str = concat!(
     env!("VERGEN_GIT_DESCRIBE"),
