@@ -11,7 +11,7 @@ use crate::util::sync::Mutex;
 
 const MAX_RECYCLED_BUFFER_BYTES: usize = 1024 * 1024 * 4;
 
-pub struct BufferRecycler {
+pub(crate) struct BufferRecycler {
     buckets: Mutex<HashMap<usize, Vec<OwnedRawImage>>>,
 }
 

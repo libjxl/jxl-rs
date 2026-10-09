@@ -37,7 +37,7 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, DataTypeTag, Image, OwnedRawImage, Rect};
+use crate::image::{DataTypeTag, Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -215,6 +215,7 @@ impl Frame {
             && image_metadata.color_encoding.color_space == ColorSpace::Gray;
         let color_channels = if is_gray { 1 } else { 3 };
         let size_blocks = frame_header.size_blocks();
+        let recycler = &decoder_state.buffer_recycler;
         let lf_image = if frame_header.encoding == Encoding::VarDCT {
             if frame_header.has_lf_frame() {
                 if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
@@ -224,9 +225,9 @@ impl Frame {
                 }
             } else {
                 Some([
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
+                    recycler.get_zeroed_buffer(size_blocks)?,
+                    recycler.get_zeroed_buffer(size_blocks)?,
+                    recycler.get_zeroed_buffer(size_blocks)?,
                 ])
             }
         } else {
@@ -234,16 +235,15 @@ impl Frame {
         };
         let size_color_tiles = (size_blocks.0.div_ceil(8), size_blocks.1.div_ceil(8));
         let hf_meta = if frame_header.encoding == Encoding::VarDCT {
+            let mut transform_map = recycler.get_buffer(size_blocks)?;
+            transform_map.fill(HfTransformType::INVALID_TRANSFORM);
             Some(HfMetadata {
-                ytox_map: Image::new(size_color_tiles)?,
-                ytob_map: Image::new(size_color_tiles)?,
-                raw_quant_map: Image::new(size_blocks)?,
-                transform_map: Image::new_with_value(
-                    size_blocks,
-                    HfTransformType::INVALID_TRANSFORM,
-                )?,
-                epf_map: Image::new(size_blocks)?,
-                quant_lf: Image::new(size_blocks)?,
+                ytox_map: recycler.get_zeroed_buffer(size_color_tiles)?,
+                ytob_map: recycler.get_zeroed_buffer(size_color_tiles)?,
+                raw_quant_map: recycler.get_zeroed_buffer(size_blocks)?,
+                transform_map,
+                epf_map: recycler.get_zeroed_buffer(size_blocks)?,
+                quant_lf: recycler.get_zeroed_buffer(size_blocks)?,
             })
         } else {
             None
@@ -261,7 +261,7 @@ impl Frame {
             let num_ref_channels = 3 + image_metadata.extra_channel_info.len();
             Some(
                 (0..num_ref_channels)
-                    .map(|_| Image::new(sz))
+                    .map(|_| recycler.get_zeroed_buffer(sz))
                     .collect::<Result<Vec<_>>>()?,
             )
         } else {
@@ -271,7 +271,7 @@ impl Frame {
         let lf_frame_data = if frame_header.lf_level != 0 {
             Some(
                 (0..3)
-                    .map(|_| Image::new(frame_header.size_upsampled()))
+                    .map(|_| recycler.get_zeroed_buffer(frame_header.size_upsampled()))
                     .collect::<Result<Vec<_>, _>>()?
                     .try_into()
                     .unwrap(),
@@ -281,6 +281,7 @@ impl Frame {
         };
 
         let num_extra_channels = image_metadata.extra_channel_info.len();
+        let buffer_recycler = decoder_state.buffer_recycler.clone();
 
         Ok(Box::new(Self {
             #[cfg(test)]
@@ -307,7 +308,7 @@ impl Frame {
             color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
             epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
-            buffer_recycler: Arc::new(BufferRecycler::new()),
+            buffer_recycler,
             lf_preview_dirty_groups: BTreeSet::new(),
         }))
     }

@@ -121,6 +121,7 @@ pub struct DecoderState {
     pub(super) file_header: FileHeader,
     pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
     pub(super) lf_frames: [Option<[Image<f32>; 3]>; Self::NUM_LF_FRAMES],
+    pub(super) buffer_recycler: Arc<BufferRecycler>,
     pub render_spotcolors: bool,
     #[cfg(test)]
     pub use_simple_pipeline: bool,
@@ -148,22 +149,36 @@ impl DecoderState {
         let reference_frames = Arc::get_mut(&mut self.reference_frames)
             .expect("remaining references to reference_frames");
         for (i, frame) in reference_frames.iter_mut().enumerate() {
-            if !keep_slots[i] {
-                *frame = None;
+            if !keep_slots[i]
+                && let Some(rf) = frame.take()
+            {
+                for img in rf.frame {
+                    self.buffer_recycler.recycle_buffer(img);
+                }
             }
         }
         for (i, frame) in self.lf_frames.iter_mut().enumerate() {
-            if !keep_slots[Self::MAX_STORED_FRAMES + i] {
-                *frame = None;
+            if !keep_slots[Self::MAX_STORED_FRAMES + i]
+                && let Some(lff) = frame.take()
+            {
+                for img in lff {
+                    self.buffer_recycler.recycle_buffer(img);
+                }
             }
         }
     }
 
-    pub fn new(file_header: FileHeader, options: &JxlDecoderOptions, level5_limits: bool) -> Self {
+    pub fn new(
+        file_header: FileHeader,
+        options: &JxlDecoderOptions,
+        level5_limits: bool,
+        buffer_recycler: Arc<BufferRecycler>,
+    ) -> Self {
         Self {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
             lf_frames: std::array::from_fn(|_| None),
+            buffer_recycler,
             render_spotcolors: options.render_spot_colors,
             #[cfg(test)]
             use_simple_pipeline: options.test_options.use_simple_pipeline,
@@ -410,23 +425,49 @@ impl Frame {
         // First, drop the render pipeline to ensure that no other references to the reference
         // frames are around.
         self.render_pipeline = None;
+        if let Some(lf_image) = self.lf_image.take() {
+            for img in lf_image {
+                self.buffer_recycler.recycle_buffer(img);
+            }
+        }
+        if let Some(hf_meta) = self.hf_meta.take() {
+            self.buffer_recycler.recycle_buffer(hf_meta.ytox_map);
+            self.buffer_recycler.recycle_buffer(hf_meta.ytob_map);
+            self.buffer_recycler.recycle_buffer(hf_meta.raw_quant_map);
+            self.buffer_recycler.recycle_buffer(hf_meta.transform_map);
+            self.buffer_recycler.recycle_buffer(hf_meta.epf_map);
+            self.buffer_recycler.recycle_buffer(hf_meta.quant_lf);
+        }
         // Save reference frame if this frame can be referenced and was actually decoded.
         // If reference_frame_data is None (frame was skipped), we don't save it.
         // Subsequent frames referencing this slot may fail.
         if self.header.can_be_referenced
-            && let Some(frame_data) = self.reference_frame_data
+            && let Some(frame_data) = self.reference_frame_data.take()
         {
             info!("Saving frame in slot {}", self.header.save_as_reference);
             let rf = Arc::get_mut(&mut self.decoder_state.reference_frames)
                 .expect("remaining references to reference_frames");
-            rf[self.header.save_as_reference as usize] = Some(ReferenceFrame {
-                frame: frame_data,
-                saved_before_color_transform: self.header.save_before_ct,
-            });
+            if let Some(old_rf) =
+                rf[self.header.save_as_reference as usize].replace(ReferenceFrame {
+                    frame: frame_data,
+                    saved_before_color_transform: self.header.save_before_ct,
+                })
+            {
+                for img in old_rf.frame {
+                    self.buffer_recycler.recycle_buffer(img);
+                }
+            }
         }
 
-        if self.header.lf_level != 0 {
-            self.decoder_state.lf_frames[(self.header.lf_level - 1) as usize] = self.lf_frame_data;
+        if self.header.lf_level != 0
+            && let Some(old_lff) = std::mem::replace(
+                &mut self.decoder_state.lf_frames[(self.header.lf_level - 1) as usize],
+                self.lf_frame_data.take(),
+            )
+        {
+            for img in old_lff {
+                self.buffer_recycler.recycle_buffer(img);
+            }
         }
         Ok(self.decoder_state)
     }
