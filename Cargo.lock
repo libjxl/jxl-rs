@@ -717,6 +717,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jxl-gainmap"
+version = "0.7.4"
+dependencies = [
+ "jxl",
+]
+
+[[package]]
 name = "jxl-image-rs-integration"
 version = "0.7.4"
 dependencies = [
