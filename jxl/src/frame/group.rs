@@ -418,6 +418,17 @@ fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<f32>, ys: usiz
     }
 }
 
+#[inline(always)]
+fn copy_block_rows<const W: usize>(
+    src: &[f32],
+    output_rect: &mut crate::image::ImageRectMut<f32>,
+    h: usize,
+) {
+    for (i, chunk) in src.chunks_exact(W).take(h).enumerate() {
+        output_rect.row(i)[..W].copy_from_slice(chunk);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
@@ -496,11 +507,16 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             size: block_rect.size,
         };
         let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
-        for i in 0..downsampled_rect.size.1 {
-            let offset = i * downsampled_rect.size.0;
-            output_rect
-                .row(i)
-                .copy_from_slice(&transform_buffer[c][offset..offset + downsampled_rect.size.0]);
+        let h = downsampled_rect.size.1;
+        let src = &transform_buffer[c];
+        match downsampled_rect.size.0 {
+            8 => copy_block_rows::<8>(src, &mut output_rect, h),
+            16 => copy_block_rows::<16>(src, &mut output_rect, h),
+            32 => copy_block_rows::<32>(src, &mut output_rect, h),
+            64 => copy_block_rows::<64>(src, &mut output_rect, h),
+            128 => copy_block_rows::<128>(src, &mut output_rect, h),
+            256 => copy_block_rows::<256>(src, &mut output_rect, h),
+            _ => unreachable!(),
         }
     }
     Ok(())
