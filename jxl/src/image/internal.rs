@@ -40,6 +40,8 @@ unsafe impl Send for RawImageBuffer {}
 // between threads.
 unsafe impl Sync for RawImageBuffer {}
 
+pub(super) const MAX_IMAGE_ALIGN: usize = 8;
+
 impl RawImageBuffer {
     pub(super) fn check_vals(num_rows: usize, bytes_per_row: usize, bytes_between_rows: usize) {
         if num_rows > 0 {
@@ -188,9 +190,9 @@ impl RawImageBuffer {
     }
 
     /// Returns zeroed memory if `copy_from` is `None`, otherwise it returns memory initialized
-    /// with the contents of `copy_from`. The returned buffer is aligned to CACHE_LINE_BYTE_SIZE bytes.
+    /// with the contents of `copy_from`. The returned buffer is aligned to MAX_IMAGE_ALIGN bytes.
     /// The returned RawImageBuffer owns the memory it references, which belongs to a single
-    /// allocation of size minimum_allocation_size().
+    /// allocation of size `minimum_allocation_size().max(MAX_IMAGE_ALIGN)`.
     ///
     /// # Safety
     /// If `copy_from` is not None, the caller must ensure that the data it
@@ -221,7 +223,10 @@ impl RawImageBuffer {
             return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
         };
         assert_ne!(allocation_len, 0);
-        let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE)
+        // Use MAX_IMAGE_ALIGN (8 bytes <= MIN_ALIGN) and ensure size >= align so that
+        // std::alloc::System::alloc_zeroed dispatches to OS calloc() instead of
+        // posix_memalign() + unconditional user-space memset().
+        let layout = Layout::from_size_align(allocation_len.max(MAX_IMAGE_ALIGN), MAX_IMAGE_ALIGN)
             .map_err(|_| Error::ImageSizeTooLarge(bytes_per_row, num_rows))?;
         let memory = if let Some(src) = copy_from {
             // SAFETY: we just checked that allocation_len is not 0.
@@ -247,7 +252,7 @@ impl RawImageBuffer {
             }
             memory
         };
-        // SAFETY: `memory` points to a contiguous array of size minimum_allocation_size() which
+        // SAFETY: `memory` points to a contiguous array of size >= minimum_allocation_size() which
         // was just initialized, and we transfer ownership so the validity requirements are satisfied.
         Ok(unsafe {
             RawImageBuffer::new_from_ptr(memory, num_rows, bytes_per_row, bytes_between_rows)
@@ -277,8 +282,8 @@ impl RawImageBuffer {
     /// The data referenced by `self` must have been allocated with Self::try_allocate.
     pub(super) unsafe fn deallocate(&mut self) {
         if !self.buf.is_null() {
-            let allocation_len = self.minimum_allocation_size();
-            let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE).unwrap();
+            let allocation_len = self.minimum_allocation_size().max(MAX_IMAGE_ALIGN);
+            let layout = Layout::from_size_align(allocation_len, MAX_IMAGE_ALIGN).unwrap();
             // SAFETY: the buffer was allocated in `try_allocate` with the same layout.
             unsafe {
                 dealloc(self.buf, layout);

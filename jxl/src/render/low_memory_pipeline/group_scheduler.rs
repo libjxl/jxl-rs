@@ -157,60 +157,63 @@ impl LowMemoryRenderPipeline {
         }
         .clip(self.shared.input_size);
 
-        for c in 0..self.shared.num_channels() {
-            if !self.shared.channel_is_used[c] {
-                continue;
-            }
-            let (bx, by) = self.border_size;
-            let (sx, sy) = buf.data[c]
-                .try_read()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .byte_size();
-            let ChannelInfo {
-                ty,
-                downsample: (dx, dy),
-            } = self.shared.channel_info[0][c];
-            let bx = bx >> dx;
-            let by = by >> dy;
-            let mut topbottom = if let Some(b) = buf.topbottom[c].try_write().unwrap().take() {
-                b
-            } else {
-                let height = 4 * by;
-                let width = (1 << self.shared.log_group_size) * ty.size();
-                self.shared
-                    .buffer_recycler
-                    .get_raw_buffer((width, height), false)?
-            };
-            let mut leftright = if let Some(b) = buf.leftright[c].try_write().unwrap().take() {
-                b
-            } else {
-                let height = 1 << self.shared.log_group_size;
-                let width = 4 * bx * ty.size();
-                self.shared
-                    .buffer_recycler
-                    .get_raw_buffer((width, height), false)?
-            };
-            let data = buf.data[c].try_read().unwrap();
-            let input = data.as_ref().unwrap();
-            if by != 0 {
-                for y in 0..(2 * by).min(sy) {
-                    topbottom.row_mut(y)[..sx].copy_from_slice(input.row(y));
-                    topbottom.row_mut(4 * by - 1 - y)[..sx].copy_from_slice(input.row(sy - y - 1));
+        if self.border_size != (0, 0) {
+            for c in 0..self.shared.num_channels() {
+                if !self.shared.channel_is_used[c] {
+                    continue;
+                }
+                let (bx, by) = self.border_size;
+                let ChannelInfo {
+                    ty,
+                    downsample: (dx, dy),
+                } = self.shared.channel_info[0][c];
+                let bx = bx >> dx;
+                let by = by >> dy;
+                if bx == 0 && by == 0 {
+                    continue;
+                }
+                let data = buf.data[c].try_read().unwrap();
+                let input = data.as_ref().unwrap();
+                let (sx, sy) = input.byte_size();
+                if by != 0 {
+                    let mut topbottom =
+                        if let Some(b) = buf.topbottom[c].try_write().unwrap().take() {
+                            b
+                        } else {
+                            let height = 4 * by;
+                            let width = (1 << self.shared.log_group_size) * ty.size();
+                            self.shared
+                                .buffer_recycler
+                                .get_raw_buffer((width, height), false)?
+                        };
+                    for y in 0..(2 * by).min(sy) {
+                        topbottom.row_mut(y)[..sx].copy_from_slice(input.row(y));
+                        topbottom.row_mut(4 * by - 1 - y)[..sx]
+                            .copy_from_slice(input.row(sy - y - 1));
+                    }
+                    *buf.topbottom[c].try_write().unwrap() = Some(topbottom);
+                }
+                if bx != 0 {
+                    let mut leftright =
+                        if let Some(b) = buf.leftright[c].try_write().unwrap().take() {
+                            b
+                        } else {
+                            let height = 1 << self.shared.log_group_size;
+                            let width = 4 * bx * ty.size();
+                            self.shared
+                                .buffer_recycler
+                                .get_raw_buffer((width, height), false)?
+                        };
+                    let cs = (bx * 2 * ty.size()).min(sx);
+                    for y in 0..sy {
+                        let row_out = leftright.row_mut(y);
+                        let row_in = input.row(y);
+                        row_out[..cs].copy_from_slice(&row_in[..cs]);
+                        row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
+                    }
+                    *buf.leftright[c].try_write().unwrap() = Some(leftright);
                 }
             }
-            if bx != 0 {
-                let cs = (bx * 2 * ty.size()).min(sx);
-                for y in 0..sy {
-                    let row_out = leftright.row_mut(y);
-                    let row_in = input.row(y);
-                    row_out[..cs].copy_from_slice(&row_in[..cs]);
-                    row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
-                }
-            }
-            *buf.leftright[c].try_write().unwrap() = Some(leftright);
-            *buf.topbottom[c].try_write().unwrap() = Some(topbottom);
         }
 
         let ready_mask = self.input_buffers.mark_ready(g);

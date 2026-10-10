@@ -12,7 +12,6 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
-use crate::util::NewWithCapacity;
 use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
@@ -143,6 +142,31 @@ impl Lz77State {
     }
 
     #[inline]
+    fn push_decoded_symbol_run(&mut self, token: u32, count: usize) {
+        const WINDOW_SIZE: usize = 1 << Lz77State::LOG_WINDOW_SIZE;
+        debug_assert!(count <= WINDOW_SIZE);
+        let start = (self.num_decoded & Self::WINDOW_MASK) as usize;
+        let end = start + count;
+        if end <= WINDOW_SIZE {
+            let existing_end = self.window.len().min(end);
+            self.window[start..existing_end].fill(token);
+            if end > existing_end {
+                self.window.resize(end, token);
+            }
+        } else {
+            let existing_end = self.window.len();
+            self.window[start..existing_end].fill(token);
+            if existing_end < WINDOW_SIZE {
+                self.window.resize(WINDOW_SIZE, token);
+            }
+            self.window[..end - WINDOW_SIZE].fill(token);
+        }
+        self.copy_pos = self.copy_pos.wrapping_add(count as u32);
+        self.num_decoded = self.num_decoded.wrapping_add(count as u32);
+        self.num_to_copy -= count as u32;
+    }
+
+    #[inline]
     fn pull_symbol(&mut self) -> Option<u32> {
         if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
             let sym = self.window[(self.copy_pos & Self::WINDOW_MASK) as usize];
@@ -196,6 +220,15 @@ impl SymbolReader {
         br: &mut BitReader,
         image_width: Option<usize>,
     ) -> Result<Self> {
+        Self::new_with_lz77_scratch(histograms, br, image_width, &mut Vec::new())
+    }
+
+    pub fn new_with_lz77_scratch(
+        histograms: &Histograms,
+        br: &mut BitReader,
+        image_width: Option<usize>,
+        lz77_window_scratch: &mut Vec<u32>,
+    ) -> Result<Self> {
         let ans_reader = if matches!(histograms.codes, Codes::Ans(_)) {
             AnsReader::init(br)?
         } else {
@@ -212,12 +245,18 @@ impl SymbolReader {
             let min_symbol = min_symbol.unwrap();
             let min_length = min_length.unwrap();
             let dist_multiplier = image_width.unwrap_or(0) as u32;
+            let mut window = std::mem::take(lz77_window_scratch);
+            window.clear();
+            let window_cap = 1 << Lz77State::LOG_WINDOW_SIZE;
+            if window.capacity() < window_cap {
+                window.try_reserve(window_cap)?;
+            }
 
             SymbolReaderState::Lz77(Lz77State {
                 min_symbol,
                 min_length,
                 dist_multiplier,
-                window: Vec::new_with_capacity(1 << Lz77State::LOG_WINDOW_SIZE)?,
+                window,
                 num_to_copy: 0,
                 copy_pos: 0,
                 num_decoded: 0,
@@ -235,6 +274,33 @@ impl SymbolReader {
 }
 
 impl SymbolReader {
+    #[inline(always)]
+    pub fn has_lz77(&self) -> bool {
+        matches!(self.state, SymbolReaderState::Lz77(_))
+    }
+
+    #[inline(always)]
+    pub fn read_token_ans_no_lz77(
+        &mut self,
+        ans: &AnsCodes,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> u32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        self.ans_reader.read(ans, br, cluster)
+    }
+
+    #[inline(always)]
+    pub fn read_token_huffman_no_lz77(
+        &mut self,
+        hc: &HuffmanCodes,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> u32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        hc.read(br, cluster)
+    }
+
     #[inline(always)]
     pub fn read_unsigned_inline(
         &mut self,
@@ -352,6 +418,112 @@ impl SymbolReader {
         unpack_signed(unsigned)
     }
 
+    pub fn read_signed_clustered_row(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+        row: &mut [i32],
+    ) {
+        let uint_config = &histograms.uint_configs[cluster];
+        match &mut self.state {
+            SymbolReaderState::None => match (&histograms.codes, uint_config.is_config_420()) {
+                (Codes::Huffman(hc), true) => {
+                    let table = hc.table(cluster);
+                    for r in row.iter_mut() {
+                        let token = table.read(br);
+                        *r = unpack_signed(HybridUint::read_config_420(token, br));
+                    }
+                }
+                (Codes::Huffman(hc), false) => {
+                    let table = hc.table(cluster);
+                    for r in row.iter_mut() {
+                        let token = table.read(br);
+                        *r = unpack_signed(uint_config.read(token, br));
+                    }
+                }
+                (Codes::Ans(ans), true) => {
+                    for r in row.iter_mut() {
+                        let token = self.ans_reader.read(ans, br, cluster);
+                        *r = unpack_signed(HybridUint::read_config_420(token, br));
+                    }
+                }
+                (Codes::Ans(ans), false) => {
+                    for r in row.iter_mut() {
+                        let token = self.ans_reader.read(ans, br, cluster);
+                        *r = unpack_signed(uint_config.read(token, br));
+                    }
+                }
+            },
+            SymbolReaderState::Lz77(lz77_state) => {
+                let lz_dist_cluster = histograms.lz_dist_cluster as usize;
+                let lz_dist_uint = &histograms.uint_configs[lz_dist_cluster];
+                let lz_len_uint = histograms.lz77_length_uint.as_ref().unwrap();
+                let mut x = 0;
+                while x < row.len() {
+                    if lz77_state.num_to_copy > 0 {
+                        let count = (lz77_state.num_to_copy as usize)
+                            .min(row.len() - x)
+                            .min(1 << Lz77State::LOG_WINDOW_SIZE);
+                        if lz77_state.copy_pos.wrapping_add(1) == lz77_state.num_decoded {
+                            let sym = lz77_state.window
+                                [(lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize];
+                            row[x..x + count].fill(unpack_signed(sym));
+                            lz77_state.push_decoded_symbol_run(sym, count);
+                        } else {
+                            for dst in &mut row[x..x + count] {
+                                let sym = lz77_state.window
+                                    [(lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize];
+                                lz77_state.copy_pos += 1;
+                                lz77_state.push_decoded_symbol(sym);
+                                *dst = unpack_signed(sym);
+                            }
+                            lz77_state.num_to_copy -= count as u32;
+                        }
+                        x += count;
+                        if x == row.len() {
+                            break;
+                        }
+                    }
+                    let token = match &histograms.codes {
+                        Codes::Huffman(hc) => hc.read(br, cluster),
+                        Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
+                    };
+                    let Some(lz77_token) = token.checked_sub(lz77_state.min_symbol) else {
+                        let sym = uint_config.read(token, br);
+                        lz77_state.push_decoded_symbol(sym);
+                        row[x] = unpack_signed(sym);
+                        x += 1;
+                        continue;
+                    };
+                    if lz77_state.num_decoded == 0 {
+                        self.errors.lz77_repeat = true;
+                        row[x] = 0;
+                        x += 1;
+                        continue;
+                    }
+                    let num_to_copy = lz_len_uint.read(lz77_token, br);
+                    let Some(num_to_copy) = num_to_copy.checked_add(lz77_state.min_length) else {
+                        warn!(
+                            num_to_copy,
+                            lz77_state.min_length, "LZ77 num_to_copy overflow"
+                        );
+                        self.errors.arithmetic_overflow = true;
+                        row[x] = 0;
+                        x += 1;
+                        continue;
+                    };
+                    let distance_sym = match &histograms.codes {
+                        Codes::Huffman(hc) => hc.read(br, lz_dist_cluster),
+                        Codes::Ans(ans) => self.ans_reader.read(ans, br, lz_dist_cluster),
+                    };
+                    let distance_sym = lz_dist_uint.read(distance_sym, br);
+                    lz77_state.apply_copy(distance_sym, num_to_copy);
+                }
+            }
+        }
+    }
+
     /// Specialized fast path for when all HybridUint configs are 420.
     ///
     /// # Preconditions
@@ -388,6 +560,19 @@ impl SymbolReader {
     }
 
     pub fn check_final_state(self, histograms: &Histograms, br: &mut BitReader) -> Result<()> {
+        let mut dummy = Vec::new();
+        self.check_final_state_with_lz77_scratch(histograms, br, &mut dummy)
+    }
+
+    pub fn check_final_state_with_lz77_scratch(
+        self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        lz77_window_scratch: &mut Vec<u32>,
+    ) -> Result<()> {
+        if let SymbolReaderState::Lz77(mut lz77_state) = self.state {
+            *lz77_window_scratch = std::mem::take(&mut lz77_state.window);
+        }
         self.errors.check_for_error()?;
         br.check_for_error()?;
         match &histograms.codes {

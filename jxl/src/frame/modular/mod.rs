@@ -210,15 +210,47 @@ impl ModularBufferInfo {
     }
 }
 
+use std::collections::VecDeque;
+
 use crate::frame::modular::decode::specialized_trees::LUT_TABLE_SIZE;
+use crate::frame::modular::flat_tree::FlatTreeNode;
+use crate::frame::modular::predict::WeightedPredictorScratch;
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
+use crate::frame::modular::tree::TreeNode;
+
+struct TreeScratch {
+    wp: WeightedPredictorScratch,
+    references: Vec<i32>,
+    property_buffer: [i32; 256],
+    pruned_tree: Vec<TreeNode>,
+    tree_bfs_queue: VecDeque<u32>,
+    flat_tree: Vec<FlatTreeNode>,
+    flat_tree_bfs_queue: VecDeque<usize>,
+    tree_lut: [u8; LUT_TABLE_SIZE],
+}
+
+impl TreeScratch {
+    fn new() -> Self {
+        Self {
+            wp: WeightedPredictorScratch::default(),
+            references: Vec::new(),
+            property_buffer: [0; 256],
+            pruned_tree: Vec::new(),
+            tree_bfs_queue: VecDeque::new(),
+            flat_tree: Vec::new(),
+            flat_tree_bfs_queue: VecDeque::new(),
+            tree_lut: [0; LUT_TABLE_SIZE],
+        }
+    }
+}
 
 pub(super) struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 4],
     decode_row_scratch: [Vec<i32>; 3],
-    tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
-    hsqueeze_i16_scratch: Box<[i16; 2048]>,
+    tree_scratch: Option<Box<TreeScratch>>,
+    lz77_window_scratch: Vec<u32>,
+    hsqueeze_i16_scratch: Option<Box<[i16; 2048]>>,
 }
 
 impl Debug for ScratchSpace {
@@ -233,8 +265,9 @@ impl ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![], vec![], vec![]],
             decode_row_scratch: [vec![], vec![], vec![]],
-            tree_lut_scratch: crate::util::box_array(0u8),
-            hsqueeze_i16_scratch: crate::util::box_array(0i16),
+            tree_scratch: None,
+            lz77_window_scratch: Vec::new(),
+            hsqueeze_i16_scratch: None,
         }
     }
 }
@@ -604,6 +637,7 @@ impl FullModularImage {
                     br,
                     Some(&mut decoded_if_partial),
                     &mut scratch,
+                    &self.recycler,
                     self.level5_limits,
                 )
             },
@@ -681,38 +715,38 @@ impl FullModularImage {
             }
         };
 
-        let mut scratch = self.scratch_space.get();
-        with_buffers(
-            &self.buffer_info,
-            &self.section_buffer_indices[section_id],
-            grid,
-            &self.recycler,
-            |bufs| {
-                decode_modular_subbitstream(
-                    bufs,
-                    self.storage,
-                    stream.get_id(frame_header),
-                    None,
-                    global_tree,
-                    br,
-                    None,
-                    &mut scratch,
-                    self.level5_limits,
-                )?;
-                Ok(())
-            },
-        )?;
-        drop(scratch);
+        if !self.section_buffer_indices[section_id].is_empty() {
+            let mut scratch = self.scratch_space.get();
+            with_buffers(
+                &self.buffer_info,
+                &self.section_buffer_indices[section_id],
+                grid,
+                &self.recycler,
+                |bufs| {
+                    decode_modular_subbitstream(
+                        bufs,
+                        self.storage,
+                        stream.get_id(frame_header),
+                        None,
+                        global_tree,
+                        br,
+                        None,
+                        &mut scratch,
+                        &self.recycler,
+                        self.level5_limits,
+                    )?;
+                    Ok(())
+                },
+            )?;
+            drop(scratch);
 
-        for b in self.section_buffer_indices[section_id].iter().copied() {
-            self.buffer_info[b].buffer_grid[grid]
-                .extract_needed_borders(self.storage, &self.recycler)?;
+            for b in self.section_buffer_indices[section_id].iter().copied() {
+                self.buffer_info[b].buffer_grid[grid]
+                    .extract_needed_borders(self.storage, &self.recycler)?;
+            }
+
+            self.has_decoded_data.fetch_or(true, Ordering::Relaxed);
         }
-
-        self.has_decoded_data.fetch_or(
-            !self.section_buffer_indices[section_id].is_empty(),
-            Ordering::Relaxed,
-        );
 
         if section_id == 1 {
             self.delayed_ready_sections
@@ -1095,6 +1129,7 @@ pub(super) fn decode_vardct_lf(
     br: &mut BitReader,
     storage: ModularStorage,
     scratch_space: &mut ScratchSpace,
+    recycler: &BufferRecycler,
     level5_limits: bool,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
@@ -1113,38 +1148,60 @@ pub(super) fn decode_vardct_lf(
         )
     };
     let mut buffers = [
-        ModularChannel::new(shrink_rect(r.size, 1), storage, image_metadata.bit_depth)?,
-        ModularChannel::new(shrink_rect(r.size, 0), storage, image_metadata.bit_depth)?,
-        ModularChannel::new(shrink_rect(r.size, 2), storage, image_metadata.bit_depth)?,
+        ModularChannel::new(
+            shrink_rect(r.size, 1),
+            storage,
+            image_metadata.bit_depth,
+            recycler,
+        )?,
+        ModularChannel::new(
+            shrink_rect(r.size, 0),
+            storage,
+            image_metadata.bit_depth,
+            recycler,
+        )?,
+        ModularChannel::new(
+            shrink_rect(r.size, 2),
+            storage,
+            image_metadata.bit_depth,
+            recycler,
+        )?,
     ];
-    decode_modular_subbitstream(
-        buffers.iter_mut().collect(),
-        storage,
-        stream_id,
-        None,
-        global_tree,
-        br,
-        None,
-        scratch_space,
-        level5_limits,
-    )?;
-    dequant_lf(
-        r,
-        lf,
-        quant_lf,
-        [
-            buffers[0].data.as_rect(),
-            buffers[1].data.as_rect(),
-            buffers[2].data.as_rect(),
-        ],
-        storage,
-        color_correlation_params,
-        quant_params,
-        lf_quant,
-        mul,
-        frame_header,
-        bctx,
-    )
+    let res = (|| -> Result<()> {
+        decode_modular_subbitstream(
+            buffers.iter_mut().collect(),
+            storage,
+            stream_id,
+            None,
+            global_tree,
+            br,
+            None,
+            scratch_space,
+            recycler,
+            level5_limits,
+        )?;
+        dequant_lf(
+            r,
+            lf,
+            quant_lf,
+            [
+                buffers[0].data.as_rect(),
+                buffers[1].data.as_rect(),
+                buffers[2].data.as_rect(),
+            ],
+            storage,
+            color_correlation_params,
+            quant_params,
+            lf_quant,
+            mul,
+            frame_header,
+            bctx,
+        )
+    })();
+    for buf in buffers {
+        recycler.recycle_raw_buffer(buf.data);
+    }
+    res
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1157,6 +1214,7 @@ pub(super) fn decode_hf_metadata(
     br: &mut BitReader,
     storage: ModularStorage,
     scratch_space: &mut ScratchSpace,
+    recycler: &BufferRecycler,
     level5_limits: bool,
 ) -> Result<()> {
     let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
@@ -1172,27 +1230,46 @@ pub(super) fn decode_hf_metadata(
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
     };
     let mut buffers = [
-        ModularChannel::new_with_shift(cr.size, storage, Some((3, 3)), image_metadata.bit_depth)?,
-        ModularChannel::new_with_shift(cr.size, storage, Some((3, 3)), image_metadata.bit_depth)?,
-        ModularChannel::new((count, 2), storage, image_metadata.bit_depth)?,
-        ModularChannel::new(r.size, storage, image_metadata.bit_depth)?,
+        ModularChannel::new_with_shift(
+            cr.size,
+            storage,
+            Some((3, 3)),
+            image_metadata.bit_depth,
+            recycler,
+        )?,
+        ModularChannel::new_with_shift(
+            cr.size,
+            storage,
+            Some((3, 3)),
+            image_metadata.bit_depth,
+            recycler,
+        )?,
+        ModularChannel::new((count, 2), storage, image_metadata.bit_depth, recycler)?,
+        ModularChannel::new(r.size, storage, image_metadata.bit_depth, recycler)?,
     ];
-    decode_modular_subbitstream(
-        buffers.iter_mut().collect(),
-        storage,
-        stream_id,
-        None,
-        global_tree,
-        br,
-        None,
-        scratch_space,
-        level5_limits,
-    )?;
-    if storage == ModularStorage::I16 {
-        decode_hf_metadata_finish::<i16>(&buffers, hf_meta, cr, r, count, frame_header)
-    } else {
-        decode_hf_metadata_finish::<i32>(&buffers, hf_meta, cr, r, count, frame_header)
+    let res = (|| -> Result<()> {
+        decode_modular_subbitstream(
+            buffers.iter_mut().collect(),
+            storage,
+            stream_id,
+            None,
+            global_tree,
+            br,
+            None,
+            scratch_space,
+            recycler,
+            level5_limits,
+        )?;
+        if storage == ModularStorage::I16 {
+            decode_hf_metadata_finish::<i16>(&buffers, hf_meta, cr, r, count, frame_header)
+        } else {
+            decode_hf_metadata_finish::<i32>(&buffers, hf_meta, cr, r, count, frame_header)
+        }
+    })();
+    for buf in buffers {
+        recycler.recycle_raw_buffer(buf.data);
     }
+    res
 }
 
 fn decode_hf_metadata_finish<T: ImageDataType + Into<i32> + Copy>(
@@ -1285,57 +1362,80 @@ pub(super) fn decode_quant_table(
     global_tree: &Option<Tree>,
     br: &mut BitReader,
     scratch_space: &mut ScratchSpace,
+    recycler: &BufferRecycler,
     storage: ModularStorage,
     level5_limits: bool,
 ) -> Result<Vec<i32>> {
     let bit_depth = BitDepth::integer_samples(8);
     let mut image = [
-        ModularChannel::new((required_size_x, required_size_y), storage, bit_depth)?,
-        ModularChannel::new((required_size_x, required_size_y), storage, bit_depth)?,
-        ModularChannel::new((required_size_x, required_size_y), storage, bit_depth)?,
+        ModularChannel::new(
+            (required_size_x, required_size_y),
+            storage,
+            bit_depth,
+            recycler,
+        )?,
+        ModularChannel::new(
+            (required_size_x, required_size_y),
+            storage,
+            bit_depth,
+            recycler,
+        )?,
+        ModularChannel::new(
+            (required_size_x, required_size_y),
+            storage,
+            bit_depth,
+            recycler,
+        )?,
     ];
     let stream_id = ModularStreamId::QuantTable(index).get_id(frame_header);
-    decode_modular_subbitstream(
-        image.iter_mut().collect(),
-        storage,
-        stream_id,
-        None,
-        global_tree,
-        br,
-        None,
-        scratch_space,
-        level5_limits,
-    )?;
-    let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
-    for channel in image.iter_mut() {
-        if storage == ModularStorage::I16 {
-            let rect = ImageRect::<i16>::from_raw(channel.data.as_rect()).rect(Rect {
-                size: (required_size_x, required_size_y),
-                origin: (0, 0),
-            });
-            for y in 0..required_size_y {
-                for &entry in rect.row(y) {
-                    let entry = entry as i32;
-                    if entry <= 0 {
-                        return Err(Error::InvalidRawQuantTable);
+    let res = (|| -> Result<Vec<i32>> {
+        decode_modular_subbitstream(
+            image.iter_mut().collect(),
+            storage,
+            stream_id,
+            None,
+            global_tree,
+            br,
+            None,
+            scratch_space,
+            recycler,
+            level5_limits,
+        )?;
+        let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
+        for channel in image.iter_mut() {
+            if storage == ModularStorage::I16 {
+                let rect = ImageRect::<i16>::from_raw(channel.data.as_rect()).rect(Rect {
+                    size: (required_size_x, required_size_y),
+                    origin: (0, 0),
+                });
+                for y in 0..required_size_y {
+                    for &entry in rect.row(y) {
+                        let entry = entry as i32;
+                        if entry <= 0 {
+                            return Err(Error::InvalidRawQuantTable);
+                        }
+                        qtable.push(entry);
                     }
-                    qtable.push(entry);
                 }
-            }
-        } else {
-            let rect = ImageRect::<i32>::from_raw(channel.data.as_rect()).rect(Rect {
-                size: (required_size_x, required_size_y),
-                origin: (0, 0),
-            });
-            for y in 0..required_size_y {
-                for &entry in rect.row(y) {
-                    if entry <= 0 {
-                        return Err(Error::InvalidRawQuantTable);
+            } else {
+                let rect = ImageRect::<i32>::from_raw(channel.data.as_rect()).rect(Rect {
+                    size: (required_size_x, required_size_y),
+                    origin: (0, 0),
+                });
+                for y in 0..required_size_y {
+                    for &entry in rect.row(y) {
+                        if entry <= 0 {
+                            return Err(Error::InvalidRawQuantTable);
+                        }
+                        qtable.push(entry);
                     }
-                    qtable.push(entry);
                 }
             }
         }
+        Ok(qtable)
+    })();
+    for channel in image {
+        recycler.recycle_raw_buffer(channel.data);
     }
-    Ok(qtable)
+    res
 }

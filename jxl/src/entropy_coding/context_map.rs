@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::HashSet;
-
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
 use crate::error::Error;
@@ -29,8 +27,14 @@ fn inverse_move_to_front(v: &mut [u8]) {
 }
 
 fn verify_context_map(ctx_map: &[u8]) -> Result<(), Error> {
-    let num_histograms = *ctx_map.iter().max().unwrap() as u32 + 1;
-    let distinct_histograms = ctx_map.iter().collect::<HashSet<_>>().len() as u32;
+    let mut seen = [0u64; 4];
+    let mut max_val = 0u8;
+    for &c in ctx_map {
+        max_val = max_val.max(c);
+        seen[(c >> 6) as usize] |= 1u64 << (c & 63);
+    }
+    let num_histograms = max_val as u32 + 1;
+    let distinct_histograms: u32 = seen.iter().map(|w| w.count_ones()).sum();
     if distinct_histograms != num_histograms {
         return Err(Error::InvalidContextMapHole(
             num_histograms,

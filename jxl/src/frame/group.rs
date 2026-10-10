@@ -9,7 +9,7 @@ use jxl_transforms::transform_map::*;
 use num_traits::Float;
 
 use crate::bit_reader::BitReader;
-use crate::entropy_coding::decode::{Histograms, SymbolReader};
+use crate::entropy_coding::decode::{Codes, Histograms, SymbolReader, unpack_signed};
 use crate::error::{Error, Result};
 use crate::frame::block_context_map::*;
 use crate::frame::color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS;
@@ -162,16 +162,65 @@ fn decode_channel_coeffs<T: CoeffStorage>(
     // `permutation[k]` inside the loop given `k < num_coeffs`.
     assert!(permutation.len() >= num_coeffs);
     let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
-    for k in num_blocks..num_coeffs {
-        if nonzeros == 0 {
-            break;
+    if !reader.has_lz77() {
+        match histograms.codes() {
+            Codes::Ans(ans) => {
+                for k in num_blocks..num_coeffs {
+                    if nonzeros == 0 {
+                        break;
+                    }
+                    let ctx =
+                        histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                    let cluster = histograms.map_context_to_cluster(ctx);
+                    let token = reader.read_token_ans_no_lz77(ans, br, cluster);
+                    if token == 0 {
+                        prev = 0;
+                        continue;
+                    }
+                    let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
+                    prev = if coeff != 0 { 1 } else { 0 };
+                    nonzeros -= prev;
+                    let coeff_index = permutation[k] as usize;
+                    current_coeffs[coeff_index].add_coeff(coeff);
+                }
+            }
+            Codes::Huffman(hc) => {
+                for k in num_blocks..num_coeffs {
+                    if nonzeros == 0 {
+                        break;
+                    }
+                    let ctx =
+                        histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                    let cluster = histograms.map_context_to_cluster(ctx);
+                    let token = reader.read_token_huffman_no_lz77(hc, br, cluster);
+                    if token == 0 {
+                        prev = 0;
+                        continue;
+                    }
+                    let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
+                    prev = if coeff != 0 { 1 } else { 0 };
+                    nonzeros -= prev;
+                    let coeff_index = permutation[k] as usize;
+                    current_coeffs[coeff_index].add_coeff(coeff);
+                }
+            }
         }
-        let ctx = histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-        let coeff = reader.read_signed_inline(histograms, br, ctx) << shift;
-        prev = if coeff != 0 { 1 } else { 0 };
-        nonzeros -= prev;
-        let coeff_index = permutation[k] as usize;
-        current_coeffs[coeff_index].add_coeff(coeff);
+    } else {
+        for k in num_blocks..num_coeffs {
+            if nonzeros == 0 {
+                break;
+            }
+            let ctx = histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+            let coeff = reader.read_signed_inline(histograms, br, ctx) << shift;
+            if coeff == 0 {
+                prev = 0;
+                continue;
+            }
+            prev = 1;
+            nonzeros -= 1;
+            let coeff_index = permutation[k] as usize;
+            current_coeffs[coeff_index].add_coeff(coeff);
+        }
     }
     if nonzeros != 0 {
         return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
@@ -362,6 +411,24 @@ fn dequant_block<D: SimdDescriptor>(
     }
 }
 
+#[inline(always)]
+fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<f32>, ys: usize) {
+    for (y, dst) in lf.chunks_exact_mut(XS).take(ys).enumerate() {
+        dst.copy_from_slice(&rect.row(y)[..XS]);
+    }
+}
+
+#[inline(always)]
+fn copy_block_rows<const W: usize>(
+    src: &[f32],
+    output_rect: &mut crate::image::ImageRectMut<f32>,
+    h: usize,
+) {
+    for (i, chunk) in src.chunks_exact(W).take(h).enumerate() {
+        output_rect.row(i)[..W].copy_from_slice(chunk);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
@@ -413,18 +480,23 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         offset,
         transform_buffer,
     );
+    let xs = covered_blocks_x(transform_type) as usize;
+    let ys = covered_blocks_y(transform_type) as usize;
     for c in [1, 0, 2] {
         if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
             continue;
         }
         let lf = &mut scratch[..];
-        {
-            let xs = covered_blocks_x(transform_type) as usize;
-            let ys = covered_blocks_y(transform_type) as usize;
-            let rect = lf_rects[c];
-            for (y, lf) in lf.chunks_exact_mut(xs).enumerate().take(ys) {
-                lf.copy_from_slice(&rect.row(y)[0..xs]);
-            }
+        let rect = &lf_rects[c];
+        match (xs, ys) {
+            (1, 1) => lf[0] = rect.row(0)[0],
+            (1, _) => copy_lf_rows::<1>(lf, rect, ys),
+            (2, _) => copy_lf_rows::<2>(lf, rect, ys),
+            (4, _) => copy_lf_rows::<4>(lf, rect, ys),
+            (8, _) => copy_lf_rows::<8>(lf, rect, ys),
+            (16, _) => copy_lf_rows::<16>(lf, rect, ys),
+            (32, _) => copy_lf_rows::<32>(lf, rect, ys),
+            _ => unreachable!(),
         }
         transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
         let downsampled_rect = Rect {
@@ -435,11 +507,16 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             size: block_rect.size,
         };
         let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
-        for i in 0..downsampled_rect.size.1 {
-            let offset = i * downsampled_rect.size.0;
-            output_rect
-                .row(i)
-                .copy_from_slice(&transform_buffer[c][offset..offset + downsampled_rect.size.0]);
+        let h = downsampled_rect.size.1;
+        let src = &transform_buffer[c];
+        match downsampled_rect.size.0 {
+            8 => copy_block_rows::<8>(src, &mut output_rect, h),
+            16 => copy_block_rows::<16>(src, &mut output_rect, h),
+            32 => copy_block_rows::<32>(src, &mut output_rect, h),
+            64 => copy_block_rows::<64>(src, &mut output_rect, h),
+            128 => copy_block_rows::<128>(src, &mut output_rect, h),
+            256 => copy_block_rows::<256>(src, &mut output_rect, h),
+            _ => unreachable!(),
         }
     }
     Ok(())
@@ -608,9 +685,20 @@ pub fn decode_vardct_group(
     let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let use_i16 = hf_global.use_i16;
-    let is_multi_pass = !hf_global.hf_coefficients.is_empty();
+    let is_multi_pass =
+        !hf_global.hf_coefficients.is_empty() && pass_info.len() < hf_global.passes.len();
     let mut locked_coeffs = if is_multi_pass {
-        Some(hf_global.hf_coefficients[group].try_lock().unwrap())
+        let mut guard = hf_global.hf_coefficients[group].try_lock().unwrap();
+        if guard.is_empty() {
+            let num_cache_lines = if use_i16 {
+                num_cache_lines_for::<i16>(GROUP_DIM * GROUP_DIM * 3)
+            } else {
+                num_cache_lines_for::<i32>(GROUP_DIM * GROUP_DIM * 3)
+            };
+            guard.try_reserve_exact(num_cache_lines)?;
+            guard.resize(num_cache_lines, CacheLine::default());
+        }
+        Some(guard)
     } else {
         None
     };

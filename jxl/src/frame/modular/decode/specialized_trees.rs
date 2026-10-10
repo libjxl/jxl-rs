@@ -3,22 +3,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::VecDeque;
 use std::ops::Range;
 
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::Result;
 use crate::frame::modular::decode::channel::{ModularChannelDecoder, sync_scratch};
-use crate::frame::modular::decode::common::{make_pixel, precompute_references};
+use crate::frame::modular::decode::common::{References, make_pixel, precompute_references};
 use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, clamped_gradient};
 use crate::frame::modular::tree::{
     NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, PredictionResult, TreeNode,
 };
-use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, Tree};
+use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, Tree, TreeScratch};
 use crate::headers::modular::GroupHeader;
-use crate::image::{Image, ImageRectMut};
+use crate::image::ImageRectMut;
 
 trait MaybeWeightedPredictor: Sized {
     fn predict(
@@ -26,7 +25,7 @@ trait MaybeWeightedPredictor: Sized {
         nodes: &[FlatTreeNode],
         prediction_data: PredictionData,
         pos: (usize, usize),
-        references: &Image<i32>,
+        references: &References<'_>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult;
     fn update_errors(&mut self, _val: i32, _pos: (usize, usize)) {}
@@ -39,7 +38,7 @@ impl MaybeWeightedPredictor for () {
         nodes: &[FlatTreeNode],
         prediction_data: PredictionData,
         pos: (usize, usize),
-        references: &Image<i32>,
+        references: &References<'_>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult {
         predict_flat(nodes, prediction_data, None, pos, references, prop_buffer)
@@ -53,7 +52,7 @@ impl MaybeWeightedPredictor for WeightedPredictorState {
         nodes: &[FlatTreeNode],
         prediction_data: PredictionData,
         pos: (usize, usize),
-        references: &Image<i32>,
+        references: &References<'_>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult {
         predict_flat(
@@ -116,48 +115,21 @@ impl Reader for ReaderGeneric {
     }
 }
 
-struct FlatTreeInner {
-    nodes: Vec<FlatTreeNode>,
-    references: Image<i32>,
-    property_buffer: Box<[i32; 256]>,
+struct FlatTreeInner<'a> {
+    nodes: &'a [FlatTreeNode],
+    references: References<'a>,
+    property_buffer: &'a mut [i32; 256],
     storage: ModularStorage,
 }
 
-impl FlatTreeInner {
-    fn new(
-        nodes: Vec<TreeNode>,
-        max_property_count: usize,
-        channel: usize,
-        stream: usize,
-        xsize: usize,
-        storage: ModularStorage,
-    ) -> Result<Self> {
-        let num_ref_props = max_property_count
-            .saturating_sub(NUM_NONREF_PROPERTIES)
-            .next_multiple_of(PROPERTIES_PER_PREVCHAN);
-        let references = Image::<i32>::new((num_ref_props, xsize))?;
-        let mut property_buffer = Box::new([0; 256]);
-
-        property_buffer[0] = channel as i32;
-        property_buffer[1] = stream as i32;
-
-        Ok(Self {
-            nodes: Tree::build_flat_tree(&nodes)?,
-            references,
-            property_buffer,
-            storage,
-        })
-    }
-}
-
-struct FlatTree<WP, R> {
-    inner: FlatTreeInner,
+struct FlatTree<'a, WP, R> {
+    inner: FlatTreeInner<'a>,
     reader: R,
     wp_state: WP,
 }
 
-impl<WP: MaybeWeightedPredictor, R: Reader> FlatTree<WP, R> {
-    fn new(inner: FlatTreeInner, reader: R, wp_state: WP) -> Self {
+impl<'a, WP: MaybeWeightedPredictor, R: Reader> FlatTree<'a, WP, R> {
+    fn new(inner: FlatTreeInner<'a>, reader: R, wp_state: WP) -> Self {
         Self {
             inner,
             reader,
@@ -166,7 +138,7 @@ impl<WP: MaybeWeightedPredictor, R: Reader> FlatTree<WP, R> {
     }
 }
 
-impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<WP, R> {
+impl<'a, WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<'a, WP, R> {
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         precompute_references(
             buffers,
@@ -188,11 +160,11 @@ impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<W
         histograms: &Histograms,
     ) -> i32 {
         let prediction_result = self.wp_state.predict(
-            &self.inner.nodes,
+            self.inner.nodes,
             prediction_data,
             pos,
             &self.inner.references,
-            &mut self.inner.property_buffer,
+            self.inner.property_buffer,
         );
         let dec = self
             .reader
@@ -263,24 +235,6 @@ struct WpOnly<'a, R> {
     lut: &'a [u8; LUT_TABLE_SIZE],
     wp_state: WeightedPredictorState,
     reader: R,
-}
-
-impl<'a, R: Reader> WpOnly<'a, R> {
-    fn new(
-        tree: &[TreeNode],
-        header: &GroupHeader,
-        xsize: usize,
-        reader: R,
-        lut: &'a mut [u8; LUT_TABLE_SIZE],
-    ) -> Option<Self> {
-        let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
-        let lut = make_lut(tree, lut)?;
-        Some(Self {
-            lut,
-            wp_state,
-            reader,
-        })
-    }
 }
 
 impl<'a, R: Reader> ModularChannelDecoder for WpOnly<'a, R> {
@@ -444,9 +398,7 @@ impl ModularChannelDecoder for NoTreeZero {
         };
         debug_assert_eq!(row.len(), xsize);
         if self.multiplier == 1 && self.offset == 0 {
-            for r in row.iter_mut() {
-                *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
-            }
+            reader.read_signed_clustered_row(histograms, br, self.clustered_ctx, row);
         } else {
             for r in row.iter_mut() {
                 let residual =
@@ -466,12 +418,23 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
     xsize: usize,
     header: &GroupHeader,
     storage: ModularStorage,
-    lut_scratch: &mut [u8; LUT_TABLE_SIZE],
+    tree_scratch: &mut TreeScratch,
     run: F,
 ) -> Result<()> {
+    let TreeScratch {
+        wp: wp_scratch,
+        references: references_scratch,
+        property_buffer,
+        pruned_tree,
+        tree_bfs_queue: queue,
+        flat_tree,
+        flat_tree_bfs_queue,
+        tree_lut: lut_scratch,
+    } = tree_scratch;
+
     // TODO(veluca): consider skipping the pruning if header.uses_global_tree is true.
-    let mut pruned_tree = Vec::new();
-    let mut queue = VecDeque::new();
+    pruned_tree.clear();
+    queue.clear();
     pruned_tree.try_reserve(tree.nodes.len())?;
     queue.try_reserve(tree.nodes.len())?;
     queue.push_front(0);
@@ -566,7 +529,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
             offset,
             id,
         },
-    ] = &*pruned_tree
+    ] = &**pruned_tree
     {
         return run(&mut NoTreeZero {
             clustered_ctx: *id as usize,
@@ -583,7 +546,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
             offset: 0,
             id,
         },
-    ] = &*pruned_tree
+    ] = &**pruned_tree
     {
         return run(&mut SingleGradientOnly {
             clustered_ctx: *id as usize,
@@ -595,28 +558,45 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
 
     if !uses_non_wp
         && !uses_non420
-        && let Some(mut wp) = WpOnly::new(&pruned_tree, header, xsize, Reader420NoLz, lut_scratch)
+        && let Some(lut) = make_lut(pruned_tree, lut_scratch)
     {
-        return run(&mut wp);
+        let wp_state =
+            WeightedPredictorState::new_with_scratch(&header.wp_header, xsize, wp_scratch);
+        let mut wp = WpOnly {
+            lut,
+            wp_state,
+            reader: Reader420NoLz,
+        };
+        let res = run(&mut wp);
+        wp.wp_state.save_scratch(wp_scratch);
+        return res;
     }
 
     if !uses_non_gradient
         && !uses_non420
-        && let Some(mut grad) = GradientOnly::new(&pruned_tree, Reader420NoLz, lut_scratch)
+        && let Some(mut grad) = GradientOnly::new(pruned_tree, Reader420NoLz, lut_scratch)
     {
         return run(&mut grad);
     }
 
     let single_symbol = single_symbol.map(unpack_signed);
 
-    let inner = FlatTreeInner::new(
-        pruned_tree,
-        max_property_count,
-        channel,
-        stream,
-        xsize,
+    let num_ref_props = max_property_count
+        .saturating_sub(NUM_NONREF_PROPERTIES)
+        .next_multiple_of(PROPERTIES_PER_PREVCHAN)
+        .min(channel * PROPERTIES_PER_PREVCHAN);
+    let references = References::new(references_scratch, num_ref_props, xsize);
+    property_buffer[0] = channel as i32;
+    property_buffer[1] = stream as i32;
+    property_buffer[2..NUM_NONREF_PROPERTIES + num_ref_props].fill(0);
+    Tree::build_flat_tree_into(pruned_tree, flat_tree, flat_tree_bfs_queue)?;
+
+    let inner = FlatTreeInner {
+        nodes: flat_tree,
+        references,
+        property_buffer,
         storage,
-    )?;
+    };
 
     // Non-WP trees (includes effort 2 encoding and some groups in effort > 3)
     if !uses_wp {
@@ -629,13 +609,22 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
         return run(&mut FlatTree::new(inner, ReaderGeneric, ()));
     }
 
-    let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
+    let wp_state = WeightedPredictorState::new_with_scratch(&header.wp_header, xsize, wp_scratch);
 
     if let Some(ss) = single_symbol {
-        return run(&mut FlatTree::new(inner, ss, wp_state));
+        let mut ft = FlatTree::new(inner, ss, wp_state);
+        let res = run(&mut ft);
+        ft.wp_state.save_scratch(wp_scratch);
+        return res;
     }
     if !uses_non420 {
-        return run(&mut FlatTree::new(inner, Reader420NoLz, wp_state));
+        let mut ft = FlatTree::new(inner, Reader420NoLz, wp_state);
+        let res = run(&mut ft);
+        ft.wp_state.save_scratch(wp_scratch);
+        return res;
     }
-    run(&mut FlatTree::new(inner, ReaderGeneric, wp_state))
+    let mut ft = FlatTree::new(inner, ReaderGeneric, wp_state);
+    let res = run(&mut ft);
+    ft.wp_state.save_scratch(wp_scratch);
+    res
 }
