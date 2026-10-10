@@ -411,6 +411,13 @@ fn dequant_block<D: SimdDescriptor>(
     }
 }
 
+#[inline(always)]
+fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<f32>, ys: usize) {
+    for (y, dst) in lf.chunks_exact_mut(XS).take(ys).enumerate() {
+        dst.copy_from_slice(&rect.row(y)[..XS]);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
@@ -462,18 +469,23 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         offset,
         transform_buffer,
     );
+    let xs = covered_blocks_x(transform_type) as usize;
+    let ys = covered_blocks_y(transform_type) as usize;
     for c in [1, 0, 2] {
         if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
             continue;
         }
         let lf = &mut scratch[..];
-        {
-            let xs = covered_blocks_x(transform_type) as usize;
-            let ys = covered_blocks_y(transform_type) as usize;
-            let rect = lf_rects[c];
-            for (y, lf) in lf.chunks_exact_mut(xs).enumerate().take(ys) {
-                lf.copy_from_slice(&rect.row(y)[0..xs]);
-            }
+        let rect = &lf_rects[c];
+        match (xs, ys) {
+            (1, 1) => lf[0] = rect.row(0)[0],
+            (1, _) => copy_lf_rows::<1>(lf, rect, ys),
+            (2, _) => copy_lf_rows::<2>(lf, rect, ys),
+            (4, _) => copy_lf_rows::<4>(lf, rect, ys),
+            (8, _) => copy_lf_rows::<8>(lf, rect, ys),
+            (16, _) => copy_lf_rows::<16>(lf, rect, ys),
+            (32, _) => copy_lf_rows::<32>(lf, rect, ys),
+            _ => unreachable!(),
         }
         transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
         let downsampled_rect = Rect {
