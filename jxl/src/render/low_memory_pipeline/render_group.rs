@@ -445,10 +445,16 @@ impl LowMemoryRenderPipeline {
                     Stage::InOut(s) => {
                         let borderx = s.border().0 as usize;
                         let bordery = s.border().1 as isize;
+                        let prev = std::mem::replace(&mut previous_call_was_previous_row[i], true);
+                        let iy_range = if prev {
+                            bordery..=bordery
+                        } else {
+                            -bordery..=bordery
+                        };
                         // Apply x padding.
                         if start_of_row && borderx != 0 {
                             for (si, ci) in self.stage_input_buffer_index[i].iter() {
-                                for iy in -bordery..=bordery {
+                                for iy in iy_range.clone() {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
@@ -463,7 +469,7 @@ impl LowMemoryRenderPipeline {
                         }
                         if end_of_row && borderx != 0 {
                             for (si, ci) in self.stage_input_buffer_index[i].iter() {
-                                for iy in -bordery..=bordery {
+                                for iy in iy_range.clone() {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
@@ -482,7 +488,6 @@ impl LowMemoryRenderPipeline {
                             .iter()
                             .map(|(si, ci)| &inb[*si][*ci])
                             .collect();
-                        let prev = std::mem::replace(&mut previous_call_was_previous_row[i], true);
                         s.run_stage_on(
                             ExtraInfo {
                                 xsize: shifted_xsize,
