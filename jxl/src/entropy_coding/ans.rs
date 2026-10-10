@@ -15,14 +15,7 @@ const RLE_MARKER_SYM: u16 = LOG_SUM_PROBS as u16 + 1;
 
 #[derive(Debug)]
 struct AnsHistogram {
-    // Safety invariant:
-    // - log_bucket_size <= LOG_SUM_PROBS
-    // - buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
-    // This relationship ensures that for any ANS state (12 bits), the bucket index
-    // computed as (state & 0xfff) >> log_bucket_size is always < buckets.len()
     buckets: Vec<Bucket>,
-    log_bucket_size: usize,
-    bucket_mask: u32,
     // For optimizing fast-lossless case.
     single_symbol: Option<u32>,
     alphabet_size: usize,
@@ -273,7 +266,6 @@ impl AnsHistogram {
         // 4 <= log_bucket_size <= 7
         let log_bucket_size = LOG_SUM_PROBS.checked_sub(log_alpha_size).unwrap();
         let bucket_size = 1u16 << log_bucket_size;
-        let bucket_mask = bucket_size as u32 - 1;
 
         let mut dist = vec![0u16; table_size];
         let alphabet_size = if br.read(1)? != 0 {
@@ -304,12 +296,8 @@ impl AnsHistogram {
         };
 
         assert_eq!(buckets.len(), 1 << (LOG_SUM_PROBS - log_bucket_size));
-        // Safety note: log_bucket_size <= LOG_SUM_PROBS by construction, and we
-        // just checked that buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
         Ok(Self {
             buckets,
-            log_bucket_size,
-            bucket_mask,
             single_symbol,
             alphabet_size,
         })
@@ -354,26 +342,69 @@ impl AnsHistogram {
 }
 
 impl AnsHistogram {
+    // For optimizing fast-lossless case.
     #[inline]
-    pub fn read(&self, br: &mut BitReader, state: &mut u32) -> u32 {
+    pub fn single_symbol(&self) -> Option<u32> {
+        self.single_symbol
+    }
+}
+
+#[derive(Debug)]
+struct AnsHistogramInfo {
+    single_symbol: Option<u32>,
+    alphabet_size: usize,
+}
+
+#[derive(Debug)]
+pub struct AnsCodes {
+    buckets: Vec<Bucket>,
+    histograms: Vec<AnsHistogramInfo>,
+    log_alpha_size: usize,
+    log_bucket_size: usize,
+    bucket_mask: u32,
+}
+
+impl AnsCodes {
+    pub fn decode(num: usize, log_alpha_size: usize, br: &mut BitReader) -> Result<AnsCodes> {
+        debug_assert!((5..=8).contains(&log_alpha_size));
+        let log_bucket_size = LOG_SUM_PROBS.checked_sub(log_alpha_size).unwrap();
+        let bucket_mask = (1u32 << log_bucket_size) - 1;
+        let table_size = 1usize << log_alpha_size;
+        let mut buckets = Vec::with_capacity(num * table_size);
+        let mut histograms = Vec::with_capacity(num);
+        for _ in 0..num {
+            let h = AnsHistogram::decode(br, log_alpha_size)?;
+            debug_assert_eq!(h.buckets.len(), table_size);
+            buckets.extend_from_slice(&h.buckets);
+            histograms.push(AnsHistogramInfo {
+                single_symbol: h.single_symbol(),
+                alphabet_size: h.alphabet_size,
+            });
+        }
+        Ok(Self {
+            buckets,
+            histograms,
+            log_alpha_size,
+            log_bucket_size,
+            bucket_mask,
+        })
+    }
+
+    pub fn single_symbol(&self, ctx: usize) -> Option<u32> {
+        self.histograms[ctx].single_symbol
+    }
+
+    pub fn max_symbol_for_cluster(&self, cluster: usize) -> u32 {
+        self.histograms[cluster].alphabet_size.saturating_sub(1) as u32
+    }
+
+    #[inline(always)]
+    pub fn read(&self, br: &mut BitReader, state: &mut u32, ctx: usize) -> u32 {
         let idx = *state & 0xfff;
         let i = (idx >> self.log_bucket_size) as usize;
         let pos = idx & self.bucket_mask;
 
-        debug_assert!(self.buckets.len().is_power_of_two());
-        debug_assert!(
-            i < self.buckets.len(),
-            "bucket index {} out of bounds (len = {})",
-            i,
-            self.buckets.len()
-        );
-        // SAFETY: The struct-level safety invariant (see AnsHistogram::buckets) ensures that
-        // buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size). Since idx = state & 0xfff
-        // (12 bits) and i = idx >> log_bucket_size, we have i < buckets.len() always.
-        #[allow(unsafe_code)]
-        let bucket = unsafe { *self.buckets.get_unchecked(i) };
-        // Safe version: (~3% slower for e2 lossless decoding)
-        // let bucket = self.buckets[i & (self.buckets.len() - 1)];
+        let bucket = self.buckets[(ctx << self.log_alpha_size) | i];
         let alias_symbol = bucket.alias_symbol as u32;
         let alias_cutoff = bucket.alias_cutoff as u32;
         let dist = bucket.dist as u32;
@@ -393,34 +424,6 @@ impl AnsHistogram {
         br.consume_optimistic((16 * select_appended) as usize);
         symbol
     }
-
-    // For optimizing fast-lossless case.
-    #[inline]
-    pub fn single_symbol(&self) -> Option<u32> {
-        self.single_symbol
-    }
-}
-
-#[derive(Debug)]
-pub struct AnsCodes {
-    histograms: Vec<AnsHistogram>,
-}
-
-impl AnsCodes {
-    pub fn decode(num: usize, log_alpha_size: usize, br: &mut BitReader) -> Result<AnsCodes> {
-        let histograms = (0..num)
-            .map(|_| AnsHistogram::decode(br, log_alpha_size))
-            .collect::<Result<_>>()?;
-        Ok(Self { histograms })
-    }
-
-    pub fn single_symbol(&self, ctx: usize) -> Option<u32> {
-        self.histograms[ctx].single_symbol()
-    }
-
-    pub fn max_symbol_for_cluster(&self, cluster: usize) -> u32 {
-        self.histograms[cluster].alphabet_size.saturating_sub(1) as u32
-    }
 }
 
 #[derive(Debug)]
@@ -439,9 +442,9 @@ impl AnsReader {
         Ok(Self(initial_state))
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read(&mut self, codes: &AnsCodes, br: &mut BitReader, ctx: usize) -> u32 {
-        codes.histograms[ctx].read(br, &mut self.0)
+        codes.read(br, &mut self.0, ctx)
     }
 
     pub fn check_final_state(self) -> Result<()> {
