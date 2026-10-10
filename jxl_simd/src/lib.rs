@@ -199,7 +199,7 @@ pub trait F32SimdVec:
     /// Values are converted to BF16 format (loses lower 16 mantissa bits).
     ///
     /// Use this when you need to perform multiple lookups with the same table.
-    /// The prepared table can be reused with [`table_lookup_bf16_8`].
+    /// The prepared table can be reused with [`table_lookup_bf16_8`][Self::table_lookup_bf16_8].
     fn prepare_table_bf16_8(
         d: Self::Descriptor,
         table: &[f32; 8],
@@ -208,7 +208,7 @@ pub trait F32SimdVec:
     /// Performs fast approximate table lookup using a prepared BF16 table.
     ///
     /// This is the fastest lookup method when the same table is used multiple times.
-    /// Use [`prepare_table_bf16_8`] to create the prepared table.
+    /// Use [`prepare_table_bf16_8`][Self::prepare_table_bf16_8] to create the prepared table.
     ///
     /// # Panics
     /// May panic or produce undefined results if indices contain values outside 0..8 range.

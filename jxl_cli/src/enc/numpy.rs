@@ -90,7 +90,7 @@ fn numpy_bytes<Writer: Write>(image_data: &DecodeOutput, writer: &mut Writer) ->
     Ok(())
 }
 
-/// Converts image_data to a Vec<u8> in .npy format.
+/// Converts image_data to a `Vec<u8>` in .npy format.
 /// The data will be represented as little-endian 32-bit floats ('<f4').
 /// The shape of the NumPy array will be (num_frames, height, width, num_channels).
 ///
