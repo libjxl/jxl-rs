@@ -208,55 +208,80 @@ impl SaveStage {
             return Ok(());
         }
 
-        macro_rules! write_pixel {
-            ($px: expr, $endianness: expr, $y: expr, $x: expr) => {
-                let px = $px;
-                let px_bytes = if $endianness == Endianness::LittleEndian {
-                    px.to_le_bytes()
-                } else {
-                    px.to_be_bytes()
+        let nc = self.output_channels();
+        debug_assert_eq!(nc, data.len());
+        let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
+        let x0 = x0 as isize;
+        let y0 = y0 as isize;
+        // Compute the per-pixel step directly from the orientation rather
+        // than via `display_pixel((1, ..))`, which would underflow when
+        // `save_size.0 == 1` and the orientation flips x.
+        let (dx, dy) = self.orientation.display_row_step();
+
+        macro_rules! write_oriented {
+            ($ty:ty, $bps:literal, $endianness:expr) => {{
+                let off = RowBuffer::x0_offset::<$ty>() + conv_start;
+                let mut src_rows = [&[] as &[$ty]; 4];
+                for (c, d) in data.iter().enumerate() {
+                    src_rows[c] = &d.get_row::<$ty>(frame_y)[off..off + conv_len];
+                }
+                let to_bytes = {
+                    #[inline(always)]
+                    |px: $ty| -> [u8; $bps] {
+                        if $endianness == Endianness::LittleEndian {
+                            px.to_le_bytes()
+                        } else {
+                            px.to_be_bytes()
+                        }
+                    }
                 };
-                buf.row_mut($y)[$x..][..px_bytes.len()].copy_from_slice(&px_bytes);
-            };
+                macro_rules! write_nc {
+                    ($nc:literal) => {{
+                        const PIXEL_BYTES: usize = $nc * $bps;
+                        if dy == 0 {
+                            let out_row = buf.row_mut(y0 as usize);
+                            for i in 0..conv_len {
+                                let x = (x0 + dx * i as isize) as usize;
+                                let dst = &mut out_row[x * PIXEL_BYTES..][..PIXEL_BYTES];
+                                for (c, chunk) in
+                                    dst.as_chunks_mut::<$bps>().0.iter_mut().enumerate()
+                                {
+                                    *chunk = to_bytes(src_rows[c][i]);
+                                }
+                            }
+                        } else {
+                            let byte_x = (x0 as usize) * PIXEL_BYTES;
+                            for i in 0..conv_len {
+                                let y = (y0 + dy * i as isize) as usize;
+                                let dst = &mut buf.row_mut(y)[byte_x..byte_x + PIXEL_BYTES];
+                                for (c, chunk) in
+                                    dst.as_chunks_mut::<$bps>().0.iter_mut().enumerate()
+                                {
+                                    *chunk = to_bytes(src_rows[c][i]);
+                                }
+                            }
+                        }
+                    }};
+                }
+                match nc {
+                    1 => write_nc!(1),
+                    2 => write_nc!(2),
+                    3 => write_nc!(3),
+                    4 => write_nc!(4),
+                    _ => unreachable!(),
+                }
+            }};
         }
 
-        for (c, d) in data.iter().enumerate() {
-            let nc = self.output_channels();
-            let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
-            let x0 = x0 as isize;
-            let y0 = y0 as isize;
-            // Compute the per-pixel step directly from the orientation rather
-            // than via `display_pixel((1, ..))`, which would underflow when
-            // `save_size.0 == 1` and the orientation flips x.
-            let (dx, dy) = self.orientation.display_row_step();
-            match self.data_format {
-                JxlDataFormat::U8 { .. } => {
-                    let src_row = d.get_row::<u8>(frame_y);
-                    for ix in save_start.0..save_end.0 {
-                        let px = src_row[RowBuffer::x0_offset::<u8>() + ix];
-                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
-                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
-                        write_pixel!(px, Endianness::LittleEndian, y, x * nc + c);
-                    }
-                }
-                JxlDataFormat::U16 { endianness, .. } | JxlDataFormat::F16 { endianness, .. } => {
-                    let src_row = d.get_row::<u16>(frame_y);
-                    for ix in save_start.0..save_end.0 {
-                        let px = src_row[RowBuffer::x0_offset::<u16>() + ix];
-                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
-                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
-                        write_pixel!(px, endianness, y, (x * nc + c) * 2);
-                    }
-                }
-                JxlDataFormat::F32 { endianness, .. } => {
-                    let src_row = d.get_row::<f32>(frame_y);
-                    for ix in save_start.0..save_end.0 {
-                        let px = src_row[RowBuffer::x0_offset::<f32>() + ix];
-                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
-                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
-                        write_pixel!(px, endianness, y, (x * nc + c) * 4);
-                    }
-                }
+        match self.data_format {
+            JxlDataFormat::U8 { .. } => {
+                write_oriented!(u8, 1, Endianness::LittleEndian);
+            }
+            JxlDataFormat::U16 { endianness, .. } | JxlDataFormat::F16 { endianness, .. } => {
+                write_oriented!(u16, 2, endianness);
+            }
+            JxlDataFormat::F32 { endianness, .. } => {
+                write_oriented!(f32, 4, endianness);
             }
         }
         Ok(())

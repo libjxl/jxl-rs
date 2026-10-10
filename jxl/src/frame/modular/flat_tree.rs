@@ -63,9 +63,12 @@ pub(super) fn predict_flat(
                 // This bound check is elided by virtue of `property_buffer` having 256 elements.
                 let props = properties.map(|x| property_buffer[x as usize]);
                 let p0 = props[0] <= splitvals[0];
-                let p1 = props[1] <= splitvals[1];
-                let p2 = props[2] <= splitvals[2];
-                pos = child_id as usize + if p0 { 2 | p2 as usize } else { p1 as usize };
+                let p_child = if p0 {
+                    props[2] <= splitvals[2]
+                } else {
+                    props[1] <= splitvals[1]
+                };
+                pos = child_id as usize + ((p0 as usize) << 1) + (p_child as usize);
             }
             FlatTreeNode::Leaf {
                 predictor,

@@ -33,14 +33,18 @@ macro_rules! rows {
         } else {
             rect = ImageRectMut::<i32>::from_raw($buffers.data.as_rect_mut());
             match $y {
-                0 => (rect.row(0), &[], &[]),
+                0 => (&mut rect.row(0)[..$xsize], &[], &[]),
                 1 => {
                     let [row, row_top] = rect.distinct_rows_mut([1, 0]);
-                    (row, row_top, &[])
+                    (&mut row[..$xsize], &row_top[..$xsize], &[])
                 }
                 _ => {
                     let [row, row_top, row_toptop] = rect.distinct_rows_mut([$y, $y - 1, $y - 2]);
-                    (row, row_top, row_toptop)
+                    (
+                        &mut row[..$xsize],
+                        &row_top[..$xsize],
+                        &row_toptop[..$xsize],
+                    )
                 }
             }
         };
@@ -128,17 +132,33 @@ pub(super) trait ModularChannelDecoder {
             (prediction_data, last) =
                 do_decode_cold(self, row, row_top, row_toptop, (x, y), reader, br);
         }
-        for (x, r) in row.iter_mut().enumerate().skip(x0).take(x1 - x0) {
-            prediction_data = prediction_data.update_for_interior_row(
-                row_top,
-                row_toptop,
-                x,
-                last,
-                self.needs_toptop(),
-            );
-            let val = self.decode_one(prediction_data, (x, y), reader, br, histograms);
-            *r = val;
-            last = val;
+        if x0 < x1 {
+            let needs_toptop = self.needs_toptop();
+            let row_mid = &mut row[x0..x1];
+            let row_top_trr = &row_top[x0 + 2..x1 + 2];
+            if needs_toptop {
+                let row_toptop_mid = &row_toptop[x0..x1];
+                for (i, ((r, &trr), &tt)) in row_mid
+                    .iter_mut()
+                    .zip(row_top_trr)
+                    .zip(row_toptop_mid)
+                    .enumerate()
+                {
+                    let x = x0 + i;
+                    prediction_data = prediction_data.update_for_interior_row(last, trr, tt);
+                    let val = self.decode_one(prediction_data, (x, y), reader, br, histograms);
+                    *r = val;
+                    last = val;
+                }
+            } else {
+                for (i, (r, &trr)) in row_mid.iter_mut().zip(row_top_trr).enumerate() {
+                    let x = x0 + i;
+                    prediction_data = prediction_data.update_for_interior_row(last, trr, 0);
+                    let val = self.decode_one(prediction_data, (x, y), reader, br, histograms);
+                    *r = val;
+                    last = val;
+                }
+            }
         }
         for x in x1..xsize {
             do_decode_cold(self, row, row_top, row_toptop, (x, y), reader, br);
