@@ -444,9 +444,7 @@ impl ModularChannelDecoder for NoTreeZero {
         };
         debug_assert_eq!(row.len(), xsize);
         if self.multiplier == 1 && self.offset == 0 {
-            for r in row.iter_mut() {
-                *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
-            }
+            reader.read_signed_clustered_row(histograms, br, self.clustered_ctx, row);
         } else {
             for r in row.iter_mut() {
                 let residual =
