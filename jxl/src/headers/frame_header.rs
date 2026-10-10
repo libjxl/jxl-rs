@@ -666,11 +666,9 @@ impl FrameHeader {
     }
 
     pub fn postprocess(&mut self, nonserialized: &FrameHeaderNonserialized) {
-        if self.upsampling > 1 {
-            for i in 0..nonserialized.extra_channel_info.len() {
-                let dim_shift = nonserialized.extra_channel_info[i].dim_shift();
-                self.ec_upsampling[i] <<= dim_shift;
-            }
+        for i in 0..nonserialized.extra_channel_info.len() {
+            let dim_shift = nonserialized.extra_channel_info[i].dim_shift();
+            self.ec_upsampling[i] <<= dim_shift;
         }
         if self.encoding != Encoding::VarDCT || !nonserialized.xyb_encoded {
             self.x_qm_scale = 2;
@@ -678,16 +676,15 @@ impl FrameHeader {
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
-        if self.upsampling > 1
-            && let Some((dim_shift, effective_upsampling)) = nonserialized
-                .extra_channel_info
-                .iter()
-                .zip(&self.ec_upsampling)
-                .find_map(|(info, ec_upsampling)| {
-                    let effective_upsampling = ec_upsampling << info.dim_shift();
-                    ((effective_upsampling < self.upsampling) || (effective_upsampling > 8))
-                        .then_some((info.dim_shift(), effective_upsampling))
-                })
+        if let Some((dim_shift, effective_upsampling)) = nonserialized
+            .extra_channel_info
+            .iter()
+            .zip(&self.ec_upsampling)
+            .find_map(|(info, ec_upsampling)| {
+                let effective_upsampling = ec_upsampling << info.dim_shift();
+                ((effective_upsampling < self.upsampling) || (effective_upsampling > 8))
+                    .then_some((info.dim_shift(), effective_upsampling))
+            })
         {
             return Err(Error::InvalidEcUpsampling(
                 self.upsampling,
