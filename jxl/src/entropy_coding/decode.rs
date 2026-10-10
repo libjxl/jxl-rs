@@ -236,6 +236,33 @@ impl SymbolReader {
 
 impl SymbolReader {
     #[inline(always)]
+    pub fn has_lz77(&self) -> bool {
+        matches!(self.state, SymbolReaderState::Lz77(_))
+    }
+
+    #[inline(always)]
+    pub fn read_token_ans_no_lz77(
+        &mut self,
+        ans: &AnsCodes,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> u32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        self.ans_reader.read(ans, br, cluster)
+    }
+
+    #[inline(always)]
+    pub fn read_token_huffman_no_lz77(
+        &mut self,
+        hc: &HuffmanCodes,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> u32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        hc.read(br, cluster)
+    }
+
+    #[inline(always)]
     pub fn read_unsigned_inline(
         &mut self,
         histograms: &Histograms,

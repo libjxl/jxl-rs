@@ -9,7 +9,7 @@ use jxl_transforms::transform_map::*;
 use num_traits::Float;
 
 use crate::bit_reader::BitReader;
-use crate::entropy_coding::decode::{Histograms, SymbolReader};
+use crate::entropy_coding::decode::{Codes, Histograms, SymbolReader, unpack_signed};
 use crate::error::{Error, Result};
 use crate::frame::block_context_map::*;
 use crate::frame::color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS;
@@ -162,16 +162,65 @@ fn decode_channel_coeffs<T: CoeffStorage>(
     // `permutation[k]` inside the loop given `k < num_coeffs`.
     assert!(permutation.len() >= num_coeffs);
     let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
-    for k in num_blocks..num_coeffs {
-        if nonzeros == 0 {
-            break;
+    if !reader.has_lz77() {
+        match histograms.codes() {
+            Codes::Ans(ans) => {
+                for k in num_blocks..num_coeffs {
+                    if nonzeros == 0 {
+                        break;
+                    }
+                    let ctx =
+                        histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                    let cluster = histograms.map_context_to_cluster(ctx);
+                    let token = reader.read_token_ans_no_lz77(ans, br, cluster);
+                    if token == 0 {
+                        prev = 0;
+                        continue;
+                    }
+                    let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
+                    prev = if coeff != 0 { 1 } else { 0 };
+                    nonzeros -= prev;
+                    let coeff_index = permutation[k] as usize;
+                    current_coeffs[coeff_index].add_coeff(coeff);
+                }
+            }
+            Codes::Huffman(hc) => {
+                for k in num_blocks..num_coeffs {
+                    if nonzeros == 0 {
+                        break;
+                    }
+                    let ctx =
+                        histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                    let cluster = histograms.map_context_to_cluster(ctx);
+                    let token = reader.read_token_huffman_no_lz77(hc, br, cluster);
+                    if token == 0 {
+                        prev = 0;
+                        continue;
+                    }
+                    let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
+                    prev = if coeff != 0 { 1 } else { 0 };
+                    nonzeros -= prev;
+                    let coeff_index = permutation[k] as usize;
+                    current_coeffs[coeff_index].add_coeff(coeff);
+                }
+            }
         }
-        let ctx = histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-        let coeff = reader.read_signed_inline(histograms, br, ctx) << shift;
-        prev = if coeff != 0 { 1 } else { 0 };
-        nonzeros -= prev;
-        let coeff_index = permutation[k] as usize;
-        current_coeffs[coeff_index].add_coeff(coeff);
+    } else {
+        for k in num_blocks..num_coeffs {
+            if nonzeros == 0 {
+                break;
+            }
+            let ctx = histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+            let coeff = reader.read_signed_inline(histograms, br, ctx) << shift;
+            if coeff == 0 {
+                prev = 0;
+                continue;
+            }
+            prev = 1;
+            nonzeros -= 1;
+            let coeff_index = permutation[k] as usize;
+            current_coeffs[coeff_index].add_coeff(coeff);
+        }
     }
     if nonzeros != 0 {
         return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
