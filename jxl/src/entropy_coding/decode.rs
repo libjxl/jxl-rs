@@ -547,24 +547,21 @@ impl SymbolReader {
         }
     }
 
+    pub fn check_for_error(&self) -> Result<()> {
+        self.errors.check_for_error()
+    }
+
     pub fn checkpoint<const N: usize>(&self) -> Checkpoint<N> {
         let state = match &self.state {
             SymbolReaderState::None => StateCheckpoint::None,
             SymbolReaderState::Lz77(lz77_state) => {
                 let mut window = [0u32; N];
-                let start = (lz77_state.num_decoded & Lz77State::WINDOW_MASK) as usize;
-                let end = ((lz77_state.num_decoded + N as u32) & Lz77State::WINDOW_MASK) as usize;
-                if start < end {
-                    let window_first = &lz77_state.window[start..];
-                    let actual_size = window_first.len().min(N);
-                    window[..actual_size].copy_from_slice(&window_first[..actual_size]);
-                } else {
-                    let window_first = &lz77_state.window[start..];
-                    let first_len = window_first
-                        .len()
-                        .min((1 << Lz77State::LOG_WINDOW_SIZE) - start);
-                    window[..first_len].copy_from_slice(&window_first[..first_len]);
-                    window[N - end..].copy_from_slice(&lz77_state.window[..end]);
+                for (i, slot) in window.iter_mut().enumerate() {
+                    let idx = ((lz77_state.num_decoded.wrapping_add(i as u32))
+                        & Lz77State::WINDOW_MASK) as usize;
+                    if let Some(&val) = lz77_state.window.get(idx) {
+                        *slot = val;
+                    }
                 }
                 StateCheckpoint::Lz77 {
                     num_to_copy: lz77_state.num_to_copy,
@@ -599,18 +596,11 @@ impl SymbolReader {
                     panic!("checkpoint type mismatch");
                 };
 
-                let num_rewind = lz77_state.num_decoded - num_decoded;
-                let rewind_window = &window[..num_rewind as usize];
-
-                let start = (num_decoded & Lz77State::WINDOW_MASK) as usize;
-                let end = ((num_decoded + num_rewind) & Lz77State::WINDOW_MASK) as usize;
-                if start < end {
-                    lz77_state.window[start..end].copy_from_slice(rewind_window);
-                } else {
-                    let window_first = &mut lz77_state.window[start..];
-                    let first_len = window_first.len();
-                    window_first.copy_from_slice(&rewind_window[..first_len]);
-                    lz77_state.window[..end].copy_from_slice(&rewind_window[first_len..]);
+                let num_rewind = lz77_state.num_decoded.wrapping_sub(num_decoded);
+                for (i, &val) in window[..num_rewind as usize].iter().enumerate() {
+                    let idx =
+                        ((num_decoded.wrapping_add(i as u32)) & Lz77State::WINDOW_MASK) as usize;
+                    lz77_state.window[idx] = val;
                 }
 
                 lz77_state.num_to_copy = num_to_copy;

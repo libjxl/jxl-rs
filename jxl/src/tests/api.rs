@@ -1643,3 +1643,18 @@ fn aux_box_seek() {
     assert!(decoder.aux_boxes(ty_foo).is_empty());
     assert_eq!(decoder.aux_boxes(ty_bar).len(), 2);
 }
+
+#[test]
+fn test_fuzzer_icc_lz77_restore_empty_rewind() {
+    let data = include_bytes!("../../tests/testdata/icc_lz77_restore_empty_rewind.jxl");
+    for chunk_size in 1..=data.len() {
+        let _ = decode::<f32>(
+            data,
+            DecodeParams {
+                chunk_size,
+                do_flush: true,
+                ..Default::default()
+            },
+        );
+    }
+}
