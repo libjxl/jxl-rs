@@ -96,11 +96,13 @@ impl Frame {
                 let row = lf_rows[c].get_row_mut::<f32>(bufy);
                 let srow = src[c].row(sy);
                 let off = RowBuffer::x0_offset::<f32>();
-                row[off..off + len].copy_from_slice(&srow[x0..x1]);
-                row[off - 1] = srow[mirror(x0 as isize - 1, lf_size.0)];
-                row[off - 2] = srow[mirror(x0 as isize - 2, lf_size.0)];
-                row[off + len] = srow[mirror(x1 as isize, lf_size.0)];
-                row[off + len + 1] = srow[mirror(x1 as isize + 1, lf_size.0)];
+                for x in 0..len {
+                    row[off + x] = srow[x0 + x].to_f32();
+                }
+                row[off - 1] = srow[mirror(x0 as isize - 1, lf_size.0)].to_f32();
+                row[off - 2] = srow[mirror(x0 as isize - 2, lf_size.0)].to_f32();
+                row[off + len] = srow[mirror(x1 as isize, lf_size.0)].to_f32();
+                row[off + len + 1] = srow[mirror(x1 as isize + 1, lf_size.0)].to_f32();
             }
 
             if yy < y0 + 4 {

@@ -38,6 +38,23 @@ impl<D: SimdDescriptor> VecStore<D> for f32 {
     }
 }
 
+impl<D: SimdDescriptor> VecLoad<D> for crate::util::f16 {
+    type Vec = D::F32Vec;
+    const LEN: usize = D::F32Vec::LEN;
+
+    #[inline(always)]
+    fn load(d: D, slice: &[crate::util::f16]) -> D::F32Vec {
+        D::F32Vec::load_f16_bits(d, crate::util::f16::slice_to_bits(slice))
+    }
+}
+
+impl<D: SimdDescriptor> VecStore<D> for crate::util::f16 {
+    #[inline(always)]
+    fn store(_d: D, vec: D::F32Vec, slice: &mut [crate::util::f16]) {
+        vec.store_f16_bits(crate::util::f16::slice_to_bits_mut(slice));
+    }
+}
+
 impl<D: SimdDescriptor> VecLoad<D> for i32 {
     type Vec = D::I32Vec;
     const LEN: usize = D::I32Vec::LEN;

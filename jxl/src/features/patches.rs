@@ -765,7 +765,7 @@ impl PatchesDictionary {
             let ref_pos_y = ref_pos.y0 + row_pos.1 - pos.y;
 
             let ref_frame = reference_frames[ref_pos.reference].as_ref().unwrap();
-            let mut fg = SmallVec::<&[f32], 8>::new();
+            let mut fg = SmallVec::<&[crate::util::f16], 8>::new();
             for c in 0..3 {
                 fg.push(&ref_frame.frame[c].row(ref_pos_y)[ref_x0..ref_x1]);
             }
@@ -1515,7 +1515,7 @@ mod tests {
         use crate::image::Image;
         use crate::tests::assert_close;
 
-        const MAX_ABS_DELTA: f32 = 1e-6; // Adjusted for typical f32 comparisons
+        const MAX_ABS_DELTA: f32 = 1e-3; // Adjusted for f16 reference frames
 
         fn create_reference_frame(
             width: usize,
@@ -1524,7 +1524,7 @@ mod tests {
         ) -> Result<Option<ReferenceFrame>> {
             let mut frame_channels = Vec::new();
             for v in channel_values.iter() {
-                let img = Image::new_with_value((width, height), *v)?;
+                let img = Image::new_with_value((width, height), crate::util::f16::from_f32(*v))?;
                 frame_channels.push(img);
             }
             Ok(Some(ReferenceFrame {
@@ -1539,7 +1539,9 @@ mod tests {
             let mut frame_channels = Vec::new();
             for v in rows.iter() {
                 let mut img = Image::new((N, 1))?;
-                img.row_mut(0).copy_from_slice(v);
+                for (dst, &src) in img.row_mut(0).iter_mut().zip(v.iter()) {
+                    *dst = crate::util::f16::from_f32(src);
+                }
                 frame_channels.push(img);
             }
             Ok(Some(ReferenceFrame {

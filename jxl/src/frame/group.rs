@@ -412,20 +412,31 @@ fn dequant_block<D: SimdDescriptor>(
 }
 
 #[inline(always)]
-fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<f32>, ys: usize) {
+fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<crate::util::f16>, ys: usize) {
     for (y, dst) in lf.chunks_exact_mut(XS).take(ys).enumerate() {
-        dst.copy_from_slice(&rect.row(y)[..XS]);
+        for (d, s) in dst.iter_mut().zip(&rect.row(y)[..XS]) {
+            *d = s.to_f32();
+        }
     }
 }
 
 #[inline(always)]
-fn copy_block_rows<const W: usize>(
+fn copy_block_rows<const W: usize, D: SimdDescriptor>(
+    d: D,
     src: &[f32],
-    output_rect: &mut crate::image::ImageRectMut<f32>,
+    output_rect: &mut crate::image::ImageRectMut<crate::util::f16>,
     h: usize,
 ) {
-    for (i, chunk) in src.chunks_exact(W).take(h).enumerate() {
-        output_rect.row(i)[..W].copy_from_slice(chunk);
+    let simd_width = D::F32Vec::LEN;
+    const { assert!(W.is_multiple_of(D::F32Vec::LEN)) };
+    for (i, row_chunk) in src.chunks_exact(W).take(h).enumerate() {
+        let out_row = crate::util::f16::slice_to_bits_mut(&mut output_rect.row(i)[..W]);
+        for (in_vec, out_vec) in row_chunk
+            .chunks_exact(simd_width)
+            .zip(out_row.chunks_exact_mut(simd_width))
+        {
+            D::F32Vec::load(d, in_vec).store_f16_bits(out_vec);
+        }
     }
 }
 
@@ -436,7 +447,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     quant_biases: &[f32; 4],
     x_dm_multiplier: f32,
     b_dm_multiplier: f32,
-    pixels: &mut [Image<f32>; 3],
+    pixels: &mut [Image<crate::util::f16>; 3],
     scratch: &mut [f32],
     inv_global_scale: f32,
     transform_buffer: &mut [Vec<f32>; 3],
@@ -449,7 +460,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     x_cc_mul: f32,
     b_cc_mul: f32,
     raw_quant: u32,
-    lf_rects: &[ImageRect<f32>; 3],
+    lf_rects: &[ImageRect<crate::util::f16>; 3],
     transform_type: HfTransformType,
     block_rect: Rect,
     num_blocks: usize,
@@ -489,7 +500,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         let lf = &mut scratch[..];
         let rect = &lf_rects[c];
         match (xs, ys) {
-            (1, 1) => lf[0] = rect.row(0)[0],
+            (1, 1) => lf[0] = rect.row(0)[0].to_f32(),
             (1, _) => copy_lf_rows::<1>(lf, rect, ys),
             (2, _) => copy_lf_rows::<2>(lf, rect, ys),
             (4, _) => copy_lf_rows::<4>(lf, rect, ys),
@@ -510,12 +521,12 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         let h = downsampled_rect.size.1;
         let src = &transform_buffer[c];
         match downsampled_rect.size.0 {
-            8 => copy_block_rows::<8>(src, &mut output_rect, h),
-            16 => copy_block_rows::<16>(src, &mut output_rect, h),
-            32 => copy_block_rows::<32>(src, &mut output_rect, h),
-            64 => copy_block_rows::<64>(src, &mut output_rect, h),
-            128 => copy_block_rows::<128>(src, &mut output_rect, h),
-            256 => copy_block_rows::<256>(src, &mut output_rect, h),
+            8 => copy_block_rows::<8, _>(d.maybe_downgrade_256bit(), src, &mut output_rect, h),
+            16 => copy_block_rows::<16, _>(d, src, &mut output_rect, h),
+            32 => copy_block_rows::<32, _>(d, src, &mut output_rect, h),
+            64 => copy_block_rows::<64, _>(d, src, &mut output_rect, h),
+            128 => copy_block_rows::<128, _>(d, src, &mut output_rect, h),
+            256 => copy_block_rows::<256, _>(d, src, &mut output_rect, h),
             _ => unreachable!(),
         }
     }
@@ -530,7 +541,7 @@ simd_function!(
         quant_biases: &[f32; 4],
         x_dm_multiplier: f32,
         b_dm_multiplier: f32,
-        pixels: &mut [Image<f32>; 3],
+        pixels: &mut [Image<crate::util::f16>; 3],
         scratch: &mut [f32],
         inv_global_scale: f32,
         transform_buffer: &mut [Vec<f32>; 3],
@@ -543,7 +554,7 @@ simd_function!(
         x_cc_mul: f32,
         b_cc_mul: f32,
         raw_quant: u32,
-        lf_rects: &[ImageRect<f32>; 3],
+        lf_rects: &[ImageRect<crate::util::f16>; 3],
         transform_type: HfTransformType,
         block_rect: Rect,
         num_blocks: usize,
@@ -644,9 +655,9 @@ pub fn decode_vardct_group(
     lf_global: &LfGlobalState,
     hf_global: &HfGlobalState,
     hf_meta: &HfMetadata,
-    lf_image: &[Image<f32>; 3],
+    lf_image: &[Image<crate::util::f16>; 3],
     quant_biases: &[f32; 4],
-    pixels: &mut Option<[Image<f32>; 3]>,
+    pixels: &mut Option<[Image<crate::util::f16>; 3]>,
     buffers: &mut VarDctBuffers,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);

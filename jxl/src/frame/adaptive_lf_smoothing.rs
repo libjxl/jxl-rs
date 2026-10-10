@@ -21,19 +21,19 @@ fn compute_pixel_channel(
     dc_factor: f32,
     gap: f32,
     x: usize,
-    row_top: &[f32],
-    row: &[f32],
-    row_bottom: &[f32],
+    row_top: &[crate::util::f16],
+    row: &[crate::util::f16],
+    row_bottom: &[crate::util::f16],
 ) -> (f32, f32, f32) {
-    let tl = row_top[x - 1];
-    let tc = row_top[x];
-    let tr = row_top[x + 1];
-    let ml = row[x - 1];
-    let mc = row[x];
-    let mr = row[x + 1];
-    let bl = row_bottom[x - 1];
-    let bc = row_bottom[x];
-    let br = row_bottom[x + 1];
+    let tl = row_top[x - 1].to_f32();
+    let tc = row_top[x].to_f32();
+    let tr = row_top[x + 1].to_f32();
+    let ml = row[x - 1].to_f32();
+    let mc = row[x].to_f32();
+    let mr = row[x + 1].to_f32();
+    let bl = row_bottom[x - 1].to_f32();
+    let bc = row_bottom[x].to_f32();
+    let br = row_bottom[x + 1].to_f32();
     let corner = tl + tr + bl + br;
     let side = ml + mr + tc + bc;
     let sm = corner * W_CORNER + side * W_SIDE + mc * W_CENTER;
@@ -44,16 +44,16 @@ fn compute_pixel_channel(
 pub fn adaptive_lf_smoothing(
     lf_factors: [f32; 3],
     frame_header: &FrameHeader,
-    lf_image: &mut [Image<f32>; 3],
+    lf_image: &mut [Image<crate::util::f16>; 3],
     parallel_runner: &mut dyn JxlParallelRunner,
 ) -> Result<()> {
     let (xsize, ysize) = lf_image[0].size();
     if ysize <= 2 || xsize <= 2 {
         return Ok(());
     }
-    let mut smoothed0 = Image::<f32>::new((xsize, ysize))?;
-    let mut smoothed1 = Image::<f32>::new((xsize, ysize))?;
-    let mut smoothed2 = Image::<f32>::new((xsize, ysize))?;
+    let mut smoothed0 = Image::<crate::util::f16>::new((xsize, ysize))?;
+    let mut smoothed1 = Image::<crate::util::f16>::new((xsize, ysize))?;
+    let mut smoothed2 = Image::<crate::util::f16>::new((xsize, ysize))?;
 
     let splitter0 = OutputChannelSplitter::from_image(&mut smoothed0);
     let splitter1 = OutputChannelSplitter::from_image(&mut smoothed1);
@@ -63,15 +63,15 @@ pub fn adaptive_lf_smoothing(
 
     parallel_runner.run_ordered(num_lf_groups, None, &|g| {
         let r = frame_header.lf_group_rect(g);
-        let mut out_ref_0 = splitter0.borrow_typed_rect::<f32>(r);
-        let mut out_ref_1 = splitter1.borrow_typed_rect::<f32>(r);
-        let mut out_ref_2 = splitter2.borrow_typed_rect::<f32>(r);
+        let mut out_ref_0 = splitter0.borrow_typed_rect::<crate::util::f16>(r);
+        let mut out_ref_1 = splitter1.borrow_typed_rect::<crate::util::f16>(r);
+        let mut out_ref_2 = splitter2.borrow_typed_rect::<crate::util::f16>(r);
 
         for ly in 0..r.size.1 {
             let gy = r.origin.1 + ly;
-            let row_0 = out_ref_0.typed_row_mut::<f32>(ly);
-            let row_1 = out_ref_1.typed_row_mut::<f32>(ly);
-            let row_2 = out_ref_2.typed_row_mut::<f32>(ly);
+            let row_0 = out_ref_0.typed_row_mut::<crate::util::f16>(ly);
+            let row_1 = out_ref_1.typed_row_mut::<crate::util::f16>(ly);
+            let row_2 = out_ref_2.typed_row_mut::<crate::util::f16>(ly);
 
             for lx in 0..r.size.0 {
                 let gx = r.origin.0 + lx;
@@ -109,9 +109,9 @@ pub fn adaptive_lf_smoothing(
                     lf_image[2].row(gy + 1),
                 );
                 let factor = (3.0 - 4.0 * gap).max(0.0);
-                row_0[lx] = (sm_x - mc_x) * factor + mc_x;
-                row_1[lx] = (sm_y - mc_y) * factor + mc_y;
-                row_2[lx] = (sm_b - mc_b) * factor + mc_b;
+                row_0[lx] = crate::util::f16::from_f32((sm_x - mc_x) * factor + mc_x);
+                row_1[lx] = crate::util::f16::from_f32((sm_y - mc_y) * factor + mc_y);
+                row_2[lx] = crate::util::f16::from_f32((sm_b - mc_b) * factor + mc_b);
             }
         }
         Ok(())

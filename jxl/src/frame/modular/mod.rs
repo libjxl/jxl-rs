@@ -1016,16 +1016,16 @@ fn dequant_lf_impl<T: ImageDataType + Into<i32> + Copy>(
             let quant_row_x = input[1].row(y);
             let quant_row_y = input[0].row(y);
             let quant_row_b = input[2].row(y);
-            let dec_row_x = lf0.typed_row_mut::<f32>(y);
-            let dec_row_y = lf1.typed_row_mut::<f32>(y);
-            let dec_row_b = lf2.typed_row_mut::<f32>(y);
+            let dec_row_x = lf0.typed_row_mut::<crate::util::f16>(y);
+            let dec_row_y = lf1.typed_row_mut::<crate::util::f16>(y);
+            let dec_row_b = lf2.typed_row_mut::<crate::util::f16>(y);
             for x in 0..r.size.0 {
                 let in_x = quant_row_x[x].into() as f32 * fac_x;
                 let in_y = quant_row_y[x].into() as f32 * fac_y;
                 let in_b = quant_row_b[x].into() as f32 * fac_b;
-                dec_row_y[x] = in_y;
-                dec_row_x[x] = in_y * cfl_fac_x + in_x;
-                dec_row_b[x] = in_y * cfl_fac_b + in_b;
+                dec_row_y[x] = crate::util::f16::from_f32(in_y);
+                dec_row_x[x] = crate::util::f16::from_f32(in_y * cfl_fac_x + in_x);
+                dec_row_b[x] = crate::util::f16::from_f32(in_y * cfl_fac_b + in_b);
             }
         }
     } else {
@@ -1038,9 +1038,9 @@ fn dequant_lf_impl<T: ImageDataType + Into<i32> + Copy>(
             let ch = &input[if c < 2 { c ^ 1 } else { c }];
             for y in 0..rect_size.1 {
                 let quant_row = ch.row(y);
-                let row = lf[c].typed_row_mut::<f32>(y);
+                let row = lf[c].typed_row_mut::<crate::util::f16>(y);
                 for (x, val) in quant_row.iter().enumerate() {
-                    row[x] = (*val).into() as f32 * fac;
+                    row[x] = crate::util::f16::from_f32((*val).into() as f32 * fac);
                 }
             }
         }

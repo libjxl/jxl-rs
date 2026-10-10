@@ -520,6 +520,67 @@ impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
     }
 }
 
+simd_function!(
+    f16_to_f32_simd_dispatch,
+    d: D,
+    fn f16_to_f32_simd(
+        input_rows: &Channels<crate::util::f16>,
+        output_rows: &mut ChannelsMut<f32>,
+        xsize: usize,
+    ) {
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<1, 1, 0>(),
+            output_rows.view::<1, 1, 1>(),
+            |_x, inv, outv| {
+                let val = inv.load::<_, 0>(d, 0, 0);
+                outv.store::<_, 0>(d, 0, val);
+            },
+        );
+    }
+);
+
+/// Stage that converts f16 (half-precision float) values to f32 values.
+pub struct ConvertF16ToF32Stage {
+    channel: usize,
+}
+
+impl ConvertF16ToF32Stage {
+    pub fn new(channel: usize) -> ConvertF16ToF32Stage {
+        ConvertF16ToF32Stage { channel }
+    }
+}
+
+impl std::fmt::Display for ConvertF16ToF32Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "convert F16 to F32 in channel {}", self.channel)
+    }
+}
+
+impl RenderPipelineInOutStage for ConvertF16ToF32Stage {
+    type InputT = crate::util::f16;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<crate::util::f16>,
+        output_rows: &mut ChannelsMut<f32>,
+        _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
+    ) {
+        f16_to_f32_simd_dispatch(input_rows, output_rows, xsize);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use test_log::test;

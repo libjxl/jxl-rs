@@ -50,8 +50,8 @@ use crate::util::{CeilLog2, PerThreadStorage, ShiftRightCeil, Xorshift128Plus, m
 
 fn upsample_lf_group(
     group: usize,
-    pixels: &mut [Image<f32>; 3],
-    lf_image: &[Image<f32>; 3],
+    pixels: &mut [Image<crate::util::f16>; 3],
+    lf_image: &[Image<crate::util::f16>; 3],
     header: &FrameHeader,
     factors: &CustomTransformData,
     buffers: &mut VarDctBuffers,
@@ -118,12 +118,16 @@ fn upsample_lf_group(
                 let row = lf_img.row(to_storage_y(iy));
 
                 let storage = input_rows_storage.get_row_mut::<f32>((dy + 2) as usize);
-                storage[x0_off - 2] = row[ix0];
-                storage[x0_off - 1] = row[ix1];
-                storage[x0_off..x0_off + num_blocks]
-                    .copy_from_slice(&row[phys_x0..phys_x0 + num_blocks]);
-                storage[x0_off + num_blocks] = row[ix2];
-                storage[x0_off + num_blocks + 1] = row[ix3];
+                storage[x0_off - 2] = row[ix0].to_f32();
+                storage[x0_off - 1] = row[ix1].to_f32();
+                for (dst, src) in storage[x0_off..x0_off + num_blocks]
+                    .iter_mut()
+                    .zip(&row[phys_x0..phys_x0 + num_blocks])
+                {
+                    *dst = src.to_f32();
+                }
+                storage[x0_off + num_blocks] = row[ix2].to_f32();
+                storage[x0_off + num_blocks + 1] = row[ix3].to_f32();
             }
 
             let input_ref = &*input_rows_storage;
@@ -149,8 +153,12 @@ fn upsample_lf_group(
                 let out_y = base_y + i;
                 if out_y < out_height {
                     let buf = temp_out_buf.get_row::<f32>(i);
-                    out_img.row_mut(out_y)[..out_width]
-                        .copy_from_slice(&buf[x0_off..x0_off + out_width]);
+                    for (dst, &src) in out_img.row_mut(out_y)[..out_width]
+                        .iter_mut()
+                        .zip(&buf[x0_off..x0_off + out_width])
+                    {
+                        *dst = crate::util::f16::from_f32(src);
+                    }
                 }
             }
         }
@@ -762,7 +770,7 @@ impl Frame {
         };
         let hf_meta = self.hf_meta.as_ref().unwrap();
 
-        let lf_image: &[Image<f32>; 3] = if self.header.has_lf_frame() {
+        let lf_image: &[Image<crate::util::f16>; 3] = if self.header.has_lf_frame() {
             self.decoder_state.lf_frames[self.header.lf_level as usize]
                 .as_ref()
                 .unwrap()

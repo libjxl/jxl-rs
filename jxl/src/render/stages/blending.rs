@@ -23,7 +23,7 @@ pub struct BlendingStage {
     pub ec_patch_blending_info: Vec<PatchBlending>,
     pub extra_channels: Vec<ExtraChannelInfo>,
     pub reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
-    pub zeros: Vec<f32>,
+    pub zeros: Vec<crate::util::f16>,
 }
 
 struct BlendingScratch {
@@ -88,7 +88,7 @@ impl BlendingStage {
             ec_patch_blending_info,
             extra_channels: file_header.image_metadata.extra_channel_info.clone(),
             reference_frames,
-            zeros: vec![0f32; image_size.0],
+            zeros: vec![crate::util::f16::ZERO; image_size.0],
         })
     }
 }
@@ -146,8 +146,8 @@ impl RenderPipelineInPlaceStage for BlendingStage {
 
         let total_channels = 3 + num_ec;
 
-        let zeros_slice: &[f32] = self.zeros.as_slice();
-        let mut fg_buf: ChannelVec<&[f32]> = ChannelVec::new();
+        let zeros_slice: &[crate::util::f16] = self.zeros.as_slice();
+        let mut fg_buf: ChannelVec<&[crate::util::f16]> = ChannelVec::new();
         for _ in 0..total_channels {
             fg_buf.push(zeros_slice);
         }

@@ -549,7 +549,7 @@ impl Frame {
                 };
                 channel_types.push((modular_ty, bd));
             } else {
-                channel_types.push((DataTypeTag::F32, None));
+                channel_types.push((DataTypeTag::F16, None));
             }
         }
         for i in 0..frame_header.num_extra_channels as usize {
@@ -567,6 +567,12 @@ impl Frame {
             frame_header.log_group_dim(),
             buffer_recycler,
         );
+
+        if frame_header.encoding != Encoding::Modular {
+            for i in 0..3 {
+                pipeline = pipeline.add_inout_stage(ConvertF16ToF32Stage::new(i));
+            }
+        }
 
         if frame_header.encoding == Encoding::Modular
             && decoder_state.file_header.image_metadata.xyb_encoded
@@ -710,7 +716,7 @@ impl Frame {
                     Orientation::Identity,
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
-                    JxlDataFormat::f32(),
+                    JxlDataFormat::f16(),
                     false,
                 );
             }
@@ -722,7 +728,7 @@ impl Frame {
                     Orientation::Identity,
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
-                    JxlDataFormat::f32(),
+                    JxlDataFormat::f16(),
                     false,
                 );
             }
@@ -776,7 +782,7 @@ impl Frame {
                     Orientation::Identity,
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
-                    JxlDataFormat::f32(),
+                    JxlDataFormat::f16(),
                     false,
                 );
             }

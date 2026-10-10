@@ -78,7 +78,7 @@ pub struct HfGlobalState {
 
 #[derive(Debug)]
 pub struct ReferenceFrame {
-    pub frame: Vec<Image<f32>>,
+    pub frame: Vec<Image<crate::util::f16>>,
     pub saved_before_color_transform: bool,
 }
 
@@ -120,7 +120,7 @@ impl ReferenceFrame {
 pub struct DecoderState {
     pub(super) file_header: FileHeader,
     pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
-    pub(super) lf_frames: [Option<[Image<f32>; 3]>; Self::NUM_LF_FRAMES],
+    pub(super) lf_frames: [Option<[Image<crate::util::f16>; 3]>; Self::NUM_LF_FRAMES],
     pub render_spotcolors: bool,
     #[cfg(test)]
     pub use_simple_pipeline: bool,
@@ -209,7 +209,7 @@ pub struct LfImageSplitter<'a> {
 }
 
 impl<'a> LfImageSplitter<'a> {
-    pub fn new(lf_image: &'a mut [Image<f32>; 3]) -> Self {
+    pub fn new(lf_image: &'a mut [Image<crate::util::f16>; 3]) -> Self {
         let [img0, img1, img2] = lf_image;
         Self {
             channels: [
@@ -221,7 +221,7 @@ impl<'a> LfImageSplitter<'a> {
     }
 
     pub fn borrow_rect(&self, channel: usize, rect: Rect) -> OutputChannelRef<'a, '_> {
-        self.channels[channel].borrow_typed_rect::<f32>(rect)
+        self.channels[channel].borrow_typed_rect::<crate::util::f16>(rect)
     }
 }
 
@@ -312,7 +312,7 @@ pub struct Frame {
     color_channels: usize,
     pub(super) lf_global: Option<LfGlobalState>,
     pub(super) hf_global: Option<HfGlobalState>,
-    pub(super) lf_image: Option<[Image<f32>; 3]>,
+    pub(super) lf_image: Option<[Image<crate::util::f16>; 3]>,
     pub(super) hf_meta: Option<HfMetadata>,
     pub(super) decoder_state: DecoderState,
     #[cfg(test)]
@@ -321,8 +321,8 @@ pub struct Frame {
     render_pipeline: Option<Box<dyn std::any::Any + Send + Sync>>,
     #[cfg(not(test))]
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
-    reference_frame_data: Option<Vec<Image<f32>>>,
-    lf_frame_data: Option<[Image<f32>; 3]>,
+    reference_frame_data: Option<Vec<Image<crate::util::f16>>>,
+    lf_frame_data: Option<[Image<crate::util::f16>; 3]>,
     section0_render_up_to_date: bool,
     /// Reusable buffers for VarDCT group decoding.
     vardct_buffers: PerThreadStorage<group::VarDctBuffers>,
