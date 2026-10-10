@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::bit_reader::BitReader;
 use crate::color::tf::{
     hlg_system_gamma, hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear_precise,
 };
@@ -14,6 +15,8 @@ pub use crate::headers::color_encoding::RenderingIntent;
 use crate::headers::color_encoding::{
     ColorEncoding, ColorSpace, Primaries, TransferFunction, WhitePoint,
 };
+use crate::headers::encodings::{Empty, UnconditionalCoder};
+use crate::icc::IncrementalIccReader;
 use crate::util::{Matrix3x3, Vector3, inv_3x3_matrix, mul_3x3_matrix, mul_3x3_vector};
 
 // Bradford matrices for chromatic adaptation
@@ -1228,6 +1231,28 @@ pub enum JxlColorProfile {
 }
 
 impl JxlColorProfile {
+    /// Decodes the structured color encoding and JPEG XL-compressed ICC field.
+    /// A structured encoding selects a simple profile unless it requests ICC;
+    /// without one, `encoded_icc` is decoded as an ICC-only profile. Fields are
+    /// decoded independently, so an unused malformed ICC field is ignored.
+    /// Required fields must contain complete byte-aligned streams with only
+    /// zero padding; missing or malformed fields are rejected.
+    pub fn from_raw_bytes(color_encoding: Option<&[u8]>, encoded_icc: &[u8]) -> Result<Self> {
+        if let Some(data) = color_encoding {
+            let mut reader = BitReader::new(data);
+            let encoding = ColorEncoding::read_unconditional(&(), &mut reader, &Empty {})?;
+            finish_bit_reader(&mut reader, data.len(), Error::InvalidColorEncoding)?;
+
+            if encoding.want_icc {
+                return decode_icc_profile(encoded_icc).map(Self::Icc);
+            }
+
+            return Ok(Self::Simple(JxlColorEncoding::from_internal(&encoding)?));
+        }
+
+        decode_icc_profile(encoded_icc).map(Self::Icc)
+    }
+
     /// Returns the ICC profile, panicking if unavailable.
     ///
     /// # Panics
@@ -1386,6 +1411,29 @@ impl JxlColorProfile {
             }
         }
     }
+}
+
+fn decode_icc_profile(encoded_icc: &[u8]) -> Result<Vec<u8>> {
+    if encoded_icc.is_empty() {
+        return Err(Error::InvalidColorEncoding);
+    }
+
+    let mut reader = BitReader::new(encoded_icc);
+    let mut icc = IncrementalIccReader::new(&mut reader)?;
+    while icc.remaining() != 0 {
+        icc.read_one(&mut reader)?;
+    }
+    let profile = icc.finalize(&mut reader)?;
+    finish_bit_reader(&mut reader, encoded_icc.len(), Error::InvalidIccStream)?;
+    Ok(profile)
+}
+
+fn finish_bit_reader(reader: &mut BitReader, data_len: usize, trailing_error: Error) -> Result<()> {
+    reader.jump_to_byte_boundary()?;
+    if reader.total_bits_read() / 8 != data_len {
+        return Err(trailing_error);
+    }
+    Ok(())
 }
 
 impl fmt::Display for JxlColorProfile {
@@ -1870,6 +1918,8 @@ fn create_icc_noop_btoa_tag(tags: &mut Vec<u8>) -> Result<(), Error> {
 mod test {
     use super::*;
 
+    const ENCODED_SRGB_ICC: &[u8] = include_bytes!("testdata/encoded_srgb.icc");
+
     #[test]
     fn test_md5() {
         // Test vectors
@@ -2263,5 +2313,95 @@ mod test {
         assert!(!icc.is_empty());
         assert!(icc.windows(4).any(|w| w == b"mAB "));
         assert!(icc.windows(4).any(|w| w == b"mBA "));
+    }
+
+    #[test]
+    fn test_from_raw_bytes_decodes_structured_color_and_ignores_unused_icc() {
+        let profile = JxlColorProfile::from_raw_bytes(Some(&[0x50, 0xb4, 0]), &[0]).unwrap();
+        assert_eq!(
+            profile,
+            JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+                white_point: JxlWhitePoint::D65,
+                primaries: JxlPrimaries::SRGB,
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: RenderingIntent::Relative,
+            })
+        );
+    }
+
+    #[test]
+    fn test_from_raw_bytes_decodes_icc_only_and_want_icc_fields() {
+        let expected = JxlColorEncoding::srgb(false)
+            .maybe_create_profile()
+            .unwrap()
+            .unwrap();
+        let JxlColorProfile::Icc(profile) =
+            JxlColorProfile::from_raw_bytes(None, ENCODED_SRGB_ICC).unwrap()
+        else {
+            panic!("an absent structured encoding must select the ICC field");
+        };
+        assert_eq!(profile, expected);
+
+        assert_eq!(
+            JxlColorProfile::from_raw_bytes(Some(&[0x02]), ENCODED_SRGB_ICC).unwrap(),
+            JxlColorProfile::Icc(expected.clone())
+        );
+
+        for color_encoding in [[0x0a], [0x1a]] {
+            assert!(
+                JxlColorProfile::from_raw_bytes(Some(&color_encoding), ENCODED_SRGB_ICC).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_raw_bytes_rejects_missing_and_invalid_required_icc() {
+        assert!(matches!(
+            JxlColorProfile::from_raw_bytes(None, &[]),
+            Err(Error::InvalidColorEncoding)
+        ));
+        assert!(JxlColorProfile::from_raw_bytes(Some(&[]), ENCODED_SRGB_ICC).is_err());
+        assert!(matches!(
+            JxlColorProfile::from_raw_bytes(Some(&[0x02]), &[]),
+            Err(Error::InvalidColorEncoding)
+        ));
+        assert!(JxlColorProfile::from_raw_bytes(Some(&[0x02]), &[0]).is_err());
+
+        for color_encoding in [[0x2a], [0x0e], [0x08], [0x18]] {
+            assert!(
+                JxlColorProfile::from_raw_bytes(Some(&color_encoding), ENCODED_SRGB_ICC).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_raw_bytes_rejects_nonzero_padding_and_trailing_bytes() {
+        let mut structured_nonzero_padding = [0x50, 0xb4, 0];
+        structured_nonzero_padding[2] = 2;
+        assert!(matches!(
+            JxlColorProfile::from_raw_bytes(Some(&structured_nonzero_padding), &[]),
+            Err(Error::NonZeroPadding)
+        ));
+        assert!(matches!(
+            JxlColorProfile::from_raw_bytes(Some(&[0x50, 0xb4, 0, 0]), &[]),
+            Err(Error::InvalidColorEncoding)
+        ));
+        assert!(matches!(
+            JxlColorProfile::from_raw_bytes(Some(&[0x12]), ENCODED_SRGB_ICC),
+            Err(Error::NonZeroPadding)
+        ));
+
+        let mut icc_nonzero_padding = ENCODED_SRGB_ICC.to_vec();
+        *icc_nonzero_padding.last_mut().unwrap() |= 2;
+        assert!(matches!(
+            JxlColorProfile::from_raw_bytes(None, &icc_nonzero_padding),
+            Err(Error::NonZeroPadding)
+        ));
+        let mut icc_trailing_bytes = ENCODED_SRGB_ICC.to_vec();
+        icc_trailing_bytes.push(0);
+        assert!(matches!(
+            JxlColorProfile::from_raw_bytes(None, &icc_trailing_bytes),
+            Err(Error::InvalidIccStream)
+        ));
     }
 }
