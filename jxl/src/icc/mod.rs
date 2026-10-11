@@ -201,6 +201,7 @@ impl IncrementalIccReader {
             self.reader.restore(checkpoint);
             return Err(err);
         }
+        self.reader.check_for_error()?;
         if sym >= 256 {
             warn!(sym, "Invalid symbol in ICC stream");
             return Err(Error::InvalidIccStream);
