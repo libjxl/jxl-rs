@@ -39,6 +39,8 @@ pub use x86_64::sse42::Sse42Descriptor;
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;
 
+    type F16Vec: F16SimdVec<Descriptor = Self>;
+
     type I32Vec: I32SimdVec<Descriptor = Self>;
 
     type I16Vec: I16SimdVec<Descriptor = Self>;
@@ -53,12 +55,19 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type Mask: SimdMask<Descriptor = Self>;
 
+    type F16Mask: F16SimdMask<Descriptor = Self>;
+
     type Mask16: SimdMask16<Descriptor = Self>;
 
     /// Prepared 8-entry BF16 lookup table for fast approximate lookups.
     /// Use `F32SimdVec::prepare_table_bf16_8` to create and
     /// `F32SimdVec::table_lookup_bf16_8` to use.
     type Bf16Table8: Copy;
+
+    /// Prepared 8-entry lookup table for `F16SimdVec` lookups.
+    /// Use `F16SimdVec::prepare_table_f16_8` to create and
+    /// `F16SimdVec::table_lookup_f16_8` to use.
+    type F16Table8: Copy;
 
     type Descriptor256: SimdDescriptor<Descriptor256 = Self::Descriptor256>;
     type Descriptor128: SimdDescriptor<Descriptor128 = Self::Descriptor128>;
@@ -100,6 +109,12 @@ pub trait F32SimdVec:
 
     /// An array of f32 of length Self::LEN.
     type UnderlyingArray: Copy + Default + Debug;
+
+    /// An array of f16 of length Self::LEN.
+    type UnderlyingF16Array: Copy + Default + Debug;
+
+    /// Returns the descriptor associated with this vector.
+    fn descriptor(&self) -> Self::Descriptor;
 
     /// Converts v to an array of v.
     fn splat(d: Self::Descriptor, v: f32) -> Self;
@@ -230,15 +245,619 @@ pub trait F32SimdVec:
     /// `data[stride * i]` for i = 0..Self::LEN.
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize);
 
+    /// Converts a slice of f16 into a slice of Self::UnderlyingF16Array. If slice.len() is not a
+    /// multiple of `Self::LEN` this will panic.
+    fn make_f16_array_slice(slice: &[f16]) -> &[Self::UnderlyingF16Array];
+
+    /// Converts a mut slice of f16 into a slice of Self::UnderlyingF16Array. If slice.len() is not a
+    /// multiple of `Self::LEN` this will panic.
+    fn make_f16_array_slice_mut(slice: &mut [f16]) -> &mut [Self::UnderlyingF16Array];
+
+    fn load_f16_array(d: Self::Descriptor, mem: &Self::UnderlyingF16Array) -> Self;
+
+    fn store_f16_array(&self, mem: &mut Self::UnderlyingF16Array);
+
+    /// Transposes the Self::LEN x Self::LEN matrix of f16 formed by array elements
+    /// `data[stride * i]` for i = 0..Self::LEN.
+    fn transpose_square_f16(
+        d: Self::Descriptor,
+        data: &mut [Self::UnderlyingF16Array],
+        stride: usize,
+    );
+
     /// Loads f16 values (stored as u16 bit patterns) and converts them to f32.
     /// Uses hardware conversion instructions when available (F16C on x86, NEON fp16 on ARM).
     /// Requires `mem.len() >= Self::LEN` or it will panic.
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self;
 
+    /// Converts a single f16 value (stored as a u16 bit pattern) to f32 and broadcasts it to all lanes.
+    #[inline(always)]
+    fn splat_f16_bits(d: Self::Descriptor, v: u16) -> Self {
+        Self::splat(d, f16::from_bits(v).to_f32())
+    }
+
     /// Converts f32 values to f16 and stores as u16 bit patterns.
     /// Uses hardware conversion instructions when available (F16C on x86, NEON fp16 on ARM).
     /// Requires `dest.len() >= Self::LEN` or it will panic.
     fn store_f16_bits(self, dest: &mut [u16]);
+}
+
+pub trait F16SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + Div<Self, Output = Self>
+    + AddAssign<Self>
+    + MulAssign<Self>
+    + SubAssign<Self>
+    + DivAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    const LEN: usize;
+
+    /// An array of f16 of length Self::LEN.
+    type UnderlyingArray: Copy + Default + Debug;
+
+    /// Returns the descriptor associated with this vector.
+    fn descriptor(&self) -> Self::Descriptor;
+
+    /// Converts an `f32` scalar `v` to a SIMD vector of `v`.
+    fn splat(d: Self::Descriptor, v: f32) -> Self;
+
+    /// Converts an `f16` scalar `v` to a SIMD vector of `v`.
+    fn splat_f16(d: Self::Descriptor, v: f16) -> Self;
+
+    fn zero(d: Self::Descriptor) -> Self;
+
+    fn mul_add(self, mul: Self, add: Self) -> Self;
+
+    fn neg_mul_add(self, mul: Self, add: Self) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load(d: Self::Descriptor, mem: &[f16]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_f32(d: Self::Descriptor, mem: &[f32]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_i16(d: Self::Descriptor, mem: &[i16]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_i32(d: Self::Descriptor, mem: &[i32]) -> Self;
+
+    /// Loads `Self::LEN` `i16` values, multiplies by `scale` in `f32` precision, and converts to `f16`.
+    fn load_i16_scaled(d: Self::Descriptor, mem: &[i16], scale: f32) -> Self;
+
+    /// Loads `Self::LEN` `i32` values, multiplies by `scale` in `f32` precision, and converts to `f16`.
+    fn load_i32_scaled(d: Self::Descriptor, mem: &[i32], scale: f32) -> Self;
+
+    /// Loads `Self::LEN` `i32` values containing raw IEEE 754 `f32` bits and converts to `f16`.
+    #[inline(always)]
+    fn load_f32_bits_i32(d: Self::Descriptor, mem: &[i32]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: `i32` and `f32` have identical size, alignment, and both allow any bit pattern.
+        let mem_f32 = unsafe { std::slice::from_raw_parts(mem.as_ptr().cast::<f32>(), mem.len()) };
+        Self::load_f32(d, mem_f32)
+    }
+
+    /// Loads `Self::LEN` `i32` values whose low 16 bits contain raw IEEE 754 `f16` bits.
+    fn load_f16_bits_i32(d: Self::Descriptor, mem: &[i32]) -> Self;
+
+    /// Loads `Self::LEN` `i16` values containing raw IEEE 754 `f16` bits.
+    #[inline(always)]
+    fn load_f16_bits_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: `i16` and `f16` have identical size, alignment, and both allow any bit pattern.
+        let mem_f16 = unsafe { std::slice::from_raw_parts(mem.as_ptr().cast::<f16>(), mem.len()) };
+        Self::load(d, mem_f16)
+    }
+
+    /// Loads `Self::LEN` `u16` noise values and maps each `u` to `(u >> 6) * 2^-10 - 0.5` in `[-0.5, 0.5)`.
+    fn load_u16_norm(d: Self::Descriptor, mem: &[u16]) -> Self;
+
+    fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store(&self, mem: &mut [f16]);
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store_f32(&self, mem: &mut [f32]);
+
+    fn store_array(&self, mem: &mut Self::UnderlyingArray);
+
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f16]);
+
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f16]);
+
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f16]);
+
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        dest: &mut [f16],
+    );
+
+    fn load_deinterleaved_2(d: Self::Descriptor, src: &[f16]) -> (Self, Self);
+
+    fn load_deinterleaved_3(d: Self::Descriptor, src: &[f16]) -> (Self, Self, Self);
+
+    fn load_deinterleaved_4(d: Self::Descriptor, src: &[f16]) -> (Self, Self, Self, Self);
+
+    fn round_store_u8(self, dest: &mut [u8]);
+
+    fn round_store_u16(self, dest: &mut [u16]);
+
+    fn abs(self) -> Self;
+
+    fn floor(self) -> Self;
+
+    fn sqrt(self) -> Self;
+
+    #[allow(dead_code)]
+    fn neg(self) -> Self;
+
+    fn copysign(self, sign: Self) -> Self;
+
+    fn max(self, other: Self) -> Self;
+
+    fn min(self, other: Self) -> Self;
+
+    fn gt(self, other: Self) -> <<Self as F16SimdVec>::Descriptor as SimdDescriptor>::F16Mask;
+
+    /// Decomposes positive values `x` into `(mantissa, exp_val)` such that `x = mantissa * 2^exp_val`
+    /// with `mantissa in [2/3, 4/3)`.
+    fn decompose_log2(self) -> (Self, Self);
+
+    /// Computes `2^self` for integer-valued `self` (clamping underflow to `0.0`).
+    fn exp2_int(self) -> Self;
+
+    fn prepare_table_f16_8(
+        d: Self::Descriptor,
+        table: &[f32; 8],
+    ) -> <<Self as F16SimdVec>::Descriptor as SimdDescriptor>::F16Table8;
+
+    fn table_lookup_f16_8(
+        d: Self::Descriptor,
+        table: <<Self as F16SimdVec>::Descriptor as SimdDescriptor>::F16Table8,
+        indices: Self,
+    ) -> Self;
+
+    fn make_array_slice(slice: &[f16]) -> &[Self::UnderlyingArray];
+
+    fn make_array_slice_mut(slice: &mut [f16]) -> &mut [Self::UnderlyingArray];
+
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize);
+
+    #[inline(always)]
+    fn splat_f32(d: Self::Descriptor, v: f32) -> Self {
+        Self::splat(d, v)
+    }
+
+    #[inline(always)]
+    fn load_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        Self::load(d, f16::slice_from_bits(mem))
+    }
+
+    #[inline(always)]
+    fn store_bits(self, dest: &mut [u16]) {
+        self.store(f16::slice_from_bits_mut(dest));
+    }
+
+    #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        Self::load_bits(d, mem)
+    }
+
+    #[inline(always)]
+    fn store_f16_bits(self, dest: &mut [u16]) {
+        self.store_bits(dest);
+    }
+}
+
+/// Wrapper implementing `F16SimdVec` by converting `f16 <-> f32` on load/store and performing
+/// arithmetic using `V: F32SimdVec`.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct F16VecConvert<V>(pub V);
+
+impl<D, V, M, T8> F16SimdVec for F16VecConvert<V>
+where
+    D: SimdDescriptor<
+            F32Vec = V,
+            F16Vec = Self,
+            Mask = M,
+            F16Mask = M,
+            Bf16Table8 = T8,
+            F16Table8 = T8,
+        >,
+    V: F32SimdVec<Descriptor = D>,
+    M: SimdMask<Descriptor = D> + F16SimdMask<Descriptor = D>,
+    T8: Copy + Send + Sync,
+{
+    type Descriptor = D;
+
+    const LEN: usize = V::LEN;
+
+    type UnderlyingArray = V::UnderlyingF16Array;
+
+    #[inline(always)]
+    fn descriptor(&self) -> Self::Descriptor {
+        self.0.descriptor()
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: f32) -> Self {
+        Self(V::splat(d, v))
+    }
+
+    #[inline(always)]
+    fn splat_f16(d: Self::Descriptor, v: f16) -> Self {
+        Self(V::splat_f16_bits(d, v.to_bits()))
+    }
+
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        Self(V::zero(d))
+    }
+
+    #[inline(always)]
+    fn mul_add(self, mul: Self, add: Self) -> Self {
+        Self(self.0.mul_add(mul.0, add.0))
+    }
+
+    #[inline(always)]
+    fn neg_mul_add(self, mul: Self, add: Self) -> Self {
+        Self(self.0.neg_mul_add(mul.0, add.0))
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[f16]) -> Self {
+        Self(V::load_f16_bits(d, f16::slice_to_bits(mem)))
+    }
+
+    #[inline(always)]
+    fn load_f32(d: Self::Descriptor, mem: &[f32]) -> Self {
+        Self(V::load(d, mem))
+    }
+
+    #[inline(always)]
+    fn load_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
+        Self(D::I32Vec::load_from_i16(d, mem).as_f32())
+    }
+
+    #[inline(always)]
+    fn load_i32(d: Self::Descriptor, mem: &[i32]) -> Self {
+        Self(D::I32Vec::load(d, mem).as_f32())
+    }
+
+    #[inline(always)]
+    fn load_i16_scaled(d: Self::Descriptor, mem: &[i16], scale: f32) -> Self {
+        Self(D::I32Vec::load_from_i16(d, mem).as_f32() * V::splat(d, scale))
+    }
+
+    #[inline(always)]
+    fn load_i32_scaled(d: Self::Descriptor, mem: &[i32], scale: f32) -> Self {
+        Self(D::I32Vec::load(d, mem).as_f32() * V::splat(d, scale))
+    }
+
+    #[inline(always)]
+    fn load_f16_bits_i32(d: Self::Descriptor, mem: &[i32]) -> Self {
+        const { assert!(Self::LEN <= 16) };
+        let mut u16_buf = [0u16; 16];
+        D::I32Vec::load(d, mem).store_u16(&mut u16_buf[..Self::LEN]);
+        Self(V::load_f16_bits(d, &u16_buf[..Self::LEN]))
+    }
+
+    #[inline(always)]
+    fn load_u16_norm(d: Self::Descriptor, mem: &[u16]) -> Self {
+        let u = D::I32Vec::load_from_u16(d, mem);
+        let bits = shl!(shr!(u, 6), 13) | D::I32Vec::splat(d, 0x3f800000);
+        Self(bits.bitcast_to_f32() - V::splat(d, 1.5))
+    }
+
+    #[inline(always)]
+    fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self {
+        Self(V::load_f16_array(d, mem))
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [f16]) {
+        self.0.store_f16_bits(f16::slice_to_bits_mut(mem));
+    }
+
+    #[inline(always)]
+    fn store_f32(&self, mem: &mut [f32]) {
+        self.0.store(mem);
+    }
+
+    #[inline(always)]
+    fn store_array(&self, mem: &mut Self::UnderlyingArray) {
+        self.0.store_f16_array(mem);
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f16]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+        const { assert!(Self::LEN <= 16) };
+        let d = a.0.descriptor();
+        let mut tmp = [0.0f32; 2 * 16];
+        V::store_interleaved_2(a.0, b.0, &mut tmp[..2 * Self::LEN]);
+        let dest_u16 = f16::slice_to_bits_mut(dest);
+        for i in 0..2 {
+            V::load(d, &tmp[i * Self::LEN..(i + 1) * Self::LEN])
+                .store_f16_bits(&mut dest_u16[i * Self::LEN..(i + 1) * Self::LEN]);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f16]) {
+        assert!(dest.len() >= 3 * Self::LEN);
+        const { assert!(Self::LEN <= 16) };
+        let d = a.0.descriptor();
+        let mut tmp = [0.0f32; 3 * 16];
+        V::store_interleaved_3(a.0, b.0, c.0, &mut tmp[..3 * Self::LEN]);
+        let dest_u16 = f16::slice_to_bits_mut(dest);
+        for i in 0..3 {
+            V::load(d, &tmp[i * Self::LEN..(i + 1) * Self::LEN])
+                .store_f16_bits(&mut dest_u16[i * Self::LEN..(i + 1) * Self::LEN]);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, dv: Self, dest: &mut [f16]) {
+        assert!(dest.len() >= 4 * Self::LEN);
+        const { assert!(Self::LEN <= 16) };
+        let d = a.0.descriptor();
+        let mut tmp = [0.0f32; 4 * 16];
+        V::store_interleaved_4(a.0, b.0, c.0, dv.0, &mut tmp[..4 * Self::LEN]);
+        let dest_u16 = f16::slice_to_bits_mut(dest);
+        for i in 0..4 {
+            V::load(d, &tmp[i * Self::LEN..(i + 1) * Self::LEN])
+                .store_f16_bits(&mut dest_u16[i * Self::LEN..(i + 1) * Self::LEN]);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        dv: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        dest: &mut [f16],
+    ) {
+        assert!(dest.len() >= 8 * Self::LEN);
+        const { assert!(Self::LEN <= 16) };
+        let d = a.0.descriptor();
+        let mut tmp = [0.0f32; 8 * 16];
+        V::store_interleaved_8(
+            a.0,
+            b.0,
+            c.0,
+            dv.0,
+            e.0,
+            f.0,
+            g.0,
+            h.0,
+            &mut tmp[..8 * Self::LEN],
+        );
+        let dest_u16 = f16::slice_to_bits_mut(dest);
+        for i in 0..8 {
+            V::load(d, &tmp[i * Self::LEN..(i + 1) * Self::LEN])
+                .store_f16_bits(&mut dest_u16[i * Self::LEN..(i + 1) * Self::LEN]);
+        }
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_2(d: Self::Descriptor, src: &[f16]) -> (Self, Self) {
+        assert!(src.len() >= 2 * Self::LEN);
+        const { assert!(Self::LEN <= 16) };
+        let src_u16 = f16::slice_to_bits(src);
+        let mut tmp = [0.0f32; 2 * 16];
+        for i in 0..2 {
+            V::load_f16_bits(d, &src_u16[i * Self::LEN..(i + 1) * Self::LEN])
+                .store(&mut tmp[i * Self::LEN..(i + 1) * Self::LEN]);
+        }
+        let (a, b) = V::load_deinterleaved_2(d, &tmp[..2 * Self::LEN]);
+        (Self(a), Self(b))
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_3(d: Self::Descriptor, src: &[f16]) -> (Self, Self, Self) {
+        assert!(src.len() >= 3 * Self::LEN);
+        const { assert!(Self::LEN <= 16) };
+        let src_u16 = f16::slice_to_bits(src);
+        let mut tmp = [0.0f32; 3 * 16];
+        for i in 0..3 {
+            V::load_f16_bits(d, &src_u16[i * Self::LEN..(i + 1) * Self::LEN])
+                .store(&mut tmp[i * Self::LEN..(i + 1) * Self::LEN]);
+        }
+        let (a, b, c) = V::load_deinterleaved_3(d, &tmp[..3 * Self::LEN]);
+        (Self(a), Self(b), Self(c))
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_4(d: Self::Descriptor, src: &[f16]) -> (Self, Self, Self, Self) {
+        assert!(src.len() >= 4 * Self::LEN);
+        const { assert!(Self::LEN <= 16) };
+        let src_u16 = f16::slice_to_bits(src);
+        let mut tmp = [0.0f32; 4 * 16];
+        for i in 0..4 {
+            V::load_f16_bits(d, &src_u16[i * Self::LEN..(i + 1) * Self::LEN])
+                .store(&mut tmp[i * Self::LEN..(i + 1) * Self::LEN]);
+        }
+        let (a, b, c, dv) = V::load_deinterleaved_4(d, &tmp[..4 * Self::LEN]);
+        (Self(a), Self(b), Self(c), Self(dv))
+    }
+
+    #[inline(always)]
+    fn round_store_u8(self, dest: &mut [u8]) {
+        self.0.round_store_u8(dest);
+    }
+
+    #[inline(always)]
+    fn round_store_u16(self, dest: &mut [u16]) {
+        self.0.round_store_u16(dest);
+    }
+
+    #[inline(always)]
+    fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+
+    #[inline(always)]
+    fn floor(self) -> Self {
+        Self(self.0.floor())
+    }
+
+    #[inline(always)]
+    fn sqrt(self) -> Self {
+        Self(self.0.sqrt())
+    }
+
+    #[inline(always)]
+    fn neg(self) -> Self {
+        Self(self.0.neg())
+    }
+
+    #[inline(always)]
+    fn copysign(self, sign: Self) -> Self {
+        Self(self.0.copysign(sign.0))
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        Self(self.0.max(other.0))
+    }
+
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        Self(self.0.min(other.0))
+    }
+
+    #[inline(always)]
+    fn gt(self, other: Self) -> D::Mask {
+        self.0.gt(other.0)
+    }
+
+    #[inline(always)]
+    fn decompose_log2(self) -> (Self, Self) {
+        let d = self.0.descriptor();
+        let x_bits = self.0.bitcast_to_i32();
+        let exp_bits = x_bits - D::I32Vec::splat(d, 0x3f2aaaab);
+        let exp_shifted = shr!(exp_bits, 23);
+        let mantissa = (x_bits - shl!(exp_shifted, 23)).bitcast_to_f32();
+        let exp_val = exp_shifted.as_f32();
+        (Self(mantissa), Self(exp_val))
+    }
+
+    #[inline(always)]
+    fn exp2_int(self) -> Self {
+        let d = self.0.descriptor();
+        let clamped = self.0.max(V::splat(d, -126.0));
+        let exp_i = clamped.as_i32() + D::I32Vec::splat(d, 127);
+        Self(shl!(exp_i, 23).bitcast_to_f32())
+    }
+
+    #[inline(always)]
+    fn prepare_table_f16_8(d: Self::Descriptor, table: &[f32; 8]) -> D::Bf16Table8 {
+        V::prepare_table_bf16_8(d, table)
+    }
+
+    #[inline(always)]
+    fn table_lookup_f16_8(d: Self::Descriptor, table: D::Bf16Table8, indices: Self) -> Self {
+        Self(V::table_lookup_bf16_8(d, table, indices.0.as_i32()))
+    }
+
+    #[inline(always)]
+    fn make_array_slice(slice: &[f16]) -> &[Self::UnderlyingArray] {
+        V::make_f16_array_slice(slice)
+    }
+
+    #[inline(always)]
+    fn make_array_slice_mut(slice: &mut [f16]) -> &mut [Self::UnderlyingArray] {
+        V::make_f16_array_slice_mut(slice)
+    }
+
+    #[inline(always)]
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
+        V::transpose_square_f16(d, data, stride);
+    }
+}
+
+impl<V: F32SimdVec> Add for F16VecConvert<V> {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl<V: F32SimdVec> Sub for F16VecConvert<V> {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl<V: F32SimdVec> Mul for F16VecConvert<V> {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: Self) -> Self {
+        Self(self.0 * rhs.0)
+    }
+}
+
+impl<V: F32SimdVec> Div for F16VecConvert<V> {
+    type Output = Self;
+    #[inline(always)]
+    fn div(self, rhs: Self) -> Self {
+        Self(self.0 / rhs.0)
+    }
+}
+
+impl<V: F32SimdVec> AddAssign for F16VecConvert<V> {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl<V: F32SimdVec> SubAssign for F16VecConvert<V> {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl<V: F32SimdVec> MulAssign for F16VecConvert<V> {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: Self) {
+        self.0 *= rhs.0;
+    }
+}
+
+impl<V: F32SimdVec> DivAssign for F16VecConvert<V> {
+    #[inline(always)]
+    fn div_assign(&mut self, rhs: Self) {
+        self.0 /= rhs.0;
+    }
 }
 
 pub trait I32SimdVec:
@@ -588,6 +1207,48 @@ pub trait SimdMask:
     fn andnot(self, rhs: Self) -> Self;
 }
 
+pub trait F16SimdMask:
+    Sized + Copy + Debug + Send + Sync + BitAnd<Self, Output = Self> + BitOr<Self, Output = Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    fn if_then_else_f16(
+        self,
+        if_true: <<Self as F16SimdMask>::Descriptor as SimdDescriptor>::F16Vec,
+        if_false: <<Self as F16SimdMask>::Descriptor as SimdDescriptor>::F16Vec,
+    ) -> <<Self as F16SimdMask>::Descriptor as SimdDescriptor>::F16Vec;
+
+    fn all(self) -> bool;
+}
+
+#[allow(unused_macros)]
+macro_rules! impl_f16_convert_mask {
+    ($mask_ty:ty, $desc_ty:ty) => {
+        impl $crate::F16SimdMask for $mask_ty {
+            type Descriptor = $desc_ty;
+
+            #[inline(always)]
+            fn if_then_else_f16(
+                self,
+                if_true: $crate::F16VecConvert<<$desc_ty as $crate::SimdDescriptor>::F32Vec>,
+                if_false: $crate::F16VecConvert<<$desc_ty as $crate::SimdDescriptor>::F32Vec>,
+            ) -> $crate::F16VecConvert<<$desc_ty as $crate::SimdDescriptor>::F32Vec> {
+                $crate::F16VecConvert($crate::SimdMask::if_then_else_f32(
+                    self, if_true.0, if_false.0,
+                ))
+            }
+
+            #[inline(always)]
+            fn all(self) -> bool {
+                $crate::SimdMask::all(self)
+            }
+        }
+    };
+}
+
+#[allow(unused_imports)]
+pub(crate) use impl_f16_convert_mask;
+
 pub trait SimdMask16:
     Sized + Copy + Debug + Send + Sync + BitAnd<Self, Output = Self> + BitOr<Self, Output = Self>
 {
@@ -613,6 +1274,7 @@ pub trait SimdMask16:
 macro_rules! impl_f32_array_interface {
     () => {
         type UnderlyingArray = [f32; Self::LEN];
+        type UnderlyingF16Array = [$crate::f16; Self::LEN];
 
         #[inline(always)]
         fn make_array_slice(slice: &[f32]) -> &[Self::UnderlyingArray] {
@@ -636,6 +1298,30 @@ macro_rules! impl_f32_array_interface {
         #[inline(always)]
         fn store_array(&self, mem: &mut Self::UnderlyingArray) {
             self.store(mem);
+        }
+
+        #[inline(always)]
+        fn make_f16_array_slice(slice: &[$crate::f16]) -> &[Self::UnderlyingF16Array] {
+            let (ret, rem) = slice.as_chunks();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn make_f16_array_slice_mut(slice: &mut [$crate::f16]) -> &mut [Self::UnderlyingF16Array] {
+            let (ret, rem) = slice.as_chunks_mut();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn load_f16_array(d: Self::Descriptor, mem: &Self::UnderlyingF16Array) -> Self {
+            Self::load_f16_bits(d, $crate::f16::slice_to_bits(mem))
+        }
+
+        #[inline(always)]
+        fn store_f16_array(&self, mem: &mut Self::UnderlyingF16Array) {
+            self.store_f16_bits($crate::f16::slice_to_bits_mut(mem));
         }
     };
 }
@@ -674,13 +1360,47 @@ macro_rules! impl_i16_array_interface {
 
 pub(crate) use impl_i16_array_interface;
 
+#[allow(unused_macros)]
+macro_rules! impl_f16_array_interface {
+    () => {
+        type UnderlyingArray = [$crate::f16; Self::LEN];
+
+        #[inline(always)]
+        fn make_array_slice(slice: &[$crate::f16]) -> &[Self::UnderlyingArray] {
+            let (ret, rem) = slice.as_chunks();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn make_array_slice_mut(slice: &mut [$crate::f16]) -> &mut [Self::UnderlyingArray] {
+            let (ret, rem) = slice.as_chunks_mut();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self {
+            Self::load(d, mem)
+        }
+
+        #[inline(always)]
+        fn store_array(&self, mem: &mut Self::UnderlyingArray) {
+            self.store(mem);
+        }
+    };
+}
+
+#[allow(unused_imports)]
+pub(crate) use impl_f16_array_interface;
+
 #[cfg(test)]
 mod test {
     use arbtest::arbitrary::Unstructured;
 
     use crate::{
-        F32SimdVec, I16SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask16,
-        U8SimdVec, U16SimdVec, U64SimdVec, test_all_instruction_sets,
+        F16SimdVec, F32SimdVec, I16SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor,
+        SimdMask16, U8SimdVec, U16SimdVec, U64SimdVec, f16, test_all_instruction_sets,
     };
 
     enum Distribution {
@@ -2120,7 +2840,7 @@ mod test {
             let mut res_andnot = vec![0i16; len];
             mask_andnot.if_then_else_i16(va, vb).store(&mut res_andnot);
             for i in 0..len {
-                let expected_mask = !(a[i] > b[i]) && (a[i] < 0);
+                let expected_mask = (a[i] <= b[i]) && (a[i] < 0);
                 assert_eq!(res_andnot[i], if expected_mask { a[i] } else { b[i] });
             }
 
@@ -2237,4 +2957,29 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_i16_store_interleaved_4);
+
+    fn test_f16_transpose_square<D: SimdDescriptor>(d: D) {
+        let len = D::F16Vec::LEN;
+        let mut input = vec![f16::ZERO; len * len];
+        for i in 0..len {
+            for j in 0..len {
+                input[i * len + j] = f16::from_f32((i * len + j) as f32);
+            }
+        }
+        let mut output = input.clone();
+        D::F16Vec::transpose_square(d, D::F16Vec::make_array_slice_mut(&mut output), 1);
+
+        for i in 0..len {
+            for j in 0..len {
+                let expected = input[j * len + i];
+                let actual = output[i * len + j];
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "Mismatch at position ({i}, {j}): expected {expected:?}, got {actual:?}"
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_f16_transpose_square);
 }

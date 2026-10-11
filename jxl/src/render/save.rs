@@ -11,6 +11,7 @@ use crate::image::DataTypeTag;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveChannelType {
     F32,
+    F16,
     I16 { bit_depth: u8 },
     I32 { bit_depth: u8 },
 }
@@ -19,6 +20,7 @@ impl SaveChannelType {
     pub fn data_type(self) -> DataTypeTag {
         match self {
             SaveChannelType::F32 => DataTypeTag::F32,
+            SaveChannelType::F16 => DataTypeTag::F16,
             SaveChannelType::I16 { .. } => DataTypeTag::I16,
             SaveChannelType::I32 { .. } => DataTypeTag::I32,
         }

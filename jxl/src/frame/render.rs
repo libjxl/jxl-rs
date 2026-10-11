@@ -568,12 +568,6 @@ impl Frame {
             buffer_recycler,
         );
 
-        if frame_header.encoding != Encoding::Modular {
-            for i in 0..3 {
-                pipeline = pipeline.add_inout_stage(ConvertF16ToF32Stage::new(i));
-            }
-        }
-
         if frame_header.encoding == Encoding::Modular
             && decoder_state.file_header.image_metadata.xyb_encoded
         {

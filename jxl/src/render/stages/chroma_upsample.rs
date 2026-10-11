@@ -3,11 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F16SimdVec, simd_function};
 
 use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, for_each_chunk,
 };
+use crate::util::f16;
 
 pub struct HorizontalChromaUpsample {
     channel: usize,
@@ -34,13 +35,13 @@ simd_function!(
     hchroma_upsample_simd_dispatch,
     d: D,
     fn hchroma_upsample_simd(
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
         xsize: usize,
     ) {
         // Precompute constants
-        let c025 = D::F32Vec::splat(d, 0.25);
-        let c075 = D::F32Vec::splat(d, 0.75);
+        let c025 = D::F16Vec::splat_f32(d, 0.25);
+        let c075 = D::F16Vec::splat_f32(d, 0.75);
 
         for_each_chunk(
             d,
@@ -67,8 +68,8 @@ simd_function!(
 );
 
 impl RenderPipelineInOutStage for HorizontalChromaUpsample {
-    type InputT = f32;
-    type OutputT = f32;
+    type InputT = f16;
+    type OutputT = f16;
     const SHIFT: (u8, u8) = (1, 0);
     const BORDER: (u8, u8) = (1, 0);
 
@@ -80,8 +81,8 @@ impl RenderPipelineInOutStage for HorizontalChromaUpsample {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -110,13 +111,13 @@ simd_function!(
     vchroma_upsample_simd_dispatch,
     d: D,
     fn vchroma_upsample_simd(
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
         xsize: usize,
     ) {
         // Precompute constants
-        let c025 = D::F32Vec::splat(d, 0.25);
-        let c075 = D::F32Vec::splat(d, 0.75);
+        let c025 = D::F16Vec::splat_f32(d, 0.25);
+        let c075 = D::F16Vec::splat_f32(d, 0.75);
 
         for_each_chunk(
             d,
@@ -143,8 +144,8 @@ simd_function!(
 );
 
 impl RenderPipelineInOutStage for VerticalChromaUpsample {
-    type InputT = f32;
-    type OutputT = f32;
+    type InputT = f16;
+    type OutputT = f16;
     const SHIFT: (u8, u8) = (0, 1);
     const BORDER: (u8, u8) = (0, 1);
 
@@ -156,8 +157,8 @@ impl RenderPipelineInOutStage for VerticalChromaUpsample {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -186,11 +187,16 @@ mod test {
     #[test]
     fn test_hchr() -> Result<()> {
         let mut input = Image::new((3, 1))?;
-        input.row_mut(0).copy_from_slice(&[1.0f32, 2.0, 4.0]);
+        input
+            .row_mut(0)
+            .copy_from_slice(&[1.0f32, 2.0, 4.0].map(f16::from_f32));
         let stage = HorizontalChromaUpsample::new(0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], (6, 1), 0, 256)?;
-        assert_eq!(output[0].row(0), [1.0, 1.25, 1.75, 2.5, 3.5, 4.0]);
+        assert_eq!(
+            output[0].row(0),
+            [1.0, 1.25, 1.75, 2.5, 3.5, 4.0].map(f16::from_f32)
+        );
         Ok(())
     }
 
@@ -206,18 +212,18 @@ mod test {
     #[test]
     fn test_vchr() -> Result<()> {
         let mut input = Image::new((1, 3))?;
-        input.row_mut(0)[0] = 1.0f32;
-        input.row_mut(1)[0] = 2.0f32;
-        input.row_mut(2)[0] = 4.0f32;
+        input.row_mut(0)[0] = f16::from_f32(1.0);
+        input.row_mut(1)[0] = f16::from_f32(2.0);
+        input.row_mut(2)[0] = f16::from_f32(4.0);
         let stage = VerticalChromaUpsample::new(0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], (1, 6), 0, 256)?;
-        assert_eq!(output[0].row(0)[0], 1.0);
-        assert_eq!(output[0].row(1)[0], 1.25);
-        assert_eq!(output[0].row(2)[0], 1.75);
-        assert_eq!(output[0].row(3)[0], 2.5);
-        assert_eq!(output[0].row(4)[0], 3.5);
-        assert_eq!(output[0].row(5)[0], 4.0);
+        assert_eq!(output[0].row(0)[0], f16::from_f32(1.0));
+        assert_eq!(output[0].row(1)[0], f16::from_f32(1.25));
+        assert_eq!(output[0].row(2)[0], f16::from_f32(1.75));
+        assert_eq!(output[0].row(3)[0], f16::from_f32(2.5));
+        assert_eq!(output[0].row(4)[0], f16::from_f32(3.5));
+        assert_eq!(output[0].row(5)[0], f16::from_f32(4.0));
         Ok(())
     }
 }

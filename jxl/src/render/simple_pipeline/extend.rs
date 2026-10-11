@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::image::{Image, ImageDataType};
+use crate::image::Image;
 use crate::render::stages::ExtendToImageDimensionsStage;
 use crate::util::round_up_size_to_cache_line;
 use crate::util::tracing_wrappers::*;
@@ -56,7 +56,10 @@ impl ExtendToImageDimensionsStage {
             }
         }
         // Fill in rows above and below the original data.
-        let mut buffer = vec![f32::default(); round_up_size_to_cache_line::<f32>(chunk_size)];
+        let mut buffer = vec![
+            crate::util::f16::default();
+            round_up_size_to_cache_line::<crate::util::f16>(chunk_size)
+        ];
         for y in (0..y0).chain(y1..output_size.1) {
             for x in (0..output_size.0).step_by(chunk_size) {
                 let xsize = output_size.0.min(x + chunk_size) - x;

@@ -8,13 +8,17 @@ use std::num::Wrapping;
 use super::{
     F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
 };
-use crate::{U32SimdVec, U64SimdVec, f16, impl_f32_array_interface, impl_i16_array_interface};
+use crate::{
+    F16VecConvert, U32SimdVec, U64SimdVec, f16, impl_f16_convert_mask, impl_f32_array_interface,
+    impl_i16_array_interface,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarDescriptor;
 
 impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
+    type F16Vec = F16VecConvert<f32>;
     type I32Vec = Wrapping<i32>;
     type I16Vec = Wrapping<i16>;
     type U64Vec = Wrapping<u64>;
@@ -22,8 +26,10 @@ impl SimdDescriptor for ScalarDescriptor {
     type U8Vec = u8;
     type U16Vec = u16;
     type Mask = bool;
+    type F16Mask = bool;
     type Mask16 = bool;
     type Bf16Table8 = [f32; 8];
+    type F16Table8 = [f32; 8];
 
     type Descriptor256 = Self;
     type Descriptor128 = Self;
@@ -50,6 +56,11 @@ impl F32SimdVec for f32 {
     type Descriptor = ScalarDescriptor;
 
     const LEN: usize = 1;
+
+    #[inline(always)]
+    fn descriptor(&self) -> Self::Descriptor {
+        ScalarDescriptor
+    }
 
     #[inline(always)]
     fn load(_d: Self::Descriptor, mem: &[f32]) -> Self {
@@ -224,6 +235,15 @@ impl F32SimdVec for f32 {
 
     #[inline(always)]
     fn transpose_square(_d: Self::Descriptor, _data: &mut [Self::UnderlyingArray], _stride: usize) {
+        // Nothing to do.
+    }
+
+    #[inline(always)]
+    fn transpose_square_f16(
+        _d: Self::Descriptor,
+        _data: &mut [Self::UnderlyingF16Array],
+        _stride: usize,
+    ) {
         // Nothing to do.
     }
 }
@@ -664,3 +684,5 @@ macro_rules! bench_all_instruction_sets {
         );
     };
 }
+
+impl_f16_convert_mask!(bool, ScalarDescriptor);

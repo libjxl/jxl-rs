@@ -5,7 +5,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
+use jxl_simd::{F16SimdMask, F16SimdVec, SimdDescriptor, simd_function};
 
 use crate::error::Result;
 use crate::features::noise::Noise;
@@ -14,6 +14,7 @@ use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
     for_each_chunk,
 };
+use crate::util::f16;
 use crate::util::sync::{Arc, RwLock};
 
 pub struct ConvolveNoiseStage {
@@ -39,9 +40,9 @@ impl std::fmt::Display for ConvolveNoiseStage {
 
 #[cold]
 #[inline(never)]
-fn grow_noise_state(state: &mut [Vec<[i32; 16]>; 3], num_chunks: usize) {
+fn grow_noise_state(state: &mut [Vec<[[f32; 16]; 4]>; 3], num_chunks: usize) {
     for s in state.iter_mut() {
-        s.resize(num_chunks, [0; 16]);
+        s.resize(num_chunks, [[0.0f32; 16]; 4]);
     }
 }
 
@@ -49,17 +50,16 @@ fn grow_noise_state(state: &mut [Vec<[i32; 16]>; 3], num_chunks: usize) {
 fn convolve_noise_simd_impl<D: SimdDescriptor>(
     d: D,
     input_rows: &Channels<u16>,
-    output_rows: &mut ChannelsMut<f32>,
-    state: &mut [Vec<[i32; 16]>; 3],
+    output_rows: &mut ChannelsMut<f16>,
+    state: &mut [Vec<[[f32; 16]; 4]>; 3],
     previous_call_was_previous_row: bool,
     xsize: usize,
 ) {
-    const { assert!(D::I32Vec::LEN <= 16) };
-    const { assert!(D::I32Vec::LEN == D::F32Vec::LEN) };
+    const { assert!(D::F16Vec::LEN <= 16) };
     if xsize == 0 {
         return;
     }
-    let len = D::F32Vec::LEN;
+    let len = D::F16Vec::LEN;
     let num_chunks = (xsize - 1) / len + 1;
     if state.iter().any(|s| s.len() < num_chunks) {
         grow_noise_state(state, num_chunks);
@@ -69,11 +69,8 @@ fn convolve_noise_simd_impl<D: SimdDescriptor>(
     let s1 = &mut s1[..num_chunks];
     let s2 = &mut s2[..num_chunks];
 
-    // Multipliers compensated by 128 for the lack of shift by 7 in the mantissa:
-    // c_sum = 0.16 * 128 / 2^23 = 0.16 / 65536.0
-    // c_center = -4.0 * 128 / 2^23 = -4.0 / 65536.0
-    let c_sum = D::F32Vec::splat(d, 0.16 / 65536.0);
-    let c_center = D::F32Vec::splat(d, -4.0 / 65536.0);
+    let c_sum = D::F16Vec::splat_f32(d, 0.16);
+    let c_center = D::F16Vec::splat_f32(d, -4.0);
 
     macro_rules! row_sum {
         ($inv:expr, $ch:literal, $dy:expr) => {{
@@ -93,15 +90,19 @@ fn convolve_noise_simd_impl<D: SimdDescriptor>(
             let idx = x / len;
             macro_rules! step {
                 ($ch:literal, $s:ident) => {{
-                    let prev_state = D::I32Vec::load(d, &$s[idx]);
+                    let r0 = D::F16Vec::load_f32(d, &$s[idx][0]);
+                    let r1 = D::F16Vec::load_f32(d, &$s[idx][1]);
+                    let r2 = D::F16Vec::load_f32(d, &$s[idx][2]);
+                    let r3 = D::F16Vec::load_f32(d, &$s[idx][3]);
                     let r4 = row_sum!(inv, $ch, 2);
-                    let sum_5x5 = prev_state + r4;
+                    let sum_5x5 = r0 + r1 + r2 + r3 + r4;
                     let p00 = inv.load::<_, $ch>(d, 0, 0);
-                    let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                    let result = sum_5x5.mul_add(c_sum, p00 * c_center);
                     outv.store::<_, $ch>(d, 0, result);
-                    let r0 = row_sum!(inv, $ch, -2);
-                    let next_state = sum_5x5 - r0;
-                    next_state.store(&mut $s[idx]);
+                    r1.store_f32(&mut $s[idx][0]);
+                    r2.store_f32(&mut $s[idx][1]);
+                    r3.store_f32(&mut $s[idx][2]);
+                    r4.store_f32(&mut $s[idx][3]);
                 }};
             }
             step!(0, s0);
@@ -120,10 +121,12 @@ fn convolve_noise_simd_impl<D: SimdDescriptor>(
                     let r3 = row_sum!(inv, $ch, 1);
                     let r4 = row_sum!(inv, $ch, 2);
                     let sum_5x5 = r0 + r1 + r2 + r3 + r4;
-                    let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                    let result = sum_5x5.mul_add(c_sum, p00 * c_center);
                     outv.store::<_, $ch>(d, 0, result);
-                    let next_state = sum_5x5 - r0;
-                    next_state.store(&mut $s[idx]);
+                    r1.store_f32(&mut $s[idx][0]);
+                    r2.store_f32(&mut $s[idx][1]);
+                    r3.store_f32(&mut $s[idx][2]);
+                    r4.store_f32(&mut $s[idx][3]);
                 }};
             }
             step!(0, s0);
@@ -139,8 +142,8 @@ simd_function!(
     d: D,
     fn convolve_noise_simd(
         input_rows: &Channels<u16>,
-        output_rows: &mut ChannelsMut<f32>,
-        state: &mut [Vec<[i32; 16]>; 3],
+        output_rows: &mut ChannelsMut<f16>,
+        state: &mut [Vec<[[f32; 16]; 4]>; 3],
         previous_call_was_previous_row: bool,
         xsize: usize,
     ) {
@@ -157,15 +160,15 @@ simd_function!(
 
 impl RenderPipelineInOutStage for ConvolveNoiseStage {
     type InputT = u16;
-    type OutputT = f32;
+    type OutputT = f16;
     const SHIFT: (u8, u8) = (0, 0);
     const BORDER: (u8, u8) = (2, 2);
 
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
         Ok(Some(Box::new([
-            Vec::<[i32; 16]>::new(),
-            Vec::<[i32; 16]>::new(),
-            Vec::<[i32; 16]>::new(),
+            Vec::<[[f32; 16]; 4]>::new(),
+            Vec::<[[f32; 16]; 4]>::new(),
+            Vec::<[[f32; 16]; 4]>::new(),
         ])))
     }
 
@@ -178,11 +181,11 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         _position: (usize, usize),
         xsize: usize,
         input_rows: &Channels<u16>,
-        output_rows: &mut ChannelsMut<f32>,
+        output_rows: &mut ChannelsMut<f16>,
         state: Option<&mut ErasedLocalState>,
         previous_call_was_previous_row: bool,
     ) {
-        let state: &mut [Vec<[i32; 16]>; 3] = state.unwrap().downcast_mut().unwrap();
+        let state: &mut [Vec<[[f32; 16]; 4]>; 3] = state.unwrap().downcast_mut().unwrap();
         convolve_noise_simd_dispatch(
             input_rows,
             output_rows,
@@ -196,37 +199,35 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
 #[inline(always)]
 fn add_noise_simd_impl<D: SimdDescriptor>(
     d: D,
-    row_c: &mut [&mut [f32]],
-    row_rnd: &[&[f32]],
+    row_c: &mut [&mut [f16]],
+    row_rnd: &[&[f16]],
     lut: &[f32; 8],
     ytox: f32,
     ytob: f32,
     xsize: usize,
 ) {
-    let table = D::F32Vec::prepare_table_bf16_8(d, lut);
-    let c_zero = D::F32Vec::zero(d);
-    let c_one = D::F32Vec::splat(d, 1.0);
-    let c_six = D::F32Vec::splat(d, 6.0);
-    let c_half = D::F32Vec::splat(d, 0.5);
-    let c_norm = D::F32Vec::splat(d, 0.22);
-    let c_rgn_corr = D::F32Vec::splat(d, 0.0078125);
-    let c_rg_corr = D::F32Vec::splat(d, 0.9921875);
-    let c_ytox = D::F32Vec::splat(d, ytox);
-    let c_ytob = D::F32Vec::splat(d, ytob);
-    let c_i32_one = D::I32Vec::splat(d, 1);
+    let table = D::F16Vec::prepare_table_f16_8(d, lut);
+    let c_zero = D::F16Vec::zero(d);
+    let c_one = D::F16Vec::splat_f32(d, 1.0);
+    let c_six = D::F16Vec::splat_f32(d, 6.0);
+    let c_half = D::F16Vec::splat_f32(d, 0.5);
+    let c_norm = D::F16Vec::splat_f32(d, 0.22);
+    let c_rgn_corr = D::F16Vec::splat_f32(d, 0.0078125);
+    let c_rg_corr = D::F16Vec::splat_f32(d, 0.9921875);
+    let c_ytox = D::F16Vec::splat_f32(d, ytox);
+    let c_ytob = D::F16Vec::splat_f32(d, ytob);
 
     let noise_strength = {
         #[inline(always)]
-        |vx: D::F32Vec| -> D::F32Vec {
+        |vx: D::F16Vec| -> D::F16Vec {
             let scaled_vx = (vx * c_six).max(c_zero);
             let pre_floor_x = scaled_vx.floor();
             let pre_frac_x = scaled_vx - pre_floor_x;
             let is_ge_7 = pre_floor_x.gt(c_six);
             let floor_x = pre_floor_x.min(c_six);
-            let frac_x = is_ge_7.if_then_else_f32(c_one, pre_frac_x);
-            let floor_x_int = floor_x.as_i32();
-            let low = D::F32Vec::table_lookup_bf16_8(d, table, floor_x_int);
-            let hi = D::F32Vec::table_lookup_bf16_8(d, table, floor_x_int + c_i32_one);
+            let frac_x = is_ge_7.if_then_else_f16(c_one, pre_frac_x);
+            let low = D::F16Vec::table_lookup_f16_8(d, table, floor_x);
+            let hi = D::F16Vec::table_lookup_f16_8(d, table, floor_x + c_one);
             (hi - low).mul_add(frac_x, low).max(c_zero).min(c_one)
         }
     };
@@ -234,12 +235,12 @@ fn add_noise_simd_impl<D: SimdDescriptor>(
     let (row_c0, rest_c) = row_c.split_at_mut(1);
     let (row_c1, row_c2) = rest_c.split_at_mut(1);
 
-    let iter_c0 = row_c0[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_c1 = row_c1[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_c2 = row_c2[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_rnd_r = row_rnd[0].chunks_exact(D::F32Vec::LEN);
-    let iter_rnd_g = row_rnd[1].chunks_exact(D::F32Vec::LEN);
-    let iter_rnd_c = row_rnd[2].chunks_exact(D::F32Vec::LEN);
+    let iter_c0 = row_c0[0].chunks_exact_mut(D::F16Vec::LEN);
+    let iter_c1 = row_c1[0].chunks_exact_mut(D::F16Vec::LEN);
+    let iter_c2 = row_c2[0].chunks_exact_mut(D::F16Vec::LEN);
+    let iter_rnd_r = row_rnd[0].chunks_exact(D::F16Vec::LEN);
+    let iter_rnd_g = row_rnd[1].chunks_exact(D::F16Vec::LEN);
+    let iter_rnd_c = row_rnd[2].chunks_exact(D::F16Vec::LEN);
 
     for (((((c0, c1), c2), rnd_r_chunk), rnd_g_chunk), rnd_c_chunk) in iter_c0
         .zip(iter_c1)
@@ -247,11 +248,11 @@ fn add_noise_simd_impl<D: SimdDescriptor>(
         .zip(iter_rnd_r)
         .zip(iter_rnd_g)
         .zip(iter_rnd_c)
-        .take(xsize.div_ceil(D::F32Vec::LEN))
+        .take(xsize.div_ceil(D::F16Vec::LEN))
     {
-        let vx = D::F32Vec::load(d, c0);
-        let vy = D::F32Vec::load(d, c1);
-        let vb = D::F32Vec::load(d, c2);
+        let vx = D::F16Vec::load(d, c0);
+        let vy = D::F16Vec::load(d, c1);
+        let vb = D::F16Vec::load(d, c2);
 
         let in_g = (vy - vx) * c_half;
         let in_r = (vy + vx) * c_half;
@@ -259,9 +260,9 @@ fn add_noise_simd_impl<D: SimdDescriptor>(
         let noise_strength_g = noise_strength(in_g);
         let noise_strength_r = noise_strength(in_r);
 
-        let rnd_r = D::F32Vec::load(d, rnd_r_chunk) * c_norm;
-        let rnd_g = D::F32Vec::load(d, rnd_g_chunk) * c_norm;
-        let rnd_c = D::F32Vec::load(d, rnd_c_chunk) * c_norm;
+        let rnd_r = D::F16Vec::load(d, rnd_r_chunk) * c_norm;
+        let rnd_g = D::F16Vec::load(d, rnd_g_chunk) * c_norm;
+        let rnd_c = D::F16Vec::load(d, rnd_c_chunk) * c_norm;
 
         let red_noise = noise_strength_r * (rnd_r.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
         let green_noise = noise_strength_g * (rnd_g.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
@@ -282,8 +283,8 @@ simd_function!(
     add_noise_simd_dispatch,
     d: D,
     fn add_noise_simd(
-        row_c: &mut [&mut [f32]],
-        row_rnd: &[&[f32]],
+        row_c: &mut [&mut [f16]],
+        row_rnd: &[&[f16]],
         lut: &[f32; 8],
         ytox: f32,
         ytob: f32,
@@ -328,7 +329,7 @@ impl std::fmt::Display for AddNoiseStage {
 }
 
 impl RenderPipelineInPlaceStage for AddNoiseStage {
-    type Type = f32;
+    type Type = f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 || (c >= self.first_channel && c < self.first_channel + 3)
@@ -338,7 +339,7 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [f16]],
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -351,7 +352,7 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         let ytob = color_correlation.y_to_b_lf();
 
         let (row_c, rest) = row.split_at_mut(3);
-        let row_rnd: [&[f32]; 3] = [&*rest[0], &*rest[1], &*rest[2]];
+        let row_rnd: [&[f16]; 3] = [&*rest[0], &*rest[1], &*rest[2]];
 
         add_noise_simd_dispatch(row_c, &row_rnd, &noise.lut, ytox, ytob, xsize);
     }
@@ -368,6 +369,7 @@ mod test {
     use crate::render::stages::noise::{AddNoiseStage, ConvolveNoiseStage};
     use crate::render::test::make_and_run_simple_pipeline;
     use crate::tests::assert_close;
+    use crate::util::f16;
     use crate::util::sync::{Arc, RwLock};
 
     #[test]
@@ -381,12 +383,12 @@ mod test {
     fn add_noise_process_row_chunk() -> Result<()> {
         let xsize = 8;
         let ysize = 8;
-        let input_c0: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
-        let input_c1: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
-        let input_c2: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
-        let input_c3: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
-        let input_c4: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
-        let input_c5: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
+        let input_c0: Image<f16> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
+        let input_c1: Image<f16> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
+        let input_c2: Image<f16> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
+        let input_c3: Image<f16> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
+        let input_c4: Image<f16> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
+        let input_c5: Image<f16> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
         let stage = AddNoiseStage::new(
             Arc::new(RwLock::new(Noise {
                 lut: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
@@ -473,7 +475,7 @@ mod test {
         for c in 0..3 {
             for y in 0..output[c].size().1 {
                 for x in 0..output[c].size().0 {
-                    assert_close!(output[c].row(y)[x], want_out[c][y][x], 1e-5);
+                    assert_close!(output[c].row(y)[x].to_f32(), want_out[c][y][x], 2e-2);
                 }
             }
         }

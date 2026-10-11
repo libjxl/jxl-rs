@@ -537,7 +537,7 @@ impl LowMemoryRenderPipeline {
                 let Stage::Extend(extend) = &self.shared.stages[extend] else {
                     unreachable!("extend stage is not an extend stage");
                 };
-                let row = &mut buffer.get_row_mut(y)[RowBuffer::x0_offset::<f32>()..];
+                let row = &mut buffer.get_row_mut(y)[RowBuffer::x0_offset::<crate::util::f16>()..];
                 extend.process_row_chunk((x0, y), xsize, c, row);
             }
             // Step 2: go through remaining stages one by one.

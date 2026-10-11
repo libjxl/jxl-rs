@@ -59,7 +59,7 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, [f32; 4])]) {
             for q_idx in 0..4 {
                 let actual_q = actual_quartiles[q_idx];
                 let expected_q = max_quartiles[q_idx];
-                let bound = expected_q * 1.02 + 1e-6;
+                let bound = expected_q * 1.05 + 1e-5;
                 assert!(
                     actual_q <= bound,
                     "Progressive decoding test failed for {:?}: at {} bytes (latest flush {} bytes), quartile {} expected <= {}, but achieved {}",

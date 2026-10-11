@@ -342,13 +342,13 @@ impl QuantTable {
 pub struct DequantMatrices {
     /// 17 separate tables, one per QuantTable type.
     /// Uses Cow to allow zero-copy borrowing from static cache for library tables.
-    tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY],
+    tables: [Cow<'static, [f16]>; QuantTable::CARDINALITY],
 }
 
 /// Cached computed library tables per QuantTable type.
-/// Each entry contains the computed f32 weights for all 3 channels.
+/// Each entry contains the computed f16 weights for all 3 channels.
 /// Computed lazily on first access.
-static LIBRARY_TABLES: [OnceLock<Box<[f32]>>; QuantTable::CARDINALITY] = [
+static LIBRARY_TABLES: [OnceLock<Box<[f16]>>; QuantTable::CARDINALITY] = [
     OnceLock::new(),
     OnceLock::new(),
     OnceLock::new(),
@@ -877,7 +877,7 @@ impl DequantMatrices {
 
     /// Get cached computed library table for a QuantTable type index.
     /// Computes the table lazily on first access.
-    fn get_library_table(idx: usize) -> &'static [f32] {
+    fn get_library_table(idx: usize) -> &'static [f16] {
         LIBRARY_TABLES[idx].get_or_init(|| {
             let encoding = Self::get_library_encoding(idx);
             Self::compute_table(&encoding, idx).expect("library table computation should not fail")
@@ -886,7 +886,7 @@ impl DequantMatrices {
 
     /// Compute a single quant table from an encoding.
     /// Returns the computed weights as a boxed slice for all 3 channels.
-    fn compute_table(encoding: &QuantEncoding, table_idx: usize) -> Result<Box<[f32]>> {
+    fn compute_table(encoding: &QuantEncoding, table_idx: usize) -> Result<Box<[f16]>> {
         let wrows = 8 * Self::REQUIRED_SIZE_X[table_idx];
         let wcols = 8 * Self::REQUIRED_SIZE_Y[table_idx];
         let num = wrows * wcols;
@@ -1063,17 +1063,18 @@ impl DequantMatrices {
                 }
             }
         }
-        // Convert weights in place to the final table format (1.0 / weight)
-        for weight in &mut weights {
-            if !(ALMOST_ZERO..=1.0 / ALMOST_ZERO).contains(weight) {
-                return Err(InvalidQuantizationTableWeight(*weight));
+        // Convert weights to the final table format (1.0 / weight) in f16
+        let mut weights_f16 = Vec::with_capacity(weights.len());
+        for weight in weights {
+            if !(ALMOST_ZERO..=1.0 / ALMOST_ZERO).contains(&weight) {
+                return Err(InvalidQuantizationTableWeight(weight));
             }
-            *weight = 1f32 / *weight;
+            weights_f16.push(f16::from_f32(1f32 / weight));
         }
-        Ok(weights.into_boxed_slice())
+        Ok(weights_f16.into_boxed_slice())
     }
 
-    pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
+    pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f16] {
         let qt_idx = QuantTable::for_strategy(quant_kind) as usize;
         let table = &self.tables[qt_idx];
         let num = Self::REQUIRED_SIZE_X[qt_idx] * Self::REQUIRED_SIZE_Y[qt_idx] * BLOCK_SIZE;
@@ -1088,12 +1089,12 @@ impl DequantMatrices {
         let all_default = br.read(1)? == 1;
 
         // Compute all tables during decode
-        let tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY] = if all_default {
+        let tables: [Cow<'static, [f16]>; QuantTable::CARDINALITY] = if all_default {
             // All library tables - borrow from static cache (zero-copy)
             std::array::from_fn(|idx| Cow::Borrowed(Self::get_library_table(idx)))
         } else {
             // Decode and compute each table
-            let mut tables_vec: Vec<Cow<'static, [f32]>> =
+            let mut tables_vec: Vec<Cow<'static, [f16]>> =
                 Vec::with_capacity(QuantTable::CARDINALITY);
             for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
                 .iter()
@@ -2126,7 +2127,7 @@ mod test {
             for c in 0..3 {
                 let table = matrices.matrix(hf_type, c);
                 for j in (0..size).step_by(size / 10) {
-                    assert_close!(table[j], target_table[target_table_index], 1e-5);
+                    assert_close!(table[j].to_f32(), target_table[target_table_index], 3e-4);
                     target_table_index += 1;
                 }
             }

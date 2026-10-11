@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(clippy::incompatible_msrv)]
+
 use std::arch::aarch64::*;
 use std::ops::{
     Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
@@ -10,17 +12,18 @@ use std::ops::{
 };
 
 use super::super::{
-    F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
+    F16SimdMask, F16SimdVec, F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask,
+    SimdMask16, U8SimdVec, U16SimdVec,
 };
-use crate::{U32SimdVec, U64SimdVec, impl_i16_array_interface};
+use crate::{U32SimdVec, U64SimdVec, f16, impl_f16_array_interface, impl_i16_array_interface};
 
-// Safety invariant: this type is only ever constructed if neon is available.
+// Safety invariant: this type is only ever constructed if neon and fp16 are available.
 #[derive(Clone, Copy, Debug)]
 pub struct NeonDescriptor(());
 
 impl NeonDescriptor {
     /// # Safety
-    /// The caller must guarantee that the "neon" target feature is available.
+    /// The caller must guarantee that the "neon" and "fp16" target features are available.
     pub unsafe fn new_unchecked() -> Self {
         Self(())
     }
@@ -32,8 +35,16 @@ impl NeonDescriptor {
 #[repr(transparent)]
 pub struct Bf16Table8Neon(uint8x16_t);
 
+/// Prepared 8-entry F16 lookup table for NEON.
+/// Contains 8 F16 values packed into 16 bytes (uint8x16_t).
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct F16Table8Neon(uint8x16_t);
+
 impl SimdDescriptor for NeonDescriptor {
     type F32Vec = F32VecNeon;
+
+    type F16Vec = F16VecNeon;
 
     type I32Vec = I32VecNeon;
 
@@ -48,15 +59,19 @@ impl SimdDescriptor for NeonDescriptor {
     type U8Vec = U8VecNeon;
 
     type Mask = MaskNeon;
+    type F16Mask = Mask16Neon;
     type Mask16 = Mask16Neon;
     type Bf16Table8 = Bf16Table8Neon;
+    type F16Table8 = F16Table8Neon;
 
     type Descriptor256 = Self;
     type Descriptor128 = Self;
 
     fn new() -> Option<Self> {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: we just checked neon.
+        if std::arch::is_aarch64_feature_detected!("neon")
+            && std::arch::is_aarch64_feature_detected!("fp16")
+        {
+            // SAFETY: we just checked neon and fp16.
             Some(unsafe { Self::new_unchecked() })
         } else {
             None
@@ -72,12 +87,12 @@ impl SimdDescriptor for NeonDescriptor {
     }
 
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
-        #[target_feature(enable = "neon")]
+        #[target_feature(enable = "neon,fp16")]
         #[inline(never)]
         unsafe fn inner<R>(d: NeonDescriptor, f: impl FnOnce(NeonDescriptor) -> R) -> R {
             f(d)
         }
-        // SAFETY: the safety invariant on `self` guarantees neon.
+        // SAFETY: the safety invariant on `self` guarantees neon and fp16.
         unsafe { inner(self, f) }
     }
 }
@@ -91,12 +106,12 @@ macro_rules! fn_neon {
     )*} => {$(
         #[inline(always)]
         fn $name(self: $self_ty, $($arg: $ty),*) $(-> $ret)? {
-            #[target_feature(enable = "neon")]
+            #[target_feature(enable = "neon,fp16")]
             #[inline]
             fn inner($this: $self_ty, $($arg: $ty),*) $(-> $ret)? {
                 $body
             }
-            // SAFETY: `self.1` is constructed iff neon is available.
+            // SAFETY: `self.1` is constructed iff neon and fp16 are available.
             unsafe { inner(self, $($arg),*) }
         }
     )*};
@@ -110,6 +125,11 @@ impl F32SimdVec for F32VecNeon {
     type Descriptor = NeonDescriptor;
 
     const LEN: usize = 4;
+
+    #[inline(always)]
+    fn descriptor(&self) -> Self::Descriptor {
+        self.1
+    }
 
     #[inline(always)]
     fn splat(d: Self::Descriptor, v: f32) -> Self {
@@ -358,6 +378,23 @@ impl F32SimdVec for F32VecNeon {
         }
     }
 
+    #[inline(always)]
+    fn transpose_square_f16(
+        _d: Self::Descriptor,
+        data: &mut [Self::UnderlyingF16Array],
+        stride: usize,
+    ) {
+        assert!(data.len() > 3 * stride);
+        for i in 0..4 {
+            for j in i + 1..4 {
+                let a = data[i * stride][j];
+                let b = data[j * stride][i];
+                data[i * stride][j] = b;
+                data[j * stride][i] = a;
+            }
+        }
+    }
+
     crate::impl_f32_array_interface!();
 
     fn_neon! {
@@ -443,18 +480,10 @@ impl F32SimdVec for F32VecNeon {
 
         fn store_f16_bits(this: F32VecNeon, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecNeon::LEN);
-            // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
-            // for vcvt_f16_f32 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
-            let f16_bits: uint16x4_t;
+            let f16_bits = vreinterpret_u16_f16(vcvt_f16_f32(this.0));
             // SAFETY: NEON is available (guaranteed by descriptor), dest has enough space,
             // vst1_u16 supports unaligned stores.
             unsafe {
-                std::arch::asm!(
-                    "fcvtn {out:v}.4h, {inp:v}.4s",
-                    inp = in(vreg) this.0,
-                    out = out(vreg) f16_bits,
-                    options(pure, nomem, nostack),
-                );
                 vst1_u16(dest.as_mut_ptr(), f16_bits);
             }
         }
@@ -463,21 +492,28 @@ impl F32SimdVec for F32VecNeon {
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
-        // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
-        // for vcvt_f32_f16 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
-        let result: float32x4_t;
-        // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space.
-        // vld1_u16 supports unaligned loads.
-        unsafe {
-            let f16_bits = vld1_u16(mem.as_ptr());
-            std::arch::asm!(
-                "fcvtl {out:v}.4s, {inp:v}.4h",
-                inp = in(vreg) f16_bits,
-                out = out(vreg) result,
-                options(pure, nomem, nostack),
-            );
+        #[target_feature(enable = "neon")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[u16]) -> F32VecNeon {
+            // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space.
+            // vld1_u16 supports unaligned loads.
+            let f16_bits = unsafe { vld1_u16(mem.as_ptr()) };
+            F32VecNeon(vcvt_f32_f16(vreinterpret_f16_u16(f16_bits)), d)
         }
-        F32VecNeon(result, d)
+        // SAFETY: neon is available from the safety invariant on the descriptor.
+        unsafe { inner(d, mem) }
+    }
+
+    #[inline(always)]
+    fn splat_f16_bits(d: Self::Descriptor, v: u16) -> Self {
+        #[target_feature(enable = "neon")]
+        #[inline]
+        fn inner(d: NeonDescriptor, v: u16) -> F32VecNeon {
+            let f16_bits = vreinterpret_f16_u16(vdup_n_u16(v));
+            F32VecNeon(vcvt_f32_f16(f16_bits), d)
+        }
+        // SAFETY: neon is available from the safety invariant on the descriptor.
+        unsafe { inner(d, v) }
     }
 
     #[inline(always)]
@@ -1502,7 +1538,515 @@ impl BitOr<MaskNeon> for MaskNeon {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
+pub struct F16VecNeon(float16x8_t, NeonDescriptor);
+
+impl F16SimdVec for F16VecNeon {
+    type Descriptor = NeonDescriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn descriptor(&self) -> Self::Descriptor {
+        self.1
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: f32) -> Self {
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, v: f32) -> F16VecNeon {
+            let h = vcvt_f16_f32(vdupq_n_f32(v));
+            F16VecNeon(vcombine_f16(h, h), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, v) }
+    }
+
+    #[inline(always)]
+    fn splat_f16(d: Self::Descriptor, v: f16) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `d`.
+        Self(
+            unsafe { vreinterpretq_f16_u16(vdupq_n_u16(v.to_bits())) },
+            d,
+        )
+    }
+
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        Self::splat_f16(d, f16::ZERO)
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[f16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space, and neon is available.
+        Self(
+            unsafe { vreinterpretq_f16_u16(vld1q_u16(f16::slice_to_bits(mem).as_ptr())) },
+            d,
+        )
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [f16]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space, and neon is available.
+        unsafe {
+            vst1q_u16(
+                f16::slice_to_bits_mut(mem).as_mut_ptr(),
+                vreinterpretq_u16_f16(self.0),
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn load_f32(d: Self::Descriptor, mem: &[f32]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[f32]) -> F16VecNeon {
+            // SAFETY: `mem.len() >= 8` was checked above.
+            let (lo, hi) = unsafe { (vld1q_f32(mem.as_ptr()), vld1q_f32(mem.as_ptr().add(4))) };
+            F16VecNeon(vcombine_f16(vcvt_f16_f32(lo), vcvt_f16_f32(hi)), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, mem) }
+    }
+
+    #[inline(always)]
+    fn store_f32(&self, mem: &mut [f32]) {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(v: float16x8_t, mem: &mut [f32]) {
+            let lo = vcvt_f32_f16(vget_low_f16(v));
+            let hi = vcvt_f32_f16(vget_high_f16(v));
+            // SAFETY: `mem.len() >= 8` was checked above.
+            unsafe {
+                vst1q_f32(mem.as_mut_ptr(), lo);
+                vst1q_f32(mem.as_mut_ptr().add(4), hi);
+            }
+        }
+        // SAFETY: `self.1` guarantees neon and fp16.
+        unsafe { inner(self.0, mem) }
+    }
+
+    #[inline(always)]
+    fn load_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[i16]) -> F16VecNeon {
+            // SAFETY: `mem.len() >= 8` was checked above.
+            let v = unsafe { vld1q_s16(mem.as_ptr()) };
+            F16VecNeon(vcvtq_f16_s16(v), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, mem) }
+    }
+
+    #[inline(always)]
+    fn load_i32(d: Self::Descriptor, mem: &[i32]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[i32]) -> F16VecNeon {
+            // SAFETY: `mem.len() >= 8` was checked above.
+            let (lo, hi) = unsafe { (vld1q_s32(mem.as_ptr()), vld1q_s32(mem.as_ptr().add(4))) };
+            let lo_f16 = vcvt_f16_f32(vcvtq_f32_s32(lo));
+            let hi_f16 = vcvt_f16_f32(vcvtq_f32_s32(hi));
+            F16VecNeon(vcombine_f16(lo_f16, hi_f16), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, mem) }
+    }
+
+    #[inline(always)]
+    fn load_i16_scaled(d: Self::Descriptor, mem: &[i16], scale: f32) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[i16], scale: f32) -> F16VecNeon {
+            // SAFETY: `mem.len() >= 8` was checked above.
+            let v = unsafe { vld1q_s16(mem.as_ptr()) };
+            let scale_v = vdupq_n_f32(scale);
+            let lo_f32 = vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(v))), scale_v);
+            let hi_f32 = vmulq_f32(vcvtq_f32_s32(vmovl_high_s16(v)), scale_v);
+            F16VecNeon(vcombine_f16(vcvt_f16_f32(lo_f32), vcvt_f16_f32(hi_f32)), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, mem, scale) }
+    }
+
+    #[inline(always)]
+    fn load_i32_scaled(d: Self::Descriptor, mem: &[i32], scale: f32) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[i32], scale: f32) -> F16VecNeon {
+            // SAFETY: `mem.len() >= 8` was checked above.
+            let (lo, hi) = unsafe { (vld1q_s32(mem.as_ptr()), vld1q_s32(mem.as_ptr().add(4))) };
+            let scale_v = vdupq_n_f32(scale);
+            let lo_f32 = vmulq_f32(vcvtq_f32_s32(lo), scale_v);
+            let hi_f32 = vmulq_f32(vcvtq_f32_s32(hi), scale_v);
+            F16VecNeon(vcombine_f16(vcvt_f16_f32(lo_f32), vcvt_f16_f32(hi_f32)), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, mem, scale) }
+    }
+
+    #[inline(always)]
+    fn load_f16_bits_i32(d: Self::Descriptor, mem: &[i32]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[i32]) -> F16VecNeon {
+            // SAFETY: `mem.len() >= 8` was checked above.
+            let (lo, hi) = unsafe { (vld1q_s32(mem.as_ptr()), vld1q_s32(mem.as_ptr().add(4))) };
+            let s16s = vcombine_s16(vmovn_s32(lo), vmovn_s32(hi));
+            F16VecNeon(vreinterpretq_f16_s16(s16s), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, mem) }
+    }
+
+    #[inline(always)]
+    fn load_u16_norm(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn inner(d: NeonDescriptor, mem: &[u16]) -> F16VecNeon {
+            // SAFETY: `mem.len() >= 8` was checked above.
+            let u = unsafe { vld1q_u16(mem.as_ptr()) };
+            let bits = vorrq_u16(vshrq_n_u16::<6>(u), vdupq_n_u16(0x3c00));
+            let val = vreinterpretq_f16_u16(bits);
+            let one_point_five = vreinterpretq_f16_u16(vdupq_n_u16(0x3e00));
+            F16VecNeon(vsubq_f16(val, one_point_five), d)
+        }
+        // SAFETY: `d` guarantees neon and fp16.
+        unsafe { inner(d, mem) }
+    }
+
+    fn_neon! {
+        fn round_store_u8(this: F16VecNeon, dest: &mut [u8]) {
+            assert!(dest.len() >= F16VecNeon::LEN);
+            let rounded = vrndnq_f16(this.0);
+            let s16s = vcvtq_s16_f16(rounded);
+            let u8s = vqmovun_s16(s16s);
+            // SAFETY: we checked dest has enough space. vst1_u8 supports unaligned stores.
+            unsafe {
+                vst1_u8(dest.as_mut_ptr(), u8s);
+            }
+        }
+
+        fn round_store_u16(this: F16VecNeon, dest: &mut [u16]) {
+            assert!(dest.len() >= F16VecNeon::LEN);
+            let lo = F32VecNeon(vcvt_f32_f16(vget_low_f16(this.0)), this.1);
+            let hi = F32VecNeon(vcvt_f32_f16(vget_high_f16(this.0)), this.1);
+            lo.round_store_u16(&mut dest[0..4]);
+            hi.round_store_u16(&mut dest[4..8]);
+        }
+
+        fn mul_add(this: F16VecNeon, mul: F16VecNeon, add: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vfmaq_f16(add.0, this.0, mul.0), this.1)
+        }
+
+        fn neg_mul_add(this: F16VecNeon, mul: F16VecNeon, add: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vfmsq_f16(add.0, this.0, mul.0), this.1)
+        }
+
+        fn abs(this: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vabsq_f16(this.0), this.1)
+        }
+
+        fn floor(this: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vrndmq_f16(this.0), this.1)
+        }
+
+        fn sqrt(this: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vsqrtq_f16(this.0), this.1)
+        }
+
+        fn neg(this: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vnegq_f16(this.0), this.1)
+        }
+
+        fn copysign(this: F16VecNeon, sign: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vbslq_f16(vdupq_n_u16(0x7fff), this.0, sign.0), this.1)
+        }
+
+        fn max(this: F16VecNeon, other: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vmaxq_f16(this.0, other.0), this.1)
+        }
+
+        fn min(this: F16VecNeon, other: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vminq_f16(this.0, other.0), this.1)
+        }
+
+        fn gt(this: F16VecNeon, other: F16VecNeon) -> Mask16Neon {
+            Mask16Neon(vcgtq_f16(this.0, other.0), this.1)
+        }
+
+        fn decompose_log2(this: F16VecNeon) -> (F16VecNeon, F16VecNeon) {
+            let x_bits = vreinterpretq_s16_f16(this.0);
+            let exp_bits = vsubq_s16(x_bits, vdupq_n_s16(0x3955));
+            let exp_shifted = vshrq_n_s16::<10>(exp_bits);
+            let mantissa_bits = vsubq_s16(x_bits, vshlq_n_s16::<10>(exp_shifted));
+            let mantissa = vreinterpretq_f16_s16(mantissa_bits);
+            let exp_val = vcvtq_f16_s16(exp_shifted);
+            (F16VecNeon(mantissa, this.1), F16VecNeon(exp_val, this.1))
+        }
+
+        fn exp2_int(this: F16VecNeon) -> F16VecNeon {
+            let exp_i = vmaxq_s16(vaddq_s16(vcvtq_s16_f16(this.0), vdupq_n_s16(15)), vdupq_n_s16(0));
+            F16VecNeon(vreinterpretq_f16_s16(vshlq_n_s16::<10>(exp_i)), this.1)
+        }
+    }
+
+    #[inline(always)]
+    fn prepare_table_f16_8(_d: NeonDescriptor, table: &[f32; 8]) -> F16Table8Neon {
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn prepare_impl(table: &[f32; 8]) -> uint8x16_t {
+            // SAFETY: `table` has 8 elements.
+            let (table_lo, table_hi) =
+                unsafe { (vld1q_f32(table.as_ptr()), vld1q_f32(table.as_ptr().add(4))) };
+            let f16_table = vcombine_f16(vcvt_f16_f32(table_lo), vcvt_f16_f32(table_hi));
+            vreinterpretq_u8_f16(f16_table)
+        }
+        // SAFETY: neon and fp16 are available from the safety invariant on `_d`.
+        F16Table8Neon(unsafe { prepare_impl(table) })
+    }
+
+    #[inline(always)]
+    fn table_lookup_f16_8(d: NeonDescriptor, table: F16Table8Neon, indices: Self) -> Self {
+        #[target_feature(enable = "neon,fp16")]
+        #[inline]
+        fn lookup_impl(f16_table: uint8x16_t, indices: float16x8_t) -> float16x8_t {
+            let idx_u16 = vreinterpretq_u16_s16(vcvtq_s16_f16(indices));
+            let shl1 = vshlq_n_u16::<1>(idx_u16);
+            let shl9 = vshlq_n_u16::<9>(idx_u16);
+            let mask = vorrq_u16(vorrq_u16(shl1, shl9), vdupq_n_u16(0x0100));
+            let res = vqtbl1q_u8(f16_table, vreinterpretq_u8_u16(mask));
+            vreinterpretq_f16_u8(res)
+        }
+        // SAFETY: neon and fp16 are available from the safety invariant on `d`.
+        F16VecNeon(unsafe { lookup_impl(table.0, indices.0) }, d)
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f16]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available.
+        unsafe {
+            vst2q_u16(
+                f16::slice_to_bits_mut(dest).as_mut_ptr(),
+                uint16x8x2_t(vreinterpretq_u16_f16(a.0), vreinterpretq_u16_f16(b.0)),
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f16]) {
+        assert!(dest.len() >= 3 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available.
+        unsafe {
+            vst3q_u16(
+                f16::slice_to_bits_mut(dest).as_mut_ptr(),
+                uint16x8x3_t(
+                    vreinterpretq_u16_f16(a.0),
+                    vreinterpretq_u16_f16(b.0),
+                    vreinterpretq_u16_f16(c.0),
+                ),
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f16]) {
+        assert!(dest.len() >= 4 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available.
+        unsafe {
+            vst4q_u16(
+                f16::slice_to_bits_mut(dest).as_mut_ptr(),
+                uint16x8x4_t(
+                    vreinterpretq_u16_f16(a.0),
+                    vreinterpretq_u16_f16(b.0),
+                    vreinterpretq_u16_f16(c.0),
+                    vreinterpretq_u16_f16(d.0),
+                ),
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        dest: &mut [f16],
+    ) {
+        assert!(dest.len() >= 8 * Self::LEN);
+        let desc = a.1;
+        let dest_arrays = Self::make_array_slice_mut(&mut dest[..64]);
+        a.store_array(&mut dest_arrays[0]);
+        b.store_array(&mut dest_arrays[1]);
+        c.store_array(&mut dest_arrays[2]);
+        d.store_array(&mut dest_arrays[3]);
+        e.store_array(&mut dest_arrays[4]);
+        f.store_array(&mut dest_arrays[5]);
+        g.store_array(&mut dest_arrays[6]);
+        h.store_array(&mut dest_arrays[7]);
+        Self::transpose_square(desc, dest_arrays, 1);
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_2(d: Self::Descriptor, src: &[f16]) -> (Self, Self) {
+        assert!(src.len() >= 2 * Self::LEN);
+        // SAFETY: we just checked that `src` has enough space, and neon is available.
+        unsafe {
+            let v = vld2q_u16(f16::slice_to_bits(src).as_ptr());
+            (
+                Self(vreinterpretq_f16_u16(v.0), d),
+                Self(vreinterpretq_f16_u16(v.1), d),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_3(d: Self::Descriptor, src: &[f16]) -> (Self, Self, Self) {
+        assert!(src.len() >= 3 * Self::LEN);
+        // SAFETY: we just checked that `src` has enough space, and neon is available.
+        unsafe {
+            let v = vld3q_u16(f16::slice_to_bits(src).as_ptr());
+            (
+                Self(vreinterpretq_f16_u16(v.0), d),
+                Self(vreinterpretq_f16_u16(v.1), d),
+                Self(vreinterpretq_f16_u16(v.2), d),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_4(d: Self::Descriptor, src: &[f16]) -> (Self, Self, Self, Self) {
+        assert!(src.len() >= 4 * Self::LEN);
+        // SAFETY: we just checked that `src` has enough space, and neon is available.
+        unsafe {
+            let v = vld4q_u16(f16::slice_to_bits(src).as_ptr());
+            (
+                Self(vreinterpretq_f16_u16(v.0), d),
+                Self(vreinterpretq_f16_u16(v.1), d),
+                Self(vreinterpretq_f16_u16(v.2), d),
+                Self(vreinterpretq_f16_u16(v.3), d),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn transpose_square(d: NeonDescriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
+        // SAFETY: `[f16; 8]` and `[i16; 8]` have identical size, alignment, and bit-level layout.
+        let data_i16 = unsafe {
+            std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<[i16; 8]>(), data.len())
+        };
+        I16VecNeon::transpose_square(d, data_i16, stride);
+    }
+
+    impl_f16_array_interface!();
+}
+
+impl Add<F16VecNeon> for F16VecNeon {
+    type Output = F16VecNeon;
+    fn_neon! {
+        fn add(this: F16VecNeon, rhs: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vaddq_f16(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl Sub<F16VecNeon> for F16VecNeon {
+    type Output = F16VecNeon;
+    fn_neon! {
+        fn sub(this: F16VecNeon, rhs: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vsubq_f16(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl Mul<F16VecNeon> for F16VecNeon {
+    type Output = F16VecNeon;
+    fn_neon! {
+        fn mul(this: F16VecNeon, rhs: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vmulq_f16(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl Div<F16VecNeon> for F16VecNeon {
+    type Output = F16VecNeon;
+    fn_neon! {
+        fn div(this: F16VecNeon, rhs: F16VecNeon) -> F16VecNeon {
+            F16VecNeon(vdivq_f16(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl AddAssign<F16VecNeon> for F16VecNeon {
+    fn_neon! {
+        fn add_assign(this: &mut F16VecNeon, rhs: F16VecNeon) {
+            this.0 = vaddq_f16(this.0, rhs.0);
+        }
+    }
+}
+
+impl SubAssign<F16VecNeon> for F16VecNeon {
+    fn_neon! {
+        fn sub_assign(this: &mut F16VecNeon, rhs: F16VecNeon) {
+            this.0 = vsubq_f16(this.0, rhs.0);
+        }
+    }
+}
+
+impl MulAssign<F16VecNeon> for F16VecNeon {
+    fn_neon! {
+        fn mul_assign(this: &mut F16VecNeon, rhs: F16VecNeon) {
+            this.0 = vmulq_f16(this.0, rhs.0);
+        }
+    }
+}
+
+impl DivAssign<F16VecNeon> for F16VecNeon {
+    fn_neon! {
+        fn div_assign(this: &mut F16VecNeon, rhs: F16VecNeon) {
+            this.0 = vdivq_f16(this.0, rhs.0);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
 pub struct Mask16Neon(uint16x8_t, NeonDescriptor);
+
+impl F16SimdMask for Mask16Neon {
+    type Descriptor = NeonDescriptor;
+
+    fn_neon! {
+        fn if_then_else_f16(
+            this: Mask16Neon,
+            if_true: F16VecNeon,
+            if_false: F16VecNeon,
+        ) -> F16VecNeon {
+            F16VecNeon(vbslq_f16(this.0, if_true.0, if_false.0), this.1)
+        }
+
+        fn all(this: Mask16Neon) -> bool {
+            vminvq_u16(this.0) == u16::MAX
+        }
+    }
+}
 
 impl SimdMask16 for Mask16Neon {
     type Descriptor = NeonDescriptor;

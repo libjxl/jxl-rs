@@ -94,8 +94,10 @@ impl SaveStage {
 
         for (i, (&in_buf, &ch_ty)) in data.iter().zip(self.channel_types.iter()).enumerate() {
             let ch = self.channels[i];
-            if ch_ty == SaveChannelType::F32
-                && matches!(self.data_format, JxlDataFormat::F32 { .. })
+            if (ch_ty == SaveChannelType::F32
+                && matches!(self.data_format, JxlDataFormat::F32 { .. }))
+                || (ch_ty == SaveChannelType::F16
+                    && matches!(self.data_format, JxlDataFormat::F16 { .. }))
             {
                 save_buffers.push(in_buf);
                 continue;
@@ -131,6 +133,36 @@ impl SaveStage {
                     let dst = &mut s_buf.get_row_mut::<u16>(0)
                         [RowBuffer::x0_offset::<u16>() + conv_start..];
                     identity::f32_to_f16(src, dst, conv_len);
+                }
+                (SaveChannelType::F16, JxlDataFormat::U8 { bit_depth }) => {
+                    let max = ((1u32 << bit_depth) - 1) as f32;
+                    let src = &in_buf.get_row::<u16>(frame_y)
+                        [RowBuffer::x0_offset::<u16>() + conv_start..];
+                    let dst = &mut s_buf.get_row_mut::<u8>(0)
+                        [RowBuffer::x0_offset::<u8>() + conv_start..];
+                    identity::f16_to_u8(
+                        src,
+                        dst,
+                        max,
+                        (group_origin.0 + conv_start, frame_y),
+                        ch,
+                        conv_len,
+                    );
+                }
+                (SaveChannelType::F16, JxlDataFormat::U16 { bit_depth, .. }) => {
+                    let max = ((1u32 << bit_depth) - 1) as f32;
+                    let src = &in_buf.get_row::<u16>(frame_y)
+                        [RowBuffer::x0_offset::<u16>() + conv_start..];
+                    let dst = &mut s_buf.get_row_mut::<u16>(0)
+                        [RowBuffer::x0_offset::<u16>() + conv_start..];
+                    identity::f16_to_u16(src, dst, max, conv_len);
+                }
+                (SaveChannelType::F16, JxlDataFormat::F32 { .. }) => {
+                    let src = &in_buf.get_row::<u16>(frame_y)
+                        [RowBuffer::x0_offset::<u16>() + conv_start..];
+                    let dst = &mut s_buf.get_row_mut::<f32>(0)
+                        [RowBuffer::x0_offset::<f32>() + conv_start..];
+                    identity::f16_to_f32(src, dst, conv_len);
                 }
                 (
                     SaveChannelType::I16 { bit_depth: in_bd },
