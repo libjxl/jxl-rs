@@ -314,6 +314,7 @@ pub(super) fn decode_modular_channel(
     let ScratchSpace {
         decode_row_scratch,
         tree_lut_scratch,
+        mdd_scratch,
         ..
     } = scratch_space;
     if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
@@ -337,9 +338,11 @@ pub(super) fn decode_modular_channel(
         chan,
         stream_id,
         size.0,
+        size.1,
         header,
         storage,
         tree_lut_scratch,
+        mdd_scratch,
         |t| {
             decode_modular_channel_impl(
                 t,

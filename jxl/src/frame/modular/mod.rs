@@ -211,6 +211,7 @@ impl ModularBufferInfo {
 }
 
 use crate::frame::modular::decode::specialized_trees::LUT_TABLE_SIZE;
+use crate::frame::modular::flat_tree::MddScratch;
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 
 pub(super) struct ScratchSpace {
@@ -218,6 +219,7 @@ pub(super) struct ScratchSpace {
     palette_row_scratch: [Vec<i32>; 4],
     decode_row_scratch: [Vec<i32>; 3],
     tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
+    mdd_scratch: MddScratch,
     hsqueeze_i16_scratch: Box<[i16; 2048]>,
 }
 
@@ -234,6 +236,7 @@ impl ScratchSpace {
             palette_row_scratch: [vec![], vec![], vec![], vec![]],
             decode_row_scratch: [vec![], vec![], vec![]],
             tree_lut_scratch: crate::util::box_array(0u8),
+            mdd_scratch: MddScratch::new(),
             hsqueeze_i16_scratch: crate::util::box_array(0i16),
         }
     }
