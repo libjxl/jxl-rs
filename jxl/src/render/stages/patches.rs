@@ -18,7 +18,7 @@ pub struct PatchesStage {
 
 struct PatchesState {
     patches_for_row_result: Vec<usize>,
-    blending_scratch: Vec<f32>,
+    blending_scratch: Vec<crate::util::f16>,
 }
 
 impl PatchesStage {
@@ -42,7 +42,7 @@ impl std::fmt::Display for PatchesStage {
 }
 
 impl RenderPipelineInPlaceStage for PatchesStage {
-    type Type = f32;
+    type Type = crate::util::f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 + self.extra_channels.len()
@@ -52,7 +52,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         &self,
         position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [crate::util::f16]],
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {

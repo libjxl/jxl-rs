@@ -10,6 +10,7 @@ use jxl_simd::simd_function;
 use super::Epf1Stage;
 use super::common::{epf_process_row_chunk, plus_sad};
 use crate::render::{Channels, ChannelsMut};
+use crate::util::f16;
 
 const OFFSETS: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
@@ -21,9 +22,9 @@ simd_function!(
         xpos: usize,
         xsize: usize,
         row_sigma: &[f32],
-        sad_mul_storage: &[f32; 24],
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        sad_mul_storage: &[f16; 24],
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
     ) {
         epf_process_row_chunk::<D, 1, 2, 5, 2, 4>(
             d,

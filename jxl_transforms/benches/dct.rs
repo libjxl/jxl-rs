@@ -7,13 +7,13 @@
 
 use criterion::measurement::Measurement;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};
-use jxl_simd::{bench_all_instruction_sets, SimdDescriptor};
+use jxl_simd::{bench_all_instruction_sets, f16, SimdDescriptor};
 use jxl_transforms::*;
 
 const MAX_COEFF_AREA: usize = 256 * 256;
 
 fn bench_idct2d<D: SimdDescriptor>(d: D, c: &mut BenchmarkGroup<'_, impl Measurement>, name: &str) {
-    let mut data = vec![1.0; MAX_COEFF_AREA];
+    let mut data = vec![f16::from_f32(1.0); MAX_COEFF_AREA];
 
     macro_rules! run {
         ($fun: ident, $name: literal, $sz: expr) => {
@@ -58,8 +58,8 @@ fn bench_reinterpreting_dct<D: SimdDescriptor>(
     c: &mut BenchmarkGroup<'_, impl Measurement>,
     name: &str,
 ) {
-    let mut data = vec![1.0; MAX_COEFF_AREA];
-    let mut output = vec![0.0; MAX_COEFF_AREA];
+    let mut data = vec![f16::from_f32(1.0); MAX_COEFF_AREA];
+    let mut output = vec![f16::ZERO; MAX_COEFF_AREA];
 
     macro_rules! run {
         ($fun: ident, $name: literal, $sz: expr) => {

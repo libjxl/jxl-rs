@@ -64,7 +64,7 @@ impl<Buffer: 'static> Stage<Buffer> {
     }
     pub(super) fn input_type(&self, c: usize) -> DataTypeTag {
         match self {
-            Stage::Extend(_) => DataTypeTag::F32,
+            Stage::Extend(_) => DataTypeTag::F16,
             Stage::InPlace(s) => s.ty(),
             Stage::InOut(s) => s.input_type(),
             Stage::Save(s) => s.input_type(c),

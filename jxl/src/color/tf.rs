@@ -3,13 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask};
+use jxl_simd::{F16SimdMask, F16SimdVec, F32SimdVec, SimdDescriptor, SimdMask};
 
 use crate::headers::color_encoding::CustomTransferFunction;
-use crate::util::eval_rational_poly_simd;
+use crate::util::{eval_rational_poly_f16_simd, eval_rational_poly_simd};
 
 /// Converts a single SIMD vector of linear samples to sRGB transfer curve.
 // Max error ~5e-7
+#[allow(dead_code)]
 #[inline(always)]
 pub fn linear_to_srgb_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     #[allow(clippy::excessive_precision)]
@@ -40,8 +41,39 @@ pub fn linear_to_srgb_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32V
         .copysign(x)
 }
 
+#[inline(always)]
+pub fn linear_to_srgb_f16_simd_vec<D: SimdDescriptor>(d: D, x: D::F16Vec) -> D::F16Vec {
+    #[allow(clippy::excessive_precision)]
+    const P: [f32; 5] = [
+        -5.135152395e-4,
+        5.287254571e-3,
+        3.903842876e-1,
+        1.474205315,
+        7.352629620e-1,
+    ];
+
+    #[allow(clippy::excessive_precision)]
+    const Q: [f32; 5] = [
+        1.004519624e-2,
+        3.036675394e-1,
+        1.340816930,
+        9.258482155e-1,
+        2.424867759e-2,
+    ];
+
+    let a = x.abs();
+    D::F16Vec::splat_f32(d, 0.0031308)
+        .gt(a)
+        .if_then_else_f16(
+            a * D::F16Vec::splat_f32(d, 12.92),
+            eval_rational_poly_f16_simd(d, a.sqrt(), P, Q),
+        )
+        .copysign(x)
+}
+
 /// Converts a single SIMD vector of linear samples to BT.709 transfer curve.
 // Max error ~3e-7
+#[allow(dead_code)]
 #[inline(always)]
 pub fn linear_to_bt709_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     // Coefficients for rational polynomial P(y)/Q(y) where y = sqrt(x)
@@ -70,6 +102,36 @@ pub fn linear_to_bt709_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32
         .if_then_else_f32(
             a * D::F32Vec::splat(d, 4.5),
             eval_rational_poly_simd(d, a.sqrt(), P, Q),
+        )
+        .copysign(x)
+}
+
+#[inline(always)]
+pub fn linear_to_bt709_f16_simd_vec<D: SimdDescriptor>(d: D, x: D::F16Vec) -> D::F16Vec {
+    #[allow(clippy::excessive_precision)]
+    const P: [f32; 5] = [
+        -9.625309705734253e-2,
+        -2.2635456919670105e-1,
+        1.935774803161621e1,
+        5.897886276245117e1,
+        2.3947298049926758e1,
+    ];
+
+    #[allow(clippy::excessive_precision)]
+    const Q: [f32; 5] = [
+        1.0,
+        1.877663230895996e1,
+        5.5292449951171875e1,
+        2.6565317153930664e1,
+        3.269049823284149e-1,
+    ];
+
+    let a = x.abs();
+    D::F16Vec::splat_f32(d, 0.018)
+        .gt(a)
+        .if_then_else_f16(
+            a * D::F16Vec::splat_f32(d, 4.5),
+            eval_rational_poly_f16_simd(d, a.sqrt(), P, Q),
         )
         .copysign(x)
 }
@@ -113,7 +175,23 @@ const PQ_INV_EOTF_P_SMALL: [f32; 5] = [
 const PQ_INV_EOTF_Q_SMALL: [f32; 5] =
     [3.371868e1, 1.477719e3, 1.608477e4, -4.389884e4, -2.072546e5];
 
+const PQ_INV_EOTF_P_SMALL_F16: [f32; 5] = [
+    16.0 * 9.863406e-6,
+    3.881234e-1,
+    1.352821e2 / 16.0,
+    6.889862e4 / 256.0,
+    -2.864824e5 / 4096.0,
+];
+const PQ_INV_EOTF_Q_SMALL_F16: [f32; 5] = [
+    16.0 * 3.371868e1,
+    1.477719e3,
+    1.608477e4 / 16.0,
+    -4.389884e4 / 256.0,
+    -2.072546e5 / 4096.0,
+];
+
 /// Converts a single SIMD vector of linear samples to PQ signal.
+#[allow(dead_code)]
 #[inline(always)]
 pub fn linear_to_pq_simd_vec<D: SimdDescriptor>(
     d: D,
@@ -135,10 +213,35 @@ pub fn linear_to_pq_simd_vec<D: SimdDescriptor>(
         .min(D::F32Vec::splat(d, 1.0))
 }
 
+/// Converts a single `F16SimdVec` of linear samples to PQ signal.
+/// `y_mult_1_4` is `(intensity_target / 10000.0).sqrt().sqrt()`.
+#[inline(always)]
+pub fn linear_to_pq_f16_simd_vec<D: SimdDescriptor>(
+    d: D,
+    y_mult_1_4: D::F16Vec,
+    threshold: D::F16Vec,
+    s: D::F16Vec,
+) -> D::F16Vec {
+    let a = s.abs();
+    let a_1_4 = a.sqrt().sqrt() * y_mult_1_4;
+    let u = a_1_4 * D::F16Vec::splat(d, 16.0);
+
+    // Use small polynomial for a < 1e-4, regular polynomial otherwise
+    let y_small =
+        eval_rational_poly_f16_simd(d, u, PQ_INV_EOTF_P_SMALL_F16, PQ_INV_EOTF_Q_SMALL_F16);
+    let y_large = eval_rational_poly_f16_simd(d, a_1_4, PQ_INV_EOTF_P, PQ_INV_EOTF_Q);
+    let y = threshold.gt(a).if_then_else_f16(y_small, y_large);
+
+    y.copysign(s)
+        .max(D::F16Vec::splat(d, 0.0))
+        .min(D::F16Vec::splat(d, 1.0))
+}
+
 const HLG_A: f64 = 0.17883277;
 const HLG_B: f64 = 1.0 - 4.0 * HLG_A;
 const HLG_C: f64 = 0.5599107295;
 
+#[allow(dead_code)]
 #[inline(always)]
 fn hlg_ootf_inner_vec<D: SimdDescriptor>(
     d: D,
@@ -154,11 +257,27 @@ fn hlg_ootf_inner_vec<D: SimdDescriptor>(
     [r * mult, g * mult, b * mult]
 }
 
+#[inline(always)]
+fn hlg_ootf_inner_f16_vec<D: SimdDescriptor>(
+    d: D,
+    exp: D::F16Vec,
+    [lr, lg, lb]: [D::F16Vec; 3],
+    [r, g, b]: [D::F16Vec; 3],
+) -> [D::F16Vec; 3] {
+    let mixed = r.mul_add(lr, g.mul_add(lg, b * lb));
+    let mult = crate::util::fast_powf_simd_f16(d, mixed, exp);
+    let mult = D::F16Vec::splat(d, 0.1)
+        .gt(exp.abs())
+        .if_then_else_f16(D::F16Vec::splat(d, 1.0), mult);
+    [r * mult, g * mult, b * mult]
+}
+
 #[inline]
 pub fn hlg_system_gamma(intensity_display: f32) -> f32 {
     (1.2f64 * 1.111f64.powf((intensity_display as f64 / 1e3).log2())) as f32
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 pub fn hlg_display_to_scene_vec<D: SimdDescriptor>(
     d: D,
@@ -170,6 +289,18 @@ pub fn hlg_display_to_scene_vec<D: SimdDescriptor>(
     hlg_ootf_inner_vec(d, one_sub_gamma / system_gamma, luminance_rgb, samples_rgb)
 }
 
+#[inline(always)]
+pub fn hlg_display_to_scene_f16_vec<D: SimdDescriptor>(
+    d: D,
+    system_gamma: D::F16Vec,
+    luminance_rgb: [D::F16Vec; 3],
+    samples_rgb: [D::F16Vec; 3],
+) -> [D::F16Vec; 3] {
+    let one_sub_gamma = D::F16Vec::splat(d, 1.0) - system_gamma;
+    hlg_ootf_inner_f16_vec(d, one_sub_gamma / system_gamma, luminance_rgb, samples_rgb)
+}
+
+#[allow(dead_code)]
 #[inline(always)]
 pub fn scene_to_hlg_vec<D: SimdDescriptor>(d: D, s: D::F32Vec) -> D::F32Vec {
     let a = s.abs();
@@ -194,6 +325,32 @@ pub fn scene_to_hlg_vec<D: SimdDescriptor>(d: D, s: D::F32Vec) -> D::F32Vec {
         .copysign(s)
         .max(D::F32Vec::splat(d, -0.074))
         .min(D::F32Vec::splat(d, 1.1))
+}
+
+#[inline(always)]
+pub fn scene_to_hlg_f16_vec<D: SimdDescriptor>(d: D, s: D::F16Vec) -> D::F16Vec {
+    let a = s.abs();
+    let y_small = (D::F16Vec::splat(d, 3.0) * a).sqrt();
+    let y_large = {
+        let log = crate::util::fast_log2f_simd_f16(
+            d,
+            a.mul_add(
+                D::F16Vec::splat(d, 12.0),
+                D::F16Vec::splat(d, -HLG_B as f32),
+            ),
+        );
+        // log2 x = ln x / ln 2, therefore ln x = (ln 2)(log2 x)
+        log.mul_add(
+            D::F16Vec::splat(d, (HLG_A * std::f64::consts::LN_2) as f32),
+            D::F16Vec::splat(d, HLG_C as f32),
+        )
+    };
+    let a_threshold = D::F16Vec::splat(d, 1.0 / 12.0);
+    a.gt(a_threshold)
+        .if_then_else_f16(y_large, y_small)
+        .copysign(s)
+        .max(D::F16Vec::splat(d, -0.074))
+        .min(D::F16Vec::splat(d, 1.1))
 }
 
 /// Converts HLG signal to scene-referred linear sample.

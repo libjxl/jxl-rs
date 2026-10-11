@@ -27,7 +27,7 @@ print("#![allow(clippy::type_complexity)]")
 print("#![allow(clippy::erasing_op)]")
 print("#![allow(clippy::identity_op)]")
 
-print("use jxl_simd::{F32SimdVec, SimdDescriptor};")
+print("use jxl_simd::{F16SimdVec, SimdDescriptor};")
 print("use crate::*;")
 
 print()
@@ -65,7 +65,7 @@ def b_transpose(variables):
         print("let mut v%d = v%d + v%d;" % (ret[i], variables[i - 1], variables[i]))
     ret[0] = next()
     print(
-        "let mut v%d = v%d * D::F32Vec::splat(d, std::f32::consts::SQRT_2);"
+        "let mut v%d = v%d * D::F16Vec::splat(d, std::f32::consts::SQRT_2);"
         % (ret[0], variables[0])
     )
     return ret
@@ -75,7 +75,7 @@ def multiply_and_add(variables):
     n = len(variables)
     ret = [0] * len(variables)
     for i in range(n // 2):
-        print("let mul = D::F32Vec::splat(d, %.16f);" % wc_multiplier(i, n))
+        print("let mul = D::F16Vec::splat(d, %.16f);" % wc_multiplier(i, n))
         ret[i] = next()
         print(
             "let mut v%d = v%d.mul_add(mul, v%d);"
@@ -132,10 +132,10 @@ print("#[allow(clippy::excessive_precision)]")
 print("#[inline(always)]")
 print("pub(super) fn idct_%d<D: SimdDescriptor>(d: D," % n)
 for v in variables:
-    print("mut v%d: D::F32Vec," % v)
+    print("mut v%d: D::F16Vec," % v)
 print(") -> (")
 for _ in range(n):
-    print("D::F32Vec,")
+    print("D::F16Vec,")
 print(") {")
 
 variables = idct(variables)
@@ -153,13 +153,13 @@ print("}")
 print()
 print("#[inline(always)]")
 print(
-    "pub(super) fn do_idct_%d<D: SimdDescriptor>(d: D, data: &mut [<D::F32Vec as F32SimdVec>::UnderlyingArray], stride: usize) {"
+    "pub(super) fn do_idct_%d<D: SimdDescriptor>(d: D, data: &mut [<D::F16Vec as F16SimdVec>::UnderlyingArray], stride: usize) {"
     % n
 )
 
 print("assert!(data.len() > %d * stride);" % (n - 1))
 for i in range(n):
-    print("let mut v%d = D::F32Vec::load_array(d, &data[%d*stride]);" % (i, i))
+    print("let mut v%d = D::F16Vec::load_array(d, &data[%d*stride]);" % (i, i))
 
 call_idct(list(range(n)))
 
@@ -172,17 +172,17 @@ print("}")
 print()
 print("#[inline(always)]")
 print(
-    "pub(super) fn do_idct_%d_rowblock<D: SimdDescriptor>(d: D, data: &mut [<D::F32Vec as F32SimdVec>::UnderlyingArray]) {"
+    "pub(super) fn do_idct_%d_rowblock<D: SimdDescriptor>(d: D, data: &mut [<D::F16Vec as F16SimdVec>::UnderlyingArray]) {"
     % n
 )
 
 print("assert!(data.len() >= %d);" % n)
-print("const { assert!(%dusize.is_multiple_of(D::F32Vec::LEN)) };" % n)
-print("let row_stride = %d / D::F32Vec::LEN;" % n)
+print("assert!(%dusize.is_multiple_of(D::F16Vec::LEN));" % n)
+print("let row_stride = %d / D::F16Vec::LEN;" % n)
 
 for i in range(n):
     print(
-        "let mut v%d = D::F32Vec::load_array(d, &data[row_stride*(%d %% D::F32Vec::LEN) + (%d / D::F32Vec::LEN)]);"
+        "let mut v%d = D::F16Vec::load_array(d, &data[row_stride*(%d %% D::F16Vec::LEN) + (%d / D::F16Vec::LEN)]);"
         % (i, i, i)
     )
 
@@ -190,7 +190,7 @@ call_idct(list(range(n)))
 
 for i in range(n):
     print(
-        "v%d.store_array(&mut data[row_stride*(%d %% D::F32Vec::LEN) + (%d / D::F32Vec::LEN)]);"
+        "v%d.store_array(&mut data[row_stride*(%d %% D::F16Vec::LEN) + (%d / D::F16Vec::LEN)]);"
         % (i, i, i)
     )
 
@@ -202,19 +202,19 @@ if n > 2:
     print()
     print("#[inline(always)]")
     print(
-        "pub(super) fn do_idct_%d_trh<D: SimdDescriptor>(d: D, data: &mut [<D::F32Vec as F32SimdVec>::UnderlyingArray]) {"
+        "pub(super) fn do_idct_%d_trh<D: SimdDescriptor>(d: D, data: &mut [<D::F16Vec as F16SimdVec>::UnderlyingArray]) {"
         % n
     )
 
-    print("let row_stride = %d / D::F32Vec::LEN;" % (n // 2))
+    print("let row_stride = %d / D::F16Vec::LEN;" % (n // 2))
     print("assert!(data.len() > %d * row_stride);" % (n - 1))
-    print("const { assert!(%dusize.is_multiple_of(D::F32Vec::LEN)) };" % (n // 2))
+    print("assert!(%dusize.is_multiple_of(D::F16Vec::LEN));" % (n // 2))
 
     indices = forward_even_odd(list(range(n)))
 
     for i in range(n):
         print(
-            "let mut v%d = D::F32Vec::load_array(d, &data[row_stride*%d]);"
+            "let mut v%d = D::F16Vec::load_array(d, &data[row_stride*%d]);"
             % (i, indices[i])
         )
 
@@ -230,12 +230,12 @@ if n == 32:
     print()
     print("#[inline(always)]")
     print(
-        "pub(super) fn do_idct_32_trq<D: SimdDescriptor>(d: D, data: &mut [<D::F32Vec as F32SimdVec>::UnderlyingArray]) {"
+        "pub(super) fn do_idct_32_trq<D: SimdDescriptor>(d: D, data: &mut [<D::F16Vec as F16SimdVec>::UnderlyingArray]) {"
     )
 
-    print("let row_stride = 8 / D::F32Vec::LEN;")
+    print("let row_stride = 8 / D::F16Vec::LEN;")
     print("assert!(data.len() > 31 * row_stride);")
-    print("const { assert!(8usize.is_multiple_of(D::F32Vec::LEN)) };")
+    print("assert!(8usize.is_multiple_of(D::F16Vec::LEN));")
 
     indices = [
         0,
@@ -274,7 +274,7 @@ if n == 32:
 
     for i in range(n):
         print(
-            "let mut v%d = D::F32Vec::load_array(d, &data[row_stride*%d]);"
+            "let mut v%d = D::F16Vec::load_array(d, &data[row_stride*%d]);"
             % (i, indices[i])
         )
 

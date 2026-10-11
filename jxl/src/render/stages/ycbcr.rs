@@ -3,9 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F16SimdVec, simd_function};
 
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
+use crate::util::f16;
 
 /// Convert YCbCr to RGB
 pub struct YcbcrToRgbStage {
@@ -36,31 +37,31 @@ simd_function!(
     ycbcr_to_rgb_simd_dispatch,
     d: D,
     fn ycbcr_to_rgb_simd(
-        row_cb: &mut [f32],
-        row_y: &mut [f32],
-        row_cr: &mut [f32],
+        row_cb: &mut [f16],
+        row_y: &mut [f16],
+        row_cr: &mut [f16],
         xsize: usize,
     ) {
         // Precompute constants as SIMD vectors
-        let c128 = D::F32Vec::splat(d, 128.0 / 255.0);
-        let cr_to_r = D::F32Vec::splat(d, 1.402);
-        let cr_to_g = D::F32Vec::splat(d, -0.299 * 1.402 / 0.587);
-        let cb_to_g = D::F32Vec::splat(d, -0.114 * 1.772 / 0.587);
-        let cb_to_b = D::F32Vec::splat(d, 1.772);
+        let c128 = D::F16Vec::splat_f32(d, 128.0 / 255.0);
+        let cr_to_r = D::F16Vec::splat_f32(d, 1.402);
+        let cr_to_g = D::F16Vec::splat_f32(d, -0.299 * 1.402 / 0.587);
+        let cb_to_g = D::F16Vec::splat_f32(d, -0.114 * 1.772 / 0.587);
+        let cb_to_b = D::F16Vec::splat_f32(d, 1.772);
 
         // SIMD loop processing SIMD_WIDTH pixels at once
-        let iter_cb = row_cb.chunks_exact_mut(D::F32Vec::LEN);
-        let iter_y = row_y.chunks_exact_mut(D::F32Vec::LEN);
-        let iter_cr = row_cr.chunks_exact_mut(D::F32Vec::LEN);
+        let iter_cb = row_cb.chunks_exact_mut(D::F16Vec::LEN);
+        let iter_y = row_y.chunks_exact_mut(D::F16Vec::LEN);
+        let iter_cr = row_cr.chunks_exact_mut(D::F16Vec::LEN);
         for ((cb_chunk, y_chunk), cr_chunk) in iter_cb
             .zip(iter_y)
             .zip(iter_cr)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
+            .take(xsize.div_ceil(D::F16Vec::LEN))
         {
             // Load Y, Cb, Cr vectors
-            let y_vec = D::F32Vec::load(d, y_chunk) + c128;
-            let cb_vec = D::F32Vec::load(d, cb_chunk);
-            let cr_vec = D::F32Vec::load(d, cr_chunk);
+            let y_vec = D::F16Vec::load(d, y_chunk) + c128;
+            let cb_vec = D::F16Vec::load(d, cb_chunk);
+            let cr_vec = D::F16Vec::load(d, cr_chunk);
 
             // Compute RGB using FMA (fused multiply-add)
             // R = Y + 1.402 * Cr
@@ -81,7 +82,7 @@ simd_function!(
 );
 
 impl RenderPipelineInPlaceStage for YcbcrToRgbStage {
-    type Type = f32;
+    type Type = f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         (self.first_channel..self.first_channel + 3).contains(&c)
@@ -91,7 +92,7 @@ impl RenderPipelineInPlaceStage for YcbcrToRgbStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [f16]],
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -134,21 +135,24 @@ mod test {
         let mut input_cr = Image::new((3, 1))?;
         input_y
             .row_mut(0)
-            .copy_from_slice(&[-0.20296079, 0.08503921, -0.3879608]);
+            .copy_from_slice(&[-0.20296079, 0.08503921, -0.3879608].map(f16::from_f32));
         input_cb
             .row_mut(0)
-            .copy_from_slice(&[-0.16873589, -0.3312641, 0.5]);
+            .copy_from_slice(&[-0.16873589, -0.3312641, 0.5].map(f16::from_f32));
         input_cr
             .row_mut(0)
-            .copy_from_slice(&[0.5, -0.41868758, -0.08131241]);
+            .copy_from_slice(&[0.5, -0.41868758, -0.08131241].map(f16::from_f32));
 
         let stage = YcbcrToRgbStage::new(0);
         let output =
             make_and_run_simple_pipeline(stage, &[input_cb, input_y, input_cr], (3, 1), 0, 256)?;
 
-        assert_close!(all, output[0].row(0), &[1.0, 0.0, 0.0], 1e-6);
-        assert_close!(all, output[1].row(0), &[0.0, 1.0, 0.0], 1e-6);
-        assert_close!(all, output[2].row(0), &[0.0, 0.0, 1.0], 1e-6);
+        let r0: Vec<f32> = output[0].row(0).iter().map(|v| v.to_f32()).collect();
+        let r1: Vec<f32> = output[1].row(0).iter().map(|v| v.to_f32()).collect();
+        let r2: Vec<f32> = output[2].row(0).iter().map(|v| v.to_f32()).collect();
+        assert_close!(all, &r0, &[1.0, 0.0, 0.0], 1e-3);
+        assert_close!(all, &r1, &[0.0, 1.0, 0.0], 1e-3);
+        assert_close!(all, &r2, &[0.0, 0.0, 1.0], 1e-3);
 
         Ok(())
     }

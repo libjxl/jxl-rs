@@ -28,8 +28,8 @@ pub(super) trait RenderPipelineTestableStage<V> {
 }
 
 impl RenderPipelineTestableStage<()> for ExtendToImageDimensionsStage {
-    type InputT = f32;
-    type OutputT = f32;
+    type InputT = crate::util::f16;
+    type OutputT = crate::util::f16;
     fn into_stage(self) -> Stage<Image<f64>> {
         Stage::Extend(self)
     }

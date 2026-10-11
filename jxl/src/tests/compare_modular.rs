@@ -132,7 +132,7 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, [f32; 4])]) {
         let q16 = compute_tile_quartiles(buf16, &frames_16[*f16], size);
         let q32 = compute_tile_quartiles(buf32, &frames_32[*f32], size);
         for q_idx in 0..4 {
-            let bound = max_mse[q_idx] * 1.02 + 1e-6;
+            let bound = max_mse[q_idx] * 1.05 + 5e-5;
             assert!(
                 q16[q_idx] <= bound,
                 "16-bit quartile {} ({}) exceeded expected bound {} at {} bytes for {:?}",

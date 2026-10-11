@@ -6,17 +6,18 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F16SimdVec, simd_function};
 
 use crate::headers::CustomTransformData;
 use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, StoreInterleaved,
     for_each_chunk,
 };
+use crate::util::f16;
 
 pub struct Upsample<const N: usize, const SHIFT: u8> {
     // Precomputed kernels in [oy][ty][tx][ox] order for SIMD optimization.
-    kernels: Box<[[[[f32; N]; 5]; 5]; N]>,
+    kernels: Box<[[[[f16; N]; 5]; 5]; N]>,
     channel: usize,
 }
 
@@ -32,7 +33,7 @@ impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
             _ => unreachable!(),
         };
 
-        let mut kernels = Box::new([[[[0.0f32; N]; 5]; 5]; N]);
+        let mut kernels = Box::new([[[[f16::ZERO; N]; 5]; 5]; N]);
         let n = N / 2;
         for i in 0..5 * n {
             for j in 0..5 * n {
@@ -40,7 +41,7 @@ impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
                 let x = i.max(j) as isize;
                 let n_isize = n as isize;
                 let index = (5 * n_isize * y - y * (y - 1) / 2 + x - y) as usize;
-                let w = weights[index];
+                let w = f16::from_f32(weights[index]);
                 let oy = j / 5;
                 let ox = i / 5;
                 let ty = j % 5;
@@ -69,12 +70,12 @@ impl<const N: usize, const SHIFT: u8> std::fmt::Display for Upsample<N, SHIFT> {
 #[inline(always)]
 fn upsample_2rows_per_step<D: jxl_simd::SimdDescriptor, const N: usize>(
     d: D,
-    input_rows: &Channels<f32>,
+    input_rows: &Channels<f16>,
     xsize: usize,
-    kernels: &[[[[f32; N]; 5]; 5]; N],
-    output_rows: &mut ChannelsMut<f32>,
+    kernels: &[[[[f16; N]; 5]; 5]; N],
+    output_rows: &mut ChannelsMut<f16>,
 ) where
-    f32: StoreInterleaved<D, N, Vec = D::F32Vec>,
+    f16: StoreInterleaved<D, N, Vec = D::F16Vec>,
 {
     const { assert!(N == 2 || N == 4) };
     for_each_chunk(
@@ -110,8 +111,8 @@ fn upsample_2rows_per_step<D: jxl_simd::SimdDescriptor, const N: usize>(
                 let mut acc0 = [first; N];
                 let mut acc1 = [first; N];
                 for ox in 0..N {
-                    acc0[ox] = first * D::F32Vec::splat(d, k0_00[ox]);
-                    acc1[ox] = first * D::F32Vec::splat(d, k1_00[ox]);
+                    acc0[ox] = first * D::F16Vec::splat_f16(d, k0_00[ox]);
+                    acc1[ox] = first * D::F16Vec::splat_f16(d, k1_00[ox]);
                 }
 
                 for ty in 0..5 {
@@ -127,8 +128,8 @@ fn upsample_2rows_per_step<D: jxl_simd::SimdDescriptor, const N: usize>(
                         let k0 = &kernels[oy0][ty][tx];
                         let k1 = &kernels[oy1][ty][tx];
                         for ox in 0..N {
-                            acc0[ox] = v.mul_add(D::F32Vec::splat(d, k0[ox]), acc0[ox]);
-                            acc1[ox] = v.mul_add(D::F32Vec::splat(d, k1[ox]), acc1[ox]);
+                            acc0[ox] = v.mul_add(D::F16Vec::splat_f16(d, k0[ox]), acc0[ox]);
+                            acc1[ox] = v.mul_add(D::F16Vec::splat_f16(d, k1[ox]), acc1[ox]);
                         }
                     }
                 }
@@ -148,10 +149,10 @@ simd_function!(
     upsample_2x_simd_dispatch,
     d: D,
     fn upsample_2x_simd(
-        input_rows: &Channels<f32>,
+        input_rows: &Channels<f16>,
         xsize: usize,
-        kernels: &[[[[f32; 2]; 5]; 5]; 2],
-        output_rows: &mut ChannelsMut<f32>,
+        kernels: &[[[[f16; 2]; 5]; 5]; 2],
+        output_rows: &mut ChannelsMut<f16>,
     ) {
         upsample_2rows_per_step::<D, 2>(d, input_rows, xsize, kernels, output_rows);
     }
@@ -161,10 +162,10 @@ simd_function!(
     upsample_4x_simd_dispatch,
     d: D,
     fn upsample_4x_simd(
-        input_rows: &Channels<f32>,
+        input_rows: &Channels<f16>,
         xsize: usize,
-        kernels: &[[[[f32; 4]; 5]; 5]; 4],
-        output_rows: &mut ChannelsMut<f32>,
+        kernels: &[[[[f16; 4]; 5]; 5]; 4],
+        output_rows: &mut ChannelsMut<f16>,
     ) {
         upsample_2rows_per_step::<D, 4>(d, input_rows, xsize, kernels, output_rows);
     }
@@ -174,10 +175,10 @@ simd_function!(
     upsample_8x_simd_dispatch,
     d: D,
     fn upsample_8x_simd(
-        input_rows: &Channels<f32>,
+        input_rows: &Channels<f16>,
         xsize: usize,
-        kernels: &[[[[f32; 8]; 5]; 5]; 8],
-        output_rows: &mut ChannelsMut<f32>,
+        kernels: &[[[[f16; 8]; 5]; 5]; 8],
+        output_rows: &mut ChannelsMut<f16>,
     ) {
         for_each_chunk(
             d,
@@ -203,7 +204,7 @@ simd_function!(
                     let k_00 = &kernels[oy][0][0];
                     let mut acc = [first; 8];
                     for ox in 0..8 {
-                        acc[ox] = first * D::F32Vec::splat(d, k_00[ox]);
+                        acc[ox] = first * D::F16Vec::splat_f16(d, k_00[ox]);
                     }
 
                     for ty in 0..5 {
@@ -214,7 +215,7 @@ simd_function!(
                             let v = inv.load::<_, 0>(d, ty as isize - 2, tx as isize - 2);
                             let k = &kernels[oy][ty][tx];
                             for ox in 0..8 {
-                                acc[ox] = v.mul_add(D::F32Vec::splat(d, k[ox]), acc[ox]);
+                                acc[ox] = v.mul_add(D::F16Vec::splat_f16(d, k[ox]), acc[ox]);
                             }
                         }
                     }
@@ -232,8 +233,8 @@ simd_function!(
 macro_rules! stage {
     ($n: literal, $shift: literal, $fun: path) => {
         impl RenderPipelineInOutStage for Upsample<$n, $shift> {
-            type InputT = f32;
-            type OutputT = f32;
+            type InputT = f16;
+            type OutputT = f16;
             const SHIFT: (u8, u8) = ($shift, $shift);
             const BORDER: (u8, u8) = (2, 2);
 
@@ -245,8 +246,8 @@ macro_rules! stage {
                 &self,
                 _position: (usize, usize),
                 xsize: usize,
-                input_rows: &Channels<f32>,
-                output_rows: &mut ChannelsMut<f32>,
+                input_rows: &Channels<f16>,
+                output_rows: &mut ChannelsMut<f16>,
                 _state: Option<&mut ErasedLocalState>,
                 _previous_call_was_previous_row: bool,
             ) {
@@ -310,14 +311,14 @@ mod test {
     fn upsample2x_constant() -> Result<()> {
         let image_size = (238, 412);
         let input_size = (image_size.0 / 2, image_size.1 / 2);
-        let val = 0.777f32;
+        let val = f16::from_f32(0.777f32);
         let input = Image::new_with_value(input_size, val)?;
         let stage = Upsample2x::new(&ups_factors(), 0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
-                assert_close!(output[0].row(y)[x], val, 0.0000001);
+                assert_close!(output[0].row(y)[x].to_f32(), val.to_f32(), 0.002);
             }
         }
         Ok(())
@@ -327,14 +328,14 @@ mod test {
     fn upsample4x_constant() -> Result<()> {
         let image_size = (240, 412);
         let input_size = (image_size.0 / 4, image_size.1 / 4);
-        let val = 0.777f32;
+        let val = f16::from_f32(0.777f32);
         let input = Image::new_with_value(input_size, val)?;
         let stage = Upsample4x::new(&ups_factors(), 0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
-                assert_close!(output[0].row(y)[x], val, 0.00001);
+                assert_close!(output[0].row(y)[x].to_f32(), val.to_f32(), 0.002);
             }
         }
         Ok(())
@@ -344,14 +345,14 @@ mod test {
     fn upsample8x_constant() -> Result<()> {
         let image_size = (240, 416);
         let input_size = (image_size.0 / 8, image_size.1 / 8);
-        let val = 0.777f32;
+        let val = f16::from_f32(0.777f32);
         let input = Image::new_with_value(input_size, val)?;
         let stage = Upsample8x::new(&ups_factors(), 0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
-                assert_close!(output[0].row(y)[x], val, 0.00001);
+                assert_close!(output[0].row(y)[x].to_f32(), val.to_f32(), 0.002);
             }
         }
         Ok(())
@@ -359,22 +360,22 @@ mod test {
 
     #[test]
     fn test_upsample2() -> Result<()> {
-        let eps = 0.0000001;
+        let eps = 0.002;
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
-        input.row_mut(3)[3] = 1.0f32;
+        input.row_mut(3)[3] = f16::from_f32(1.0f32);
         let ups_factors = ups_factors();
         let stage = Upsample2x::new(&ups_factors, 0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], (14, 14), 0, 77)?;
         assert_eq!(output[0].size(), (14, 14));
         // Check we have a border with zeros
         for i in 0..14 {
             for j in 0..2 {
-                assert_close!(output[0].row(j)[i], 0.0, eps);
-                assert_close!(output[0].row(i)[j], 0.0, eps);
-                assert_close!(output[0].row(13 - j)[i], 0.0, eps);
-                assert_close!(output[0].row(i)[13 - j], 0.0, eps);
+                assert_close!(output[0].row(j)[i].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(i)[j].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(13 - j)[i].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(i)[13 - j].to_f32(), 0.0, eps);
             }
         }
         // Define the mapping for the symmetric top-left kernel
@@ -394,8 +395,9 @@ mod test {
             for dj in 0..2 {
                 for i in 0..kernel_size {
                     for j in 0..kernel_size {
-                        let output_value =
-                            output[0].row(kernel_offset + di + 2 * i)[kernel_offset + dj + 2 * j];
+                        let output_value = output[0].row(kernel_offset + di + 2 * i)
+                            [kernel_offset + dj + 2 * j]
+                            .to_f32();
                         let mapped_i = if di == 0 { kernel_size - 1 - i } else { i };
                         let mapped_j = if dj == 0 { kernel_size - 1 - j } else { j };
                         let weight_index = index_map[mapped_i][mapped_j];
@@ -410,13 +412,13 @@ mod test {
 
     #[test]
     fn test_upsample4() -> Result<()> {
-        let eps = 0.0000001;
+        let eps = 0.002;
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
-        input.row_mut(3)[3] = 1.0f32;
+        input.row_mut(3)[3] = f16::from_f32(1.0f32);
         let ups_factors = ups_factors();
         let stage = Upsample4x::new(&ups_factors, 0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], (28, 28), 0, 1024)?;
 
         assert_eq!(output[0].size(), (28, 28));
@@ -424,10 +426,10 @@ mod test {
         // Check we have a border with zeros
         for i in 0..28 {
             for j in 0..4 {
-                assert_close!(output[0].row(j)[i], 0.0, eps);
-                assert_close!(output[0].row(i)[j], 0.0, eps);
-                assert_close!(output[0].row(27 - j)[i], 0.0, eps);
-                assert_close!(output[0].row(i)[27 - j], 0.0, eps);
+                assert_close!(output[0].row(j)[i].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(i)[j].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(27 - j)[i].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(i)[27 - j].to_f32(), 0.0, eps);
             }
         }
 
@@ -460,13 +462,15 @@ mod test {
                         let offset_i = kernel_offset + i;
                         let offset_j = kernel_offset + j;
                         // Testing symmetry
-                        let output_value = output[0].row(offset_i)[offset_j];
+                        let output_value = output[0].row(offset_i)[offset_j].to_f32();
                         let output_value_mirrored_right =
-                            output[0].row(row_size - offset_i - 1)[offset_j];
-                        let output_value_mirrored_down =
-                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
-                        let output_value_mirrored_down_right =
-                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
+                            output[0].row(row_size - offset_i - 1)[offset_j].to_f32();
+                        let output_value_mirrored_down = output[0].row(row_size - offset_i - 1)
+                            [column_size - offset_j - 1]
+                            .to_f32();
+                        let output_value_mirrored_down_right = output[0]
+                            .row(row_size - offset_i - 1)[column_size - offset_j - 1]
+                            .to_f32();
 
                         assert_close!(output_value, output_value_mirrored_right, eps);
                         assert_close!(output_value, output_value_mirrored_down, eps);
@@ -495,13 +499,13 @@ mod test {
 
     #[test]
     fn test_upsample8() -> Result<()> {
-        let eps = 0.0000001;
+        let eps = 0.002;
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
-        input.row_mut(3)[3] = 1.0f32;
+        input.row_mut(3)[3] = f16::from_f32(1.0f32);
         let ups_factors = ups_factors();
         let stage = Upsample8x::new(&ups_factors, 0);
-        let output: Vec<Image<f32>> =
+        let output: Vec<Image<f16>> =
             make_and_run_simple_pipeline(stage, &[input], (56, 56), 0, 1024)?;
 
         assert_eq!(output[0].size(), (56, 56));
@@ -509,10 +513,10 @@ mod test {
         // Check we have a border with zeros
         for i in 0..56 {
             for j in 0..8 {
-                assert_close!(output[0].row(j)[i], 0.0, eps);
-                assert_close!(output[0].row(i)[j], 0.0, eps);
-                assert_close!(output[0].row(55 - j)[i], 0.0, eps);
-                assert_close!(output[0].row(i)[55 - j], 0.0, eps);
+                assert_close!(output[0].row(j)[i].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(i)[j].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(55 - j)[i].to_f32(), 0.0, eps);
+                assert_close!(output[0].row(i)[55 - j].to_f32(), 0.0, eps);
             }
         }
 
@@ -615,13 +619,15 @@ mod test {
                         let offset_i = kernel_offset + i;
                         let offset_j = kernel_offset + j;
                         // Testing symmetry
-                        let output_value = output[0].row(offset_i)[offset_j];
+                        let output_value = output[0].row(offset_i)[offset_j].to_f32();
                         let output_value_mirrored_right =
-                            output[0].row(row_size - offset_i - 1)[offset_j];
-                        let output_value_mirrored_down =
-                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
-                        let output_value_mirrored_down_right =
-                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
+                            output[0].row(row_size - offset_i - 1)[offset_j].to_f32();
+                        let output_value_mirrored_down = output[0].row(row_size - offset_i - 1)
+                            [column_size - offset_j - 1]
+                            .to_f32();
+                        let output_value_mirrored_down_right = output[0]
+                            .row(row_size - offset_i - 1)[column_size - offset_j - 1]
+                            .to_f32();
 
                         assert_close!(output_value, output_value_mirrored_right, eps);
                         assert_close!(output_value, output_value_mirrored_down, eps);

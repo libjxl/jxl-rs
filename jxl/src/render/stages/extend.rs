@@ -56,7 +56,7 @@ impl ExtendToImageDimensionsStage {
         position: (usize, usize),
         xsize: usize,
         c: usize,
-        row: &mut [f32],
+        row: &mut [crate::util::f16],
     ) {
         let x0 = position.0;
         let x1 = x0 + xsize;
@@ -71,13 +71,9 @@ impl ExtendToImageDimensionsStage {
             return;
         };
         if let Some(bg) = self.reference_frames[source].as_ref() {
-            crate::features::blending::copy_f16_to_f32(
-                &mut row[0..xsize],
-                &bg.frame[c].row(y0)[x0..x1],
-                xsize,
-            );
+            row[0..xsize].copy_from_slice(&bg.frame[c].row(y0)[x0..x1]);
         } else {
-            row[0..xsize].fill(0.0);
+            row[0..xsize].fill(crate::util::f16::ZERO);
         }
     }
 }

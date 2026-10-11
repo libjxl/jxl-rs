@@ -90,23 +90,26 @@ impl HfTransformType {
     }
 }
 
+#[inline(always)]
 pub fn covered_blocks_x(transform: HfTransformType) -> u32 {
-    let lut: [u32; HfTransformType::CARDINALITY] = [
+    static LUT: [u32; HfTransformType::CARDINALITY] = [
         1, 1, 1, 1, 2, 4, 1, 2, 1, 4, 2, 4, 1, 1, 1, 1, 1, 1, 8, 4, 8, 16, 8, 16, 32, 16, 32,
     ];
-    lut[transform as usize]
+    LUT[transform as usize]
 }
 
+#[inline(always)]
 pub fn covered_blocks_y(transform: HfTransformType) -> u32 {
-    let lut: [u32; HfTransformType::CARDINALITY] = [
+    static LUT: [u32; HfTransformType::CARDINALITY] = [
         1, 1, 1, 1, 2, 4, 2, 1, 4, 1, 4, 2, 1, 1, 1, 1, 1, 1, 8, 8, 4, 16, 16, 8, 32, 32, 16,
     ];
-    lut[transform as usize]
+    LUT[transform as usize]
 }
 
+#[inline(always)]
 pub fn block_shape_id(transform: HfTransformType) -> u32 {
-    let lut: [u32; HfTransformType::CARDINALITY] = [
+    static LUT: [u32; HfTransformType::CARDINALITY] = [
         0, 1, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 1, 1, 1, 1, 1, 1, 7, 8, 8, 9, 10, 10, 11, 12, 12,
     ];
-    lut[transform as usize]
+    LUT[transform as usize]
 }

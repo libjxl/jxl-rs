@@ -12,7 +12,10 @@ use std::ops::{
 use super::super::{
     F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
 };
-use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface, impl_i16_array_interface};
+use crate::{
+    F16VecConvert, U32SimdVec, U64SimdVec, impl_f16_convert_mask, impl_f32_array_interface,
+    impl_i16_array_interface,
+};
 
 // Safety invariant: this type is only ever constructed if sse4.2 is available.
 #[derive(Clone, Copy, Debug)]
@@ -28,6 +31,7 @@ impl Sse42Descriptor {
 
 impl SimdDescriptor for Sse42Descriptor {
     type F32Vec = F32VecSse42;
+    type F16Vec = F16VecConvert<F32VecSse42>;
     type I32Vec = I32VecSse42;
     type I16Vec = I16VecSse42;
     type U64Vec = U64VecSse42;
@@ -35,8 +39,10 @@ impl SimdDescriptor for Sse42Descriptor {
     type U16Vec = U16VecSse42;
     type U8Vec = U8VecSse42;
     type Mask = MaskSse42;
+    type F16Mask = MaskSse42;
     type Mask16 = Mask16Sse42;
     type Bf16Table8 = Bf16Table8Sse42;
+    type F16Table8 = Bf16Table8Sse42;
 
     type Descriptor256 = Self;
     type Descriptor128 = Self;
@@ -108,6 +114,11 @@ impl F32SimdVec for F32VecSse42 {
     type Descriptor = Sse42Descriptor;
 
     const LEN: usize = 4;
+
+    #[inline(always)]
+    fn descriptor(&self) -> Self::Descriptor {
+        self.1
+    }
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
@@ -611,24 +622,90 @@ impl F32SimdVec for F32VecSse42 {
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
-        assert!(mem.len() >= Self::LEN);
-        // TODO: use SIMD bit manipulation instead of scalar loop (see wasm32/simd128.rs)
-        let mut result = [0.0f32; 4];
-        for i in 0..4 {
-            result[i] = crate::f16::from_bits(mem[i]).to_f32();
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn load_f16_impl(d: Sse42Descriptor, mem: &[u16]) -> F32VecSse42 {
+            assert!(mem.len() >= F32VecSse42::LEN);
+            // SAFETY: we checked mem.len() >= 4 (8 bytes).
+            let lo = unsafe { _mm_loadl_epi64(mem.as_ptr().cast()) };
+            let wide = _mm_cvtepu16_epi32(lo);
+            let sign = _mm_slli_epi32::<16>(_mm_and_si128(wide, _mm_set1_epi32(0x8000)));
+            let mag = _mm_and_si128(wide, _mm_set1_epi32(0x7FFF));
+            let mag_shifted = _mm_slli_epi32::<13>(mag);
+
+            // Normal: shift exp+mant into f32 position, rebias exponent (+112)
+            let normal = _mm_add_epi32(mag_shifted, _mm_set1_epi32(112 << 23));
+
+            // Subnormal (exp==0): magic number trick to normalize
+            let magic = _mm_set1_epi32(113 << 23);
+            let subnorm = _mm_castps_si128(_mm_sub_ps(
+                _mm_castsi128_ps(_mm_or_si128(magic, mag_shifted)),
+                _mm_castsi128_ps(magic),
+            ));
+
+            // Inf/NaN (exp==31): normal path gives f32 exp=143, need 255; add 112<<23
+            let infnan = _mm_add_epi32(normal, _mm_set1_epi32(112 << 23));
+
+            let is_subnorm = _mm_cmpgt_epi32(_mm_set1_epi32(0x0400), mag);
+            let is_infnan = _mm_cmpgt_epi32(mag, _mm_set1_epi32(0x7BFF));
+            let result = _mm_blendv_epi8(normal, subnorm, is_subnorm);
+            let result = _mm_blendv_epi8(result, infnan, is_infnan);
+
+            F32VecSse42(_mm_castsi128_ps(_mm_or_si128(sign, result)), d)
         }
-        Self::load(d, &result)
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        unsafe { load_f16_impl(d, mem) }
     }
 
     #[inline(always)]
     fn store_f16_bits(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
-        // TODO: use SIMD bit manipulation instead of scalar loop (see wasm32/simd128.rs)
-        let mut tmp = [0.0f32; 4];
-        self.store(&mut tmp);
-        for i in 0..4 {
-            dest[i] = crate::f16::from_f32(tmp[i]).to_bits();
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn store_f16_impl(v: __m128, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecSse42::LEN);
+            let vi = _mm_castps_si128(v);
+            let abs = _mm_and_si128(vi, _mm_set1_epi32(0x7FFF_FFFF));
+            let sign = _mm_and_si128(_mm_srli_epi32::<16>(vi), _mm_set1_epi32(0x8000));
+
+            // Round to nearest even
+            let abs_shifted = _mm_srli_epi32::<13>(abs);
+            let lsb = _mm_and_si128(abs_shifted, _mm_set1_epi32(1));
+            let rounded = _mm_add_epi32(abs, _mm_add_epi32(lsb, _mm_set1_epi32(0x0FFF)));
+
+            // Normal: shift exp+mant into f16 position, rebias, clamp to inf (0x7C00)
+            let normal = _mm_min_epi32(
+                _mm_sub_epi32(_mm_srli_epi32::<13>(rounded), _mm_set1_epi32(112 << 10)),
+                _mm_set1_epi32(0x7C00),
+            );
+
+            // Subnormal (|x| < 2^-14): magic number trick to denormalize
+            let magic = _mm_set1_epi32(113 << 23);
+            let subnorm = _mm_srli_epi32::<13>(_mm_sub_epi32(
+                _mm_castps_si128(_mm_add_ps(_mm_castsi128_ps(abs), _mm_castsi128_ps(magic))),
+                magic,
+            ));
+
+            // Inf/NaN (exp==255): set f16 exp=31, keep top 10 mantissa bits
+            let infnan = _mm_or_si128(
+                _mm_set1_epi32(0x7C00),
+                _mm_and_si128(abs_shifted, _mm_set1_epi32(0x03FF)),
+            );
+
+            let is_subnorm = _mm_cmpgt_epi32(_mm_set1_epi32(0x3880_0000), abs);
+            let is_infnan = _mm_cmpgt_epi32(abs, _mm_set1_epi32(0x7F7F_FFFF));
+            let result = _mm_blendv_epi8(normal, subnorm, is_subnorm);
+            let result = _mm_blendv_epi8(result, infnan, is_infnan);
+            let h = _mm_or_si128(sign, result);
+
+            // Narrow u32->u16 and store
+            let packed = _mm_packus_epi32(h, h);
+            // SAFETY: we checked dest.len() >= 4 (8 bytes).
+            unsafe {
+                _mm_storel_epi64(dest.as_mut_ptr().cast(), packed);
+            }
         }
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        unsafe { store_f16_impl(self.0, dest) }
     }
 
     #[inline(always)]
@@ -662,6 +739,23 @@ impl F32SimdVec for F32VecSse42 {
         // SAFETY: the safety invariant on `d` guarantees sse42
         unsafe {
             transpose4x4f32(d, data, stride);
+        }
+    }
+
+    #[inline(always)]
+    fn transpose_square_f16(
+        _d: Self::Descriptor,
+        data: &mut [Self::UnderlyingF16Array],
+        stride: usize,
+    ) {
+        assert!(data.len() > 3 * stride);
+        for i in 0..4 {
+            for j in i + 1..4 {
+                let a = data[i * stride][j];
+                let b = data[j * stride][i];
+                data[i * stride][j] = b;
+                data[j * stride][i] = a;
+            }
         }
     }
 }
@@ -1695,3 +1789,5 @@ impl BitOr<Mask16Sse42> for Mask16Sse42 {
         Mask16Sse42(_mm_or_si128(this.0, rhs.0), this.1)
     });
 }
+
+impl_f16_convert_mask!(MaskSse42, Sse42Descriptor);

@@ -3,11 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F16SimdVec, simd_function};
 
 use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, for_each_chunk,
 };
+use crate::util::f16;
 
 /// Apply Gabor-like filter to the 3 XYB channels.
 #[derive(Debug)]
@@ -48,12 +49,12 @@ simd_function!(
     fn gaborish_process(
         stage: &GaborishStage,
         xsize: usize,
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
     ) {
-        let w0 = stage.weight0.map(|w| D::F32Vec::splat(d, w));
-        let w1 = stage.weight1.map(|w| D::F32Vec::splat(d, w));
-        let w2 = stage.weight2.map(|w| D::F32Vec::splat(d, w));
+        let w0 = stage.weight0.map(|w| D::F16Vec::splat_f32(d, w));
+        let w1 = stage.weight1.map(|w| D::F16Vec::splat_f32(d, w));
+        let w2 = stage.weight2.map(|w| D::F16Vec::splat_f32(d, w));
 
         for_each_chunk(
             d,
@@ -88,8 +89,8 @@ simd_function!(
 );
 
 impl RenderPipelineInOutStage for GaborishStage {
-    type InputT = f32;
-    type OutputT = f32;
+    type InputT = f16;
+    type OutputT = f16;
     const SHIFT: (u8, u8) = (0, 0);
     const BORDER: (u8, u8) = (1, 1);
 
@@ -101,8 +102,8 @@ impl RenderPipelineInOutStage for GaborishStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -137,16 +138,22 @@ mod test {
             Image::new((2, 2))?,
         ];
         for image in &mut images {
-            image.row_mut(0).copy_from_slice(&[0.0, 1.0]);
-            image.row_mut(1).copy_from_slice(&[1.0, 0.0]);
+            image
+                .row_mut(0)
+                .copy_from_slice(&[0.0, 1.0].map(f16::from_f32));
+            image
+                .row_mut(1)
+                .copy_from_slice(&[1.0, 0.0].map(f16::from_f32));
         }
 
         let stage = GaborishStage::new([0.115169525; 3], [0.061248592; 3]);
         let output = make_and_run_simple_pipeline(stage, &images, (2, 2), 0, 256)?;
 
         for out_ch in output.iter().take(3) {
-            assert_close!(all, out_ch.row(0), &[0.20686048, 0.7931395], 1e-6);
-            assert_close!(all, out_ch.row(1), &[0.7931395, 0.20686048], 1e-6);
+            let r0: Vec<f32> = out_ch.row(0).iter().map(|v| v.to_f32()).collect();
+            let r1: Vec<f32> = out_ch.row(1).iter().map(|v| v.to_f32()).collect();
+            assert_close!(all, &r0, &[0.20686048, 0.7931395], 1e-3);
+            assert_close!(all, &r1, &[0.7931395, 0.20686048], 1e-3);
         }
 
         Ok(())

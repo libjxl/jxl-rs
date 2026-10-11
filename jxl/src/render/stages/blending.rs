@@ -27,7 +27,7 @@ pub struct BlendingStage {
 }
 
 struct BlendingScratch {
-    scratch: Vec<f32>,
+    scratch: Vec<crate::util::f16>,
 }
 
 impl BlendingScratch {
@@ -100,7 +100,7 @@ impl std::fmt::Display for BlendingStage {
 }
 
 impl RenderPipelineInPlaceStage for BlendingStage {
-    type Type = f32;
+    type Type = crate::util::f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 + self.extra_channels.len()
@@ -114,7 +114,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         &self,
         position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [crate::util::f16]],
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -165,7 +165,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         let blending_info = PatchBlending::from(&self.blending_info);
 
         // Per-channel mutable slices into the in-place row buffer.
-        let mut bg_slices: ChannelVec<&mut [f32]> = ChannelVec::new();
+        let mut bg_slices: ChannelVec<&mut [crate::util::f16]> = ChannelVec::new();
         for r in row[..total_channels].iter_mut() {
             bg_slices.push(&mut r[bg_x0..bg_x1]);
         }

@@ -705,20 +705,20 @@ impl PatchesDictionary {
     #[allow(clippy::too_many_arguments)]
     pub fn add_one_row(
         &self,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [crate::util::f16]],
         row_pos: (usize, usize),
         xsize: usize,
         extra_channel_info: &[ExtraChannelInfo],
         reference_frames: &[Option<ReferenceFrame>],
         patches_for_row_result: &mut Vec<usize>,
-        blending_scratch: &mut Vec<f32>,
+        blending_scratch: &mut Vec<crate::util::f16>,
     ) {
         self.set_patches_for_row(row_pos.1, &mut *patches_for_row_result);
         if patches_for_row_result.is_empty() {
             return;
         }
 
-        let mut out = SmallVec::<&mut [f32], 8>::new();
+        let mut out = SmallVec::<&mut [crate::util::f16], 8>::new();
         for s in row.iter_mut() {
             out.push(&mut s[..xsize]);
         }
@@ -773,7 +773,7 @@ impl PatchesDictionary {
                 fg.push(&ref_frame.frame[3 + i].row(ref_pos_y)[ref_x0..ref_x1]);
             }
 
-            let mut bg = SmallVec::<&mut [f32], 8>::new();
+            let mut bg = SmallVec::<&mut [crate::util::f16], 8>::new();
             for s in out.iter_mut() {
                 bg.push(&mut s[out_x0..out_x1]);
             }
@@ -1515,7 +1515,37 @@ mod tests {
         use crate::image::Image;
         use crate::tests::assert_close;
 
-        const MAX_ABS_DELTA: f32 = 1e-3; // Adjusted for f16 reference frames
+        const MAX_ABS_DELTA: f32 = 2e-3; // Adjusted for f16 reference frames and f16 blending
+
+        fn call_add_one_row(
+            dict: &PatchesDictionary,
+            row: &mut [&mut [f32]],
+            row_pos: (usize, usize),
+            xsize: usize,
+            extra_channel_info: &[ExtraChannelInfo],
+            reference_frames: &[Option<ReferenceFrame>],
+        ) {
+            let mut row_f16: Vec<Vec<crate::util::f16>> = row
+                .iter()
+                .map(|s| s.iter().copied().map(crate::util::f16::from_f32).collect())
+                .collect();
+            let mut row_slices: Vec<&mut [crate::util::f16]> =
+                row_f16.iter_mut().map(|v| v.as_mut_slice()).collect();
+            dict.add_one_row(
+                &mut row_slices,
+                row_pos,
+                xsize,
+                extra_channel_info,
+                reference_frames,
+                &mut vec![],
+                &mut vec![],
+            );
+            for (dst_ch, src_ch) in row.iter_mut().zip(row_f16.iter()) {
+                for (d, s) in dst_ch.iter_mut().zip(src_ch.iter()) {
+                    *d = s.to_f32();
+                }
+            }
+        }
 
         fn create_reference_frame(
             width: usize,
@@ -1593,14 +1623,13 @@ mod tests {
 
             let expected_r = vec![0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
-            patches_dict.add_one_row(
+            call_add_one_row(
+                &patches_dict,
                 &mut row_slices,
                 (0, 0),
                 xsize,
                 &extra_channel_info,
-                &ref_frames, // Pass the Vec<ReferenceFrame>
-                &mut vec![],
-                &mut vec![],
+                &ref_frames,
             );
 
             assert_close!(all, &r_data, &expected_r, MAX_ABS_DELTA);
@@ -1656,14 +1685,13 @@ mod tests {
                 *r = 0.5 + 0.2
             }
 
-            patches_dict.add_one_row(
+            call_add_one_row(
+                &patches_dict,
                 &mut row_slices,
                 (0, y_coord),
                 xsize,
                 &extra_channel_info,
                 &ref_frames,
-                &mut vec![],
-                &mut vec![],
             );
 
             assert_close!(all, &r_data, &expected_r, MAX_ABS_DELTA);
@@ -1742,14 +1770,13 @@ mod tests {
 
             let expected_r: Vec<f32> = vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0];
 
-            patches_dict.add_one_row(
+            call_add_one_row(
+                &patches_dict,
                 &mut row_slices,
                 (0, y_coord),
                 xsize,
                 &extra_channel_info,
                 &ref_frames,
-                &mut vec![],
-                &mut vec![],
             );
 
             assert_close!(all, &r_data, &expected_r, MAX_ABS_DELTA);
@@ -1856,14 +1883,13 @@ mod tests {
                     / expected_ec0
             };
 
-            patches_dict.add_one_row(
+            call_add_one_row(
+                &patches_dict,
                 &mut row_slices,
                 (0, y_coord),
                 xsize,
                 &ec_info,
                 &ref_frames,
-                &mut vec![],
-                &mut vec![],
             );
 
             assert_close!(all, &r_data, &vec![expected_color], MAX_ABS_DELTA);
@@ -1954,14 +1980,13 @@ mod tests {
 
             let expected_color = ref_color_val + initial_color_val * (1.0 - ref_ec0_alpha_val);
 
-            patches_dict.add_one_row(
+            call_add_one_row(
+                &patches_dict,
                 &mut row_slices,
                 (0, y_coord),
                 xsize,
                 &ec_info,
                 &ref_frames,
-                &mut vec![],
-                &mut vec![],
             );
 
             assert_close!(all, &ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
@@ -2021,14 +2046,13 @@ mod tests {
             let mut g_data = initial_vals;
             let mut b_data = initial_vals;
             let mut slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
-            dict.add_one_row(
+            call_add_one_row(
+                &dict,
                 &mut slices,
                 (0, y_coord),
                 xsize,
                 &extra_channel_info,
                 &ref_frames,
-                &mut vec![],
-                &mut vec![],
             );
 
             let expected_vals = [0.5 * 0.8, 2.0 * 0.7]; // [0.4, 1.4]
@@ -2087,14 +2111,13 @@ mod tests {
             let mut b_data = initial_data.clone();
             let mut row_slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
 
-            patches_dict.add_one_row(
+            call_add_one_row(
+                &patches_dict,
                 &mut row_slices,
                 (0, y_coord),
                 xsize,
                 &extra_channel_info,
                 &ref_frames,
-                &mut vec![],
-                &mut vec![],
             );
 
             assert_close!(all, &r_data, &initial_data, MAX_ABS_DELTA);

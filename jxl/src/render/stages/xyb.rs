@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, SimdDescriptor, simd_function};
+use jxl_simd::{F16SimdVec, SimdDescriptor, simd_function};
 
 use crate::api::{
     JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint, adapt_to_xyz_d50,
@@ -13,7 +13,7 @@ use crate::color::tf::{self, TransferFunction};
 use crate::error::Result;
 use crate::headers::{FileHeader, OpsinInverseMatrix};
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
-use crate::util::{Matrix3x3, inv_3x3_matrix, mul_3x3_matrix};
+use crate::util::{Matrix3x3, f16, inv_3x3_matrix, mul_3x3_matrix};
 
 const SRGB_LUMINANCES: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
@@ -147,18 +147,38 @@ impl OutputColorInfo {
 struct XybParams {
     mat: [f32; 9],
     bias_cbrt: [f32; 3],
-    scaled_bias: [f32; 3],
-    intensity_scale: f32,
+    bias: [f32; 3],
 }
 
 impl XybParams {
     fn new(opsin: &OpsinInverseMatrix, intensity_target: f32) -> Self {
         let intensity_scale = 255.0 / intensity_target;
+        let m = opsin.inverse_matrix;
+        // Transform the opsin inverse matrix from the [L, M, S] basis to the
+        // [(L - M) / 2, (L + M) / 2, S] basis and fold in `intensity_scale`.
+        let mat = [
+            (m[0] - m[1]) * intensity_scale,
+            (m[0] + m[1]) * intensity_scale,
+            m[2] * intensity_scale,
+            (m[3] - m[4]) * intensity_scale,
+            (m[3] + m[4]) * intensity_scale,
+            m[5] * intensity_scale,
+            (m[6] - m[7]) * intensity_scale,
+            (m[6] + m[7]) * intensity_scale,
+            m[8] * intensity_scale,
+        ];
+        let cbrt = opsin.opsin_biases.map(|x| x.cbrt());
+        let bias_cbrt = [
+            0.5 * (cbrt[0] - cbrt[1]),
+            0.5 * (cbrt[0] + cbrt[1]),
+            cbrt[2],
+        ];
+        let b = opsin.opsin_biases;
+        let bias = [0.5 * (b[0] - b[1]), 0.5 * (b[0] + b[1]), b[2]];
         Self {
-            mat: opsin.inverse_matrix,
-            bias_cbrt: opsin.opsin_biases.map(|x| x.cbrt()),
-            scaled_bias: opsin.opsin_biases.map(|x| x * intensity_scale),
-            intensity_scale,
+            mat,
+            bias_cbrt,
+            bias,
         }
     }
 }
@@ -199,17 +219,17 @@ fn process_xyb<D: SimdDescriptor>(
     d: D,
     params: &XybParams,
     xsize: usize,
-    row_x: &mut [f32],
-    row_y: &mut [f32],
-    row_b: &mut [f32],
-    apply_tf: impl Fn([D::F32Vec; 3]) -> [D::F32Vec; 3],
+    row_x: &mut [f16],
+    row_y: &mut [f16],
+    row_b: &mut [f16],
+    apply_tf: impl Fn([D::F16Vec; 3]) -> [D::F16Vec; 3],
 ) {
-    let mat = params.mat.map(|x| D::F32Vec::splat(d, x));
-    let bias_cbrt = params.bias_cbrt.map(|x| D::F32Vec::splat(d, x));
-    let scaled_bias = params.scaled_bias.map(|x| D::F32Vec::splat(d, x));
-    let intensity_scale = D::F32Vec::splat(d, params.intensity_scale);
+    let mat = params.mat.map(|x| D::F16Vec::splat_f32(d, x));
+    let bias_cbrt = params.bias_cbrt.map(|x| D::F16Vec::splat_f32(d, x));
+    let bias = params.bias.map(|x| D::F16Vec::splat_f32(d, x));
+    let three = D::F16Vec::splat_f32(d, 3.0);
 
-    let vlen = D::F32Vec::LEN;
+    let vlen = D::F16Vec::LEN;
     let iter = row_x
         .chunks_exact_mut(vlen)
         .zip(row_y.chunks_exact_mut(vlen))
@@ -217,30 +237,31 @@ fn process_xyb<D: SimdDescriptor>(
         .take(xsize.div_ceil(vlen));
 
     for ((xm, ym), bm) in iter {
-        let x = D::F32Vec::load(d, xm);
-        let y = D::F32Vec::load(d, ym);
-        let b = D::F32Vec::load(d, bm);
+        let x = D::F16Vec::load(d, xm);
+        let y = D::F16Vec::load(d, ym);
+        let b = D::F16Vec::load(d, bm);
 
-        // Mix and apply bias
-        let l = y + x - bias_cbrt[0];
-        let m = y - x - bias_cbrt[1];
-        let s = b - bias_cbrt[2];
+        // Apply bias in (x, y, b) space so l = yc + xc and m = yc - xc.
+        let xc = x - bias_cbrt[0];
+        let yc = y - bias_cbrt[1];
+        let sc = b - bias_cbrt[2];
 
-        // Apply biased inverse gamma and scale (1.0 corresponds to `intensity_target` nits)
-        let l2 = l * l;
-        let m2 = m * m;
-        let s2 = s * s;
-        let scaled_l = l * intensity_scale;
-        let scaled_m = m * intensity_scale;
-        let scaled_s = s * intensity_scale;
-        let l = l2.mul_add(scaled_l, scaled_bias[0]);
-        let m = m2.mul_add(scaled_m, scaled_bias[1]);
-        let s = s2.mul_add(scaled_s, scaled_bias[2]);
+        // Compute (L - M) / 2 = xc * (3 * yc^2 + xc^2) + bias[0]
+        // and     (L + M) / 2 = yc * (yc^2 + 3 * xc^2) + bias[1]
+        // directly to avoid catastrophic cancellation between L^3 and M^3 in f16.
+        let xc2 = xc * xc;
+        let yc2 = yc * yc;
+        let sc2 = sc * sc;
+        let x_poly = yc2.mul_add(three, xc2);
+        let y_poly = xc2.mul_add(three, yc2);
+        let x_lin = x_poly.mul_add(xc, bias[0]);
+        let y_lin = y_poly.mul_add(yc, bias[1]);
+        let s_lin = sc2.mul_add(sc, bias[2]);
 
-        // Apply opsin inverse matrix (linear LMS to linear RGB)
-        let r = mat[0].mul_add(l, mat[1].mul_add(m, mat[2] * s));
-        let g = mat[3].mul_add(l, mat[4].mul_add(m, mat[5] * s));
-        let b = mat[6].mul_add(l, mat[7].mul_add(m, mat[8] * s));
+        // Apply transformed opsin inverse matrix (linear LMS to linear RGB)
+        let r = mat[0].mul_add(x_lin, mat[1].mul_add(y_lin, mat[2] * s_lin));
+        let g = mat[3].mul_add(x_lin, mat[4].mul_add(y_lin, mat[5] * s_lin));
+        let b = mat[6].mul_add(x_lin, mat[7].mul_add(y_lin, mat[8] * s_lin));
 
         let [r, g, b] = apply_tf([r, g, b]);
 
@@ -257,9 +278,9 @@ simd_function!(
         params: &XybParams,
         tf: &TransferFunction,
         xsize: usize,
-        x: &mut [f32],
-        y: &mut [f32],
-        b: &mut [f32],
+        x: &mut [f16],
+        y: &mut [f16],
+        b: &mut [f16],
     ) {
         match tf {
             TransferFunction::Srgb => {
@@ -267,9 +288,9 @@ simd_function!(
                     #[inline(always)]
                     |[r, g, b]| {
                         [
-                            tf::linear_to_srgb_simd_vec(d, r),
-                            tf::linear_to_srgb_simd_vec(d, g),
-                            tf::linear_to_srgb_simd_vec(d, b),
+                            tf::linear_to_srgb_f16_simd_vec(d, r),
+                            tf::linear_to_srgb_f16_simd_vec(d, g),
+                            tf::linear_to_srgb_f16_simd_vec(d, b),
                         ]
                     }
                 });
@@ -279,23 +300,26 @@ simd_function!(
                     #[inline(always)]
                     |[r, g, b]| {
                         [
-                            tf::linear_to_bt709_simd_vec(d, r),
-                            tf::linear_to_bt709_simd_vec(d, g),
-                            tf::linear_to_bt709_simd_vec(d, b),
+                            tf::linear_to_bt709_f16_simd_vec(d, r),
+                            tf::linear_to_bt709_f16_simd_vec(d, g),
+                            tf::linear_to_bt709_f16_simd_vec(d, b),
                         ]
                     }
                 });
             }
             TransferFunction::Pq { intensity_target } => {
-                let y_mult = D::F32Vec::splat(d, intensity_target * 10000f32.recip());
-                let threshold = D::F32Vec::splat(d, 1e-4);
+                let y_mult_1_4 = D::F16Vec::splat(
+                    d,
+                    (*intensity_target * 10000f32.recip()).sqrt().sqrt(),
+                );
+                let threshold = D::F16Vec::splat(d, 1e-4);
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
                     |[r, g, b]| {
                         [
-                            tf::linear_to_pq_simd_vec(d, y_mult, threshold, r),
-                            tf::linear_to_pq_simd_vec(d, y_mult, threshold, g),
-                            tf::linear_to_pq_simd_vec(d, y_mult, threshold, b),
+                            tf::linear_to_pq_f16_simd_vec(d, y_mult_1_4, threshold, r),
+                            tf::linear_to_pq_f16_simd_vec(d, y_mult_1_4, threshold, g),
+                            tf::linear_to_pq_f16_simd_vec(d, y_mult_1_4, threshold, b),
                         ]
                     }
                 });
@@ -307,14 +331,14 @@ simd_function!(
                 });
             }
             TransferFunction::Gamma(g) => {
-                let g_vec = D::F32Vec::splat(d, *g);
+                let g_vec = D::F16Vec::splat(d, *g);
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
                     |[r, g, b]| {
                         [
-                            crate::util::fast_powf_simd(d, r.abs(), g_vec).copysign(r),
-                            crate::util::fast_powf_simd(d, g.abs(), g_vec).copysign(g),
-                            crate::util::fast_powf_simd(d, b.abs(), g_vec).copysign(b),
+                            crate::util::fast_powf_simd_f16(d, r.abs(), g_vec).copysign(r),
+                            crate::util::fast_powf_simd_f16(d, g.abs(), g_vec).copysign(g),
+                            crate::util::fast_powf_simd_f16(d, b.abs(), g_vec).copysign(b),
                         ]
                     }
                 });
@@ -323,17 +347,17 @@ simd_function!(
                 intensity_target,
                 luminance_rgb,
             } => {
-                let system_gamma = D::F32Vec::splat(d, tf::hlg_system_gamma(*intensity_target));
-                let luminance_rgb = luminance_rgb.map(|v| D::F32Vec::splat(d, v));
+                let system_gamma = D::F16Vec::splat(d, tf::hlg_system_gamma(*intensity_target));
+                let luminance_rgb = luminance_rgb.map(|v| D::F16Vec::splat(d, v));
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
                     |arr| {
                         let [r, g, b] =
-                            tf::hlg_display_to_scene_vec(d, system_gamma, luminance_rgb, arr);
+                            tf::hlg_display_to_scene_f16_vec(d, system_gamma, luminance_rgb, arr);
                         [
-                            tf::scene_to_hlg_vec(d, r),
-                            tf::scene_to_hlg_vec(d, g),
-                            tf::scene_to_hlg_vec(d, b),
+                            tf::scene_to_hlg_f16_vec(d, r),
+                            tf::scene_to_hlg_f16_vec(d, g),
+                            tf::scene_to_hlg_f16_vec(d, b),
                         ]
                     }
                 });
@@ -343,7 +367,7 @@ simd_function!(
 );
 
 impl RenderPipelineInPlaceStage for XybColorConvertStage {
-    type Type = f32;
+    type Type = f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         (self.first_channel..self.first_channel + 3).contains(&c)
@@ -353,7 +377,7 @@ impl RenderPipelineInPlaceStage for XybColorConvertStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [f16]],
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -397,13 +421,13 @@ mod test {
         let mut input_b = Image::new((3, 1))?;
         input_x
             .row_mut(0)
-            .copy_from_slice(&[0.028100073, -0.015386105, 0.0]);
+            .copy_from_slice(&[0.028100073, -0.015386105, 0.0].map(f16::from_f32));
         input_y
             .row_mut(0)
-            .copy_from_slice(&[0.4881882, 0.71478134, 0.2781282]);
+            .copy_from_slice(&[0.4881882, 0.71478134, 0.2781282].map(f16::from_f32));
         input_b
             .row_mut(0)
-            .copy_from_slice(&[0.471659, 0.43707693, 0.66613984]);
+            .copy_from_slice(&[0.471659, 0.43707693, 0.66613984].map(f16::from_f32));
 
         let info = OutputColorInfo {
             tf: TransferFunction::Gamma(1.0),
@@ -413,9 +437,12 @@ mod test {
         let output =
             make_and_run_simple_pipeline(stage, &[input_x, input_y, input_b], (3, 1), 0, 256)?;
 
-        assert_close!(all, output[0].row(0), &[1.0, 0.0, 0.0], 1e-6);
-        assert_close!(all, output[1].row(0), &[0.0, 1.0, 0.0], 1e-6);
-        assert_close!(all, output[2].row(0), &[0.0, 0.0, 1.0], 1e-6);
+        let r0: Vec<f32> = output[0].row(0).iter().map(|v| v.to_f32()).collect();
+        let r1: Vec<f32> = output[1].row(0).iter().map(|v| v.to_f32()).collect();
+        let r2: Vec<f32> = output[2].row(0).iter().map(|v| v.to_f32()).collect();
+        assert_close!(all, &r0, &[1.0, 0.0, 0.0], 2e-3);
+        assert_close!(all, &r1, &[0.0, 1.0, 0.0], 2e-3);
+        assert_close!(all, &r2, &[0.0, 0.0, 1.0], 2e-3);
 
         Ok(())
     }
@@ -507,9 +534,9 @@ mod test {
     fn sdr_white_hlg() -> Result<()> {
         let intensity_target = 1000f32;
         let (_, y, b) = xyb_for_neutral_linear(0.203, intensity_target);
-        let input_x = Image::new_with_value((1, 1), 0.0)?;
-        let input_y = Image::new_with_value((1, 1), y)?;
-        let input_b = Image::new_with_value((1, 1), b)?;
+        let input_x = Image::new_with_value((1, 1), f16::ZERO)?;
+        let input_y = Image::new_with_value((1, 1), f16::from_f32(y))?;
+        let input_b = Image::new_with_value((1, 1), f16::from_f32(b))?;
 
         let info = OutputColorInfo {
             intensity_target,
@@ -523,9 +550,9 @@ mod test {
         let output =
             make_and_run_simple_pipeline(stage, &[input_x, input_y, input_b], (1, 1), 0, 256)?;
 
-        assert_close!(all, output[0].row(0), &[0.75], 1e-3);
-        assert_close!(all, output[1].row(0), &[0.75], 1e-3);
-        assert_close!(all, output[2].row(0), &[0.75], 1e-3);
+        assert_close!(all, &[output[0].row(0)[0].to_f32()], &[0.75], 5e-3);
+        assert_close!(all, &[output[1].row(0)[0].to_f32()], &[0.75], 5e-3);
+        assert_close!(all, &[output[2].row(0)[0].to_f32()], &[0.75], 5e-3);
 
         Ok(())
     }
@@ -534,9 +561,9 @@ mod test {
     fn sdr_white_pq() -> Result<()> {
         let intensity_target = 1000f32;
         let (_, y, b) = xyb_for_neutral_linear(0.203, intensity_target);
-        let input_x = Image::new_with_value((1, 1), 0.0)?;
-        let input_y = Image::new_with_value((1, 1), y)?;
-        let input_b = Image::new_with_value((1, 1), b)?;
+        let input_x = Image::new_with_value((1, 1), f16::ZERO)?;
+        let input_y = Image::new_with_value((1, 1), f16::from_f32(y))?;
+        let input_b = Image::new_with_value((1, 1), f16::from_f32(b))?;
 
         let info = OutputColorInfo {
             intensity_target,
@@ -547,9 +574,9 @@ mod test {
         let output =
             make_and_run_simple_pipeline(stage, &[input_x, input_y, input_b], (1, 1), 0, 256)?;
 
-        assert_close!(all, output[0].row(0), &[0.58], 1e-3);
-        assert_close!(all, output[1].row(0), &[0.58], 1e-3);
-        assert_close!(all, output[2].row(0), &[0.58], 1e-3);
+        assert_close!(all, &[output[0].row(0)[0].to_f32()], &[0.58], 5e-3);
+        assert_close!(all, &[output[1].row(0)[0].to_f32()], &[0.58], 5e-3);
+        assert_close!(all, &[output[2].row(0)[0].to_f32()], &[0.58], 5e-3);
 
         Ok(())
     }
@@ -558,14 +585,14 @@ mod test {
         let opsin = OpsinInverseMatrix::default(&Empty {});
         arbtest::arbtest(|u| {
             let xsize = u.arbitrary_len::<usize>()?;
-            let mut row_x = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
-            let mut row_y = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
-            let mut row_b = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
+            let mut row_x = vec![f16::ZERO; round_up_size_to_cache_line::<f16>(xsize)];
+            let mut row_y = vec![f16::ZERO; round_up_size_to_cache_line::<f16>(xsize)];
+            let mut row_b = vec![f16::ZERO; round_up_size_to_cache_line::<f16>(xsize)];
 
             for i in 0..xsize {
-                row_x[i] = u.arbitrary::<i16>()? as f32 * (0.07 / i16::MAX as f32);
-                row_y[i] = u.arbitrary::<u16>()? as f32 * (1.0 / u16::MAX as f32);
-                row_b[i] = u.arbitrary::<u16>()? as f32 * (1.0 / u16::MAX as f32);
+                row_x[i] = f16::from_f32(u.arbitrary::<i16>()? as f32 * (0.07 / i16::MAX as f32));
+                row_y[i] = f16::from_f32(u.arbitrary::<u16>()? as f32 * (1.0 / u16::MAX as f32));
+                row_b[i] = f16::from_f32(u.arbitrary::<u16>()? as f32 * (1.0 / u16::MAX as f32));
             }
 
             let mut scalar_x = row_x.clone();
@@ -589,18 +616,19 @@ mod test {
                 &mut scalar_b,
             );
 
+            let abs_tol = 8e-3 * (255.0 / intensity_target).max(1.0);
             for i in 0..xsize {
                 for (simd, scalar) in [
-                    (row_x[i], scalar_x[i]),
-                    (row_y[i], scalar_y[i]),
-                    (row_b[i], scalar_b[i]),
+                    (row_x[i].to_f32(), scalar_x[i].to_f32()),
+                    (row_y[i].to_f32(), scalar_y[i].to_f32()),
+                    (row_b[i].to_f32(), scalar_b[i].to_f32()),
                 ] {
                     let abs = (simd - scalar).abs();
                     let max = simd.abs().max(scalar.abs());
                     let rel = abs / max;
                     assert!(
-                        abs < 1e-4 || rel < 1e-3,
-                        "simd {simd}, scalar {scalar}, abs {abs:?} rel {rel:?}",
+                        abs < abs_tol || rel < 1e-2,
+                        "simd {simd}, scalar {scalar}, abs {abs:?} (tol {abs_tol:?}) rel {rel:?}",
                     );
                 }
             }
