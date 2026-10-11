@@ -213,7 +213,7 @@ impl ModularBufferInfo {
 use std::collections::VecDeque;
 
 use crate::frame::modular::decode::specialized_trees::{LUT_TABLE_SIZE, RangeAndNode};
-use crate::frame::modular::flat_tree::FlatTreeNode;
+use crate::frame::modular::flat_tree::{FlatTreeNode, MddScratch};
 use crate::frame::modular::predict::WeightedPredictorScratch;
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 use crate::frame::modular::tree::TreeNode;
@@ -228,6 +228,7 @@ struct TreeScratch {
     wp_scratch: WeightedPredictorScratch,
     property_buffer: Vec<i32>,
     references: Vec<i32>,
+    mdd_scratch: MddScratch,
 }
 
 pub(crate) struct ScratchSpace {

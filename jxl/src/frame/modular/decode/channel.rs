@@ -359,6 +359,7 @@ pub(super) fn decode_modular_channel(
         chan,
         stream_id,
         size.0,
+        size.1,
         header,
         storage,
         tree_lut_scratch,
