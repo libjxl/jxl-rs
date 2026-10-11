@@ -78,9 +78,8 @@ fn decode_fast_lossless(
             .uint(tree.histograms.map_context_to_cluster(id as usize));
         let lz_conf = tree.histograms.lz77_length_uint();
 
-        let mut decode = {
-            #[inline(always)]
-            || {
+        macro_rules! handle_rle {
+            ($x: ident, $run: ident) => {
                 if rle_len > 0 {
                     rle_len -= 1;
                 } else {
@@ -93,54 +92,94 @@ fn decode_fast_lossless(
                     } else {
                         rle_sym = unpack_signed(sym_conf.read(sym, br));
                     }
-                };
-                rle_sym
+                }
+                let extra = rle_len.min(w - 1 - $x);
+                rle_len -= extra;
+                let $run = 1 + extra;
             }
-        };
+        }
+
+        macro_rules! decode_channel_rows {
+            ($pixel_ty:ty) => {{
+                let mut buf = ImageRectMut::<$pixel_ty>::from_raw(buf.data.as_rect_mut());
+                {
+                    let row = buf.row(0);
+                    let mut last = 0i32;
+                    let mut x = 0;
+                    while x < w {
+                        handle_rle!(x, run);
+                        if run == 1 {
+                            last = last.wrapping_add(rle_sym);
+                            row[x] = last as $pixel_ty;
+                        } else if rle_sym == 0 {
+                            row[x..x + run].fill(last as $pixel_ty);
+                        } else {
+                            for p in &mut row[x..x + run] {
+                                last = last.wrapping_add(rle_sym);
+                                *p = last as $pixel_ty;
+                            }
+                        }
+                        x += run;
+                    }
+                }
+
+                for y in 1..h {
+                    let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+
+                    let mut left = row_top[0] as i32;
+                    let mut topleft = left;
+                    let mut x = 0;
+                    while x < w {
+                        handle_rle!(x, run);
+                        if run == 1 {
+                            let top = row_top[x] as i32;
+                            let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+                            let val = (pred + rle_sym as i64) as i32;
+                            row[x] = val as $pixel_ty;
+                            left = val;
+                            topleft = top;
+                        } else if rle_sym == 0 {
+                            if left == topleft {
+                                row[x..x + run].copy_from_slice(&row_top[x..x + run]);
+                                left = row_top[x + run - 1] as i32;
+                                topleft = left;
+                            } else {
+                                for (&top_sample, p) in
+                                    row_top[x..x + run].iter().zip(&mut row[x..x + run])
+                                {
+                                    let top = top_sample as i32;
+                                    let val =
+                                        clamped_gradient(left as i64, top as i64, topleft as i64)
+                                            as i32;
+                                    *p = val as $pixel_ty;
+                                    left = val;
+                                    topleft = top;
+                                }
+                            }
+                        } else {
+                            let sym64 = rle_sym as i64;
+                            for (&top_sample, p) in
+                                row_top[x..x + run].iter().zip(&mut row[x..x + run])
+                            {
+                                let top = top_sample as i32;
+                                let pred =
+                                    clamped_gradient(left as i64, top as i64, topleft as i64);
+                                let val = (pred + sym64) as i32;
+                                *p = val as $pixel_ty;
+                                left = val;
+                                topleft = top;
+                            }
+                        }
+                        x += run;
+                    }
+                }
+            }};
+        }
 
         if storage == ModularStorage::I16 {
-            let mut buf = ImageRectMut::<i16>::from_raw(buf.data.as_rect_mut());
-            let mut last = 0i32;
-            for p in buf.row(0) {
-                last = last.wrapping_add(decode());
-                *p = last as i16;
-            }
-
-            for y in 1..h {
-                let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
-
-                let mut left = row_top[0] as i32;
-                let mut topleft = left;
-                for (&top_sample, p) in row_top.iter().zip(row.iter_mut()) {
-                    let top = top_sample as i32;
-                    let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
-                    let val = (pred + decode() as i64) as i32;
-                    *p = val as i16;
-                    left = val;
-                    topleft = top;
-                }
-            }
+            decode_channel_rows!(i16);
         } else {
-            let mut buf = ImageRectMut::<i32>::from_raw(buf.data.as_rect_mut());
-            let mut last = 0i32;
-            for p in buf.row(0) {
-                // clamped gradient == left on the first row.
-                *p = last.wrapping_add(decode());
-                last = *p;
-            }
-
-            for y in 1..h {
-                let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
-
-                let mut left = row_top[0];
-                let mut topleft = left;
-                for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
-                    let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
-                    *p = (pred + decode() as i64) as i32;
-                    left = *p;
-                    topleft = top;
-                }
-            }
+            decode_channel_rows!(i32);
         }
 
         if let Err(e) = br.check_for_error() {

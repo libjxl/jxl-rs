@@ -65,28 +65,17 @@ impl PredictionData {
     #[inline(always)]
     pub fn update_for_interior_row(
         self,
-        row_top: &[i32],
-        row_toptop: &[i32],
-        x: usize,
         cur: i32,
-        needs_toptop: bool,
+        toprightright: i32,
+        toptop: i32,
     ) -> PredictionData {
-        debug_assert!(x > 1);
-        debug_assert!(x + 2 < row_top.len());
-        let left = cur;
-        let top = self.topright;
-        let topleft = self.top;
-        let topright = self.toprightright;
-        let leftleft = self.left;
-        let toptop = if needs_toptop { row_toptop[x] } else { 0 };
-        let toprightright = row_top[x + 2];
         Self {
-            left,
-            top,
+            left: cur,
+            top: self.topright,
             toptop,
-            topleft,
-            topright,
-            leftleft,
+            topleft: self.top,
+            topright: self.toprightright,
+            leftleft: self.left,
             toprightright,
         }
     }
