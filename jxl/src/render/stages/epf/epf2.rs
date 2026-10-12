@@ -5,11 +5,12 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F16SimdVec, simd_function};
 
 use super::Epf2Stage;
 use super::common::epf_process_row_chunk;
 use crate::render::{Channels, ChannelsMut};
+use crate::util::f16;
 
 const OFFSETS: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
@@ -21,9 +22,9 @@ simd_function!(
         xpos: usize,
         xsize: usize,
         row_sigma: &[f32],
-        sad_mul_storage: &[f32; 24],
-        input_rows: &Channels<f32>,
-        output_rows: &mut ChannelsMut<f32>,
+        sad_mul_storage: &[f16; 24],
+        input_rows: &Channels<f16>,
+        output_rows: &mut ChannelsMut<f16>,
     ) {
         epf_process_row_chunk::<D, 2, 1, 3, 1, 4>(
             d,

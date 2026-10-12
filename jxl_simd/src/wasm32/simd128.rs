@@ -12,7 +12,9 @@ use std::ops::{
 use super::super::{
     F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
 };
-use crate::{U32SimdVec, U64SimdVec, impl_i16_array_interface};
+use crate::{
+    F16VecConvert, U32SimdVec, U64SimdVec, impl_f16_convert_mask, impl_i16_array_interface,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Simd128Descriptor(());
@@ -25,6 +27,8 @@ pub struct Bf16Table8Simd128(v128);
 
 impl SimdDescriptor for Simd128Descriptor {
     type F32Vec = F32VecSimd128;
+
+    type F16Vec = F16VecConvert<F32VecSimd128>;
 
     type I32Vec = I32VecSimd128;
 
@@ -39,8 +43,10 @@ impl SimdDescriptor for Simd128Descriptor {
     type U8Vec = U8VecSimd128;
 
     type Mask = MaskSimd128;
+    type F16Mask = MaskSimd128;
     type Mask16 = Mask16Simd128;
     type Bf16Table8 = Bf16Table8Simd128;
+    type F16Table8 = Bf16Table8Simd128;
 
     type Descriptor256 = Self;
     type Descriptor128 = Self;
@@ -74,6 +80,11 @@ impl F32SimdVec for F32VecSimd128 {
     type Descriptor = Simd128Descriptor;
 
     const LEN: usize = 4;
+
+    #[inline(always)]
+    fn descriptor(&self) -> Self::Descriptor {
+        self.1
+    }
 
     #[inline(always)]
     fn splat(d: Self::Descriptor, v: f32) -> Self {
@@ -304,6 +315,19 @@ impl F32SimdVec for F32VecSimd128 {
         F32VecSimd128(i64x2_shuffle::<1, 3>(tr0, tr2), d).store_array(&mut data[stride]);
         F32VecSimd128(i64x2_shuffle::<0, 2>(tr1, tr3), d).store_array(&mut data[2 * stride]);
         F32VecSimd128(i64x2_shuffle::<1, 3>(tr1, tr3), d).store_array(&mut data[3 * stride]);
+    }
+
+    #[inline(always)]
+    fn transpose_square_f16(_d: Simd128Descriptor, data: &mut [[crate::f16; 4]], stride: usize) {
+        assert!(data.len() > 3 * stride);
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                let a = data[i * stride][j];
+                let b = data[j * stride][i];
+                data[i * stride][j] = b;
+                data[j * stride][i] = a;
+            }
+        }
     }
 
     crate::impl_f32_array_interface!();
@@ -1536,3 +1560,5 @@ impl BitOr<Mask16Simd128> for Mask16Simd128 {
         Mask16Simd128(v128_or(self.0, rhs.0), self.1)
     }
 }
+
+impl_f16_convert_mask!(MaskSimd128, Simd128Descriptor);

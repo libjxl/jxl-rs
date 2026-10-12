@@ -24,7 +24,6 @@ pub struct ExtendToImageDimensionsStage {
     pub blending_info: BlendingInfo,
     pub ec_blending_info: Vec<BlendingInfo>,
     pub reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
-    pub zeros: Vec<f32>,
 }
 
 impl ExtendToImageDimensionsStage {
@@ -41,7 +40,6 @@ impl ExtendToImageDimensionsStage {
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
             reference_frames,
-            zeros: vec![0f32; xsize],
         })
     }
 }
@@ -58,7 +56,7 @@ impl ExtendToImageDimensionsStage {
         position: (usize, usize),
         xsize: usize,
         c: usize,
-        row: &mut [f32],
+        row: &mut [crate::util::f16],
     ) {
         let x0 = position.0;
         let x1 = x0 + xsize;
@@ -72,12 +70,11 @@ impl ExtendToImageDimensionsStage {
             // and can't be used after extending, so nothing to do.
             return;
         };
-        let bg = if let Some(bg) = self.reference_frames[source].as_ref() {
-            bg.frame[c].row(y0)
+        if let Some(bg) = self.reference_frames[source].as_ref() {
+            row[0..xsize].copy_from_slice(&bg.frame[c].row(y0)[x0..x1]);
         } else {
-            self.zeros.as_slice()
-        };
-        row[0..xsize].copy_from_slice(&bg[x0..x1]);
+            row[0..xsize].fill(crate::util::f16::ZERO);
+        }
     }
 }
 

@@ -16,6 +16,7 @@ use crate::render::stages::epf::epf0::epf0_process_row_chunk_dispatch;
 use crate::render::stages::epf::epf1::epf1_process_row_chunk_dispatch;
 use crate::render::stages::epf::epf2::epf2_process_row_chunk_dispatch;
 use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
+use crate::util::f16;
 use crate::util::sync::{Arc, RwLock};
 
 /// Edge-preserving filter stage for step `STEP` (`0..=2`) with border radius `BORDER` (`3 - STEP`).
@@ -59,8 +60,8 @@ impl<const STEP: u8, const BORDER: u8> EpfStage<STEP, BORDER> {
 macro_rules! stage {
     ($step: literal, $border: literal, $fun: path) => {
         impl RenderPipelineInOutStage for EpfStage<$step, $border> {
-            type InputT = f32;
-            type OutputT = f32;
+            type InputT = f16;
+            type OutputT = f16;
             const SHIFT: (u8, u8) = (0, 0);
             const BORDER: (u8, u8) = ($border, $border);
 
@@ -72,8 +73,8 @@ macro_rules! stage {
                 &self,
                 pos: (usize, usize),
                 xsize: usize,
-                input_rows: &Channels<f32>,
-                output_rows: &mut ChannelsMut<f32>,
+                input_rows: &Channels<f16>,
+                output_rows: &mut ChannelsMut<f16>,
                 _state: Option<&mut ErasedLocalState>,
                 _previous_call_was_previous_row: bool,
             ) {

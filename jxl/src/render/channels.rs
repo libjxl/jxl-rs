@@ -5,7 +5,7 @@
 
 #![allow(unsafe_code)]
 
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor};
+use jxl_simd::{F16SimdVec, F32SimdVec, I32SimdVec, SimdDescriptor};
 
 use crate::image::ImageDataType;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
@@ -38,6 +38,23 @@ impl<D: SimdDescriptor> VecStore<D> for f32 {
     }
 }
 
+impl<D: SimdDescriptor> VecLoad<D> for crate::util::f16 {
+    type Vec = D::F16Vec;
+    const LEN: usize = D::F16Vec::LEN;
+
+    #[inline(always)]
+    fn load(d: D, slice: &[crate::util::f16]) -> D::F16Vec {
+        D::F16Vec::load(d, slice)
+    }
+}
+
+impl<D: SimdDescriptor> VecStore<D> for crate::util::f16 {
+    #[inline(always)]
+    fn store(_d: D, vec: D::F16Vec, slice: &mut [crate::util::f16]) {
+        vec.store(slice);
+    }
+}
+
 impl<D: SimdDescriptor> VecLoad<D> for i32 {
     type Vec = D::I32Vec;
     const LEN: usize = D::I32Vec::LEN;
@@ -59,12 +76,12 @@ impl<D: SimdDescriptor> VecLoad<D> for i16 {
 }
 
 impl<D: SimdDescriptor> VecLoad<D> for u16 {
-    type Vec = D::I32Vec;
-    const LEN: usize = D::I32Vec::LEN;
+    type Vec = D::F16Vec;
+    const LEN: usize = D::F16Vec::LEN;
 
     #[inline(always)]
-    fn load(d: D, slice: &[u16]) -> D::I32Vec {
-        D::I32Vec::load_from_u16(d, slice)
+    fn load(d: D, slice: &[u16]) -> D::F16Vec {
+        D::F16Vec::load_u16_norm(d, slice)
     }
 }
 
@@ -90,6 +107,29 @@ impl<D: SimdDescriptor> StoreInterleaved<D, 8> for f32 {
     #[inline(always)]
     fn store_interleaved(_d: D, vals: [D::F32Vec; 8], dest: &mut [f32]) {
         D::F32Vec::store_interleaved_8(
+            vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], dest,
+        );
+    }
+}
+
+impl<D: SimdDescriptor> StoreInterleaved<D, 2> for crate::util::f16 {
+    #[inline(always)]
+    fn store_interleaved(_d: D, vals: [D::F16Vec; 2], dest: &mut [crate::util::f16]) {
+        D::F16Vec::store_interleaved_2(vals[0], vals[1], dest);
+    }
+}
+
+impl<D: SimdDescriptor> StoreInterleaved<D, 4> for crate::util::f16 {
+    #[inline(always)]
+    fn store_interleaved(_d: D, vals: [D::F16Vec; 4], dest: &mut [crate::util::f16]) {
+        D::F16Vec::store_interleaved_4(vals[0], vals[1], vals[2], vals[3], dest);
+    }
+}
+
+impl<D: SimdDescriptor> StoreInterleaved<D, 8> for crate::util::f16 {
+    #[inline(always)]
+    fn store_interleaved(_d: D, vals: [D::F16Vec; 8], dest: &mut [crate::util::f16]) {
+        D::F16Vec::store_interleaved_8(
             vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], dest,
         );
     }
@@ -207,17 +247,15 @@ pub struct ChannelsView<'a, T, const CHANS: usize, const ROWS: usize, const RADI
 impl<'a, T, const CHANS: usize, const ROWS: usize, const RADIUS: usize>
     ChannelsView<'a, T, CHANS, ROWS, RADIUS>
 {
-    /// Loads a SIMD vector from channel `CHAN` at vertical offset `dy` (`-(ROWS/2)..=(ROWS/2)`)
-    /// and horizontal offset `dx` (`-RADIUS..=RADIUS`) relative to the current chunk offset.
+    /// Returns a slice of length `len` (`len <= MAX_SIMD_LANES`) from channel `CHAN` at vertical
+    /// offset `dy` (`-(ROWS/2)..=(ROWS/2)`) and horizontal offset `dx` (`-RADIUS..=RADIUS`)
+    /// relative to the current chunk offset.
     #[inline(always)]
-    pub fn load<D: SimdDescriptor, const CHAN: usize>(&self, d: D, dy: isize, dx: isize) -> T::Vec
-    where
-        T: VecLoad<D>,
-    {
+    pub fn slice<const CHAN: usize>(&self, dy: isize, dx: isize, len: usize) -> &[T] {
         const { assert!(CHAN < CHANS) };
         const { assert!(ROWS % 2 == 1) };
         const { assert!(RADIUS <= isize::MAX as usize / 2) };
-        const { assert!(T::LEN <= MAX_SIMD_LANES) };
+        assert!(len <= MAX_SIMD_LANES);
         let row_idx = (ROWS / 2).wrapping_add_signed(dy);
         assert!(row_idx < ROWS);
         let col_off = RADIUS.wrapping_add_signed(dx);
@@ -225,16 +263,26 @@ impl<'a, T, const CHANS: usize, const ROWS: usize, const RADIUS: usize>
         // [off]
         let offset = (self.row_offsets[row_idx] + self.x_offset).wrapping_add_signed(dx);
         let buf = self.channel_buffers[CHAN];
-        debug_assert!(offset + T::LEN <= buf.len());
-        // SAFETY: `slice::get_unchecked` requires `offset <= offset + T::LEN <= buf.len()`.
+        debug_assert!(offset + len <= buf.len());
+        // SAFETY: `slice::get_unchecked` requires `offset <= offset + len <= buf.len()`.
         // By the `ChannelsView` safety invariant (`self.x_offset >= RADIUS` and
         // `row_offsets[row_idx] + x_offset + RADIUS + MAX_SIMD_LANES <= buf.len()` without
         // overflow), along with `CHAN < CHANS`, `row_idx < ROWS`, `|dx| <= RADIUS` (verified via
-        // `col_off <= 2 * RADIUS`), and `T::LEN <= MAX_SIMD_LANES`, `wrapping_add_signed(dx)` in
-        // [off] cannot underflow and `offset <= offset + T::LEN <= buf.len()` holds without
+        // `col_off <= 2 * RADIUS`), and `len <= MAX_SIMD_LANES`, `wrapping_add_signed(dx)` in
+        // [off] cannot underflow and `offset <= offset + len <= buf.len()` holds without
         // overflow.
-        let slice = unsafe { buf.get_unchecked(offset..offset + T::LEN) };
-        T::load(d, slice)
+        unsafe { buf.get_unchecked(offset..offset + len) }
+    }
+
+    /// Loads a SIMD vector from channel `CHAN` at vertical offset `dy` (`-(ROWS/2)..=(ROWS/2)`)
+    /// and horizontal offset `dx` (`-RADIUS..=RADIUS`) relative to the current chunk offset.
+    #[inline(always)]
+    pub fn load<D: SimdDescriptor, const CHAN: usize>(&self, d: D, dy: isize, dx: isize) -> T::Vec
+    where
+        T: VecLoad<D>,
+    {
+        const { assert!(T::LEN <= MAX_SIMD_LANES) };
+        T::load(d, self.slice::<CHAN>(dy, dx, T::LEN))
     }
 
     /// Narrows the view to a single channel `CHAN`.
@@ -433,8 +481,8 @@ pub fn for_each_chunk<
 ) {
     const { assert!(SCALE > 0) };
     const { assert!(InT::LEN > 0 && InT::LEN <= MAX_SIMD_LANES) };
-    const { assert!(OutT::LEN == InT::LEN) };
-    let len = InT::LEN;
+    const { assert!(OutT::LEN > 0 && OutT::LEN <= MAX_SIMD_LANES) };
+    let len = OutT::LEN;
     if xsize == 0 {
         return;
     }
@@ -929,11 +977,12 @@ mod tests {
                 }
             }
 
-            // Test u16 (unsigned 16-bit) -> i32 vector
+            // Test u16 (unsigned 16-bit) -> f16 vector
             {
                 let x0_u16 = RowBuffer::x0_offset::<u16>();
+                let x0_f16 = RowBuffer::x0_offset::<crate::util::f16>();
                 let mut in_buf = RowBuffer::new(DataTypeTag::U16, 0, 0, 0, xsize).unwrap();
-                let mut out_buf = RowBuffer::new(DataTypeTag::F32, 0, 0, 0, xsize).unwrap();
+                let mut out_buf = RowBuffer::new(DataTypeTag::F16, 0, 0, 0, xsize).unwrap();
                 let row = in_buf.get_row_mut::<u16>(0);
                 for x in 0..xsize {
                     row[x0_u16 + x] = (x as u16).wrapping_mul(311) + 40000;
@@ -941,9 +990,9 @@ mod tests {
                 let in_refs = [&in_buf];
                 let in_channels = Channels::<u16>::from_row_buffers(&in_refs, x0_u16, 0, 1, 0);
                 {
-                    let mut out_channels = ChannelsMut::<f32>::from_row_buffers(
+                    let mut out_channels = ChannelsMut::<crate::util::f16>::from_row_buffers(
                         std::slice::from_mut(&mut out_buf),
-                        x0_f32,
+                        x0_f16,
                         0,
                         1,
                     );
@@ -953,15 +1002,22 @@ mod tests {
                         in_channels.view::<1, 1, 0>(),
                         out_channels.view::<1, 1, 1>(),
                         |_x, inv, outv| {
-                            let val: D::I32Vec = inv.load::<_, 0>(d, 0, 0);
-                            outv.store::<_, 0>(d, 0, val.as_f32());
+                            let val: D::F16Vec = inv.load::<_, 0>(d, 0, 0);
+                            outv.store::<_, 0>(d, 0, val);
                         },
                     );
                 }
                 let in_row = &in_buf.get_row::<u16>(0)[x0_u16..x0_u16 + xsize];
-                let out_row = &out_buf.get_row::<f32>(0)[x0_f32..x0_f32 + xsize];
+                let out_row = &out_buf.get_row::<crate::util::f16>(0)[x0_f16..x0_f16 + xsize];
                 for (x, (&inp, &out)) in in_row.iter().zip(out_row).enumerate() {
-                    assert_eq!(out, inp as f32, "mismatch at x={x} for u16");
+                    let expected = crate::util::f16::from_f32(
+                        crate::util::f16::from_bits(0x3c00 | (inp >> 6)).to_f32() - 1.5,
+                    );
+                    assert_eq!(
+                        out.to_bits(),
+                        expected.to_bits(),
+                        "mismatch at x={x} for u16"
+                    );
                 }
             }
 

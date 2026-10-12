@@ -6,12 +6,13 @@
 #![allow(clippy::excessive_precision)]
 #![allow(clippy::approx_constant)]
 
-use jxl_simd::{simd_function, SimdDescriptor};
+use jxl_simd::{f16, simd_function, F32SimdVec, SimdDescriptor};
 
 use crate::transform_map::HfTransformType;
 use crate::*;
 
-fn idct2_top_block(s: usize, block_in: &[f32], block_out: &mut [f32]) {
+#[inline(always)]
+fn idct2_top_block(s: usize, block_in: &[f32; 64], block_out: &mut [f32; 64]) {
     let num_2x2 = s / 2;
     for y in 0..num_2x2 {
         for x in 0..num_2x2 {
@@ -19,14 +20,10 @@ fn idct2_top_block(s: usize, block_in: &[f32], block_out: &mut [f32]) {
             let c01 = block_in[y * 8 + num_2x2 + x];
             let c10 = block_in[(y + num_2x2) * 8 + x];
             let c11 = block_in[(y + num_2x2) * 8 + num_2x2 + x];
-            let r00 = c00 + c01 + c10 + c11;
-            let r01 = c00 + c01 - c10 - c11;
-            let r10 = c00 - c01 + c10 - c11;
-            let r11 = c00 - c01 - c10 + c11;
-            block_out[y * 2 * 8 + x * 2] = r00;
-            block_out[y * 2 * 8 + x * 2 + 1] = r01;
-            block_out[(y * 2 + 1) * 8 + x * 2] = r10;
-            block_out[(y * 2 + 1) * 8 + x * 2 + 1] = r11;
+            block_out[y * 2 * 8 + x * 2] = c00 + c01 + c10 + c11;
+            block_out[y * 2 * 8 + x * 2 + 1] = c00 + c01 - c10 - c11;
+            block_out[(y * 2 + 1) * 8 + x * 2] = c00 - c01 + c10 - c11;
+            block_out[(y * 2 + 1) * 8 + x * 2 + 1] = c00 - c01 - c10 + c11;
         }
     }
 }
@@ -292,13 +289,22 @@ const AFV4X4BASIS: [f32; 256] = [
 
 #[allow(clippy::excessive_precision)]
 #[allow(clippy::approx_constant)]
-fn avfidct4x4(coeffs: &[f32], pixels: &mut [f32]) {
-    for i in 0..16 {
-        let mut pixel: f32 = 0.0;
-        for j in 0..16 {
-            pixel += coeffs[j] * AFV4X4BASIS[j * 16 + i];
+#[inline(always)]
+fn avfidct4x4<D: SimdDescriptor>(d: D, coeffs: &[f16; 16], pixels: &mut [f16]) {
+    const { assert!(16usize.is_multiple_of(D::F32Vec::LEN)) };
+    let mut coeffs_f32 = [0.0f32; 16];
+    let coeffs_bits = f16::slice_to_bits(coeffs);
+    for k in (0..16).step_by(D::F32Vec::LEN) {
+        D::F32Vec::load_f16_bits(d, &coeffs_bits[k..]).store(&mut coeffs_f32[k..]);
+    }
+    let pixels_bits = f16::slice_to_bits_mut(&mut pixels[..16]);
+    for k in (0..16).step_by(D::F32Vec::LEN) {
+        let mut acc = D::F32Vec::splat(d, coeffs_f32[0]) * D::F32Vec::load(d, &AFV4X4BASIS[k..]);
+        for j in 1..16 {
+            acc = D::F32Vec::splat(d, coeffs_f32[j])
+                .mul_add(D::F32Vec::load(d, &AFV4X4BASIS[j * 16 + k..]), acc);
         }
-        pixels[i] = pixel;
+        acc.store_f16_bits(&mut pixels_bits[k..]);
     }
 }
 
@@ -306,21 +312,21 @@ fn avfidct4x4(coeffs: &[f32], pixels: &mut [f32]) {
 fn afv_transform_to_pixels<D: SimdDescriptor>(
     d: D,
     afv_kind: usize,
-    coefficients: &[f32],
-    pixels: &mut [f32],
+    coefficients: &[f16],
+    pixels: &mut [f16],
 ) {
     let afv_x = afv_kind & 1;
     let afv_y = afv_kind / 2;
-    let block00 = coefficients[0];
-    let block01 = coefficients[1];
-    let block10 = coefficients[8];
-    let dcs: [f32; 3] = [
-        (block00 + block10 + block01) * 4.0,
-        block00 + block10 - block01,
-        block00 - block10,
+    let block00 = coefficients[0].to_f32();
+    let block01 = coefficients[1].to_f32();
+    let block10 = coefficients[8].to_f32();
+    let dcs: [f16; 3] = [
+        f16::from_f32((block00 + block10 + block01) * 4.0),
+        f16::from_f32(block00 + block10 - block01),
+        f16::from_f32(block00 - block10),
     ];
     // IAFV: (even, even) positions.
-    let mut coeff = [0.0f32; 4 * 4];
+    let mut coeff = [f16::ZERO; 4 * 4];
     for iy in 0..4 {
         for ix in 0..4 {
             coeff[iy * 4 + ix] = if ix == 0 && iy == 0 {
@@ -330,8 +336,8 @@ fn afv_transform_to_pixels<D: SimdDescriptor>(
             };
         }
     }
-    let mut block = [0.0f32; 4 * 8];
-    avfidct4x4(&coeff, &mut block);
+    let mut block = [f16::ZERO; 4 * 8];
+    avfidct4x4(d, &coeff, &mut block);
     for iy in 0..4 {
         let block_y = if afv_y == 1 { 3 - iy } else { iy };
         for ix in 0..4 {
@@ -377,8 +383,8 @@ fn afv_transform_to_pixels<D: SimdDescriptor>(
 pub fn transform_to_pixels_impl<D: SimdDescriptor>(
     d: D,
     transform_type: HfTransformType,
-    lf: &mut [f32],
-    transform_buffer: &mut [f32],
+    lf: &mut [f16],
+    transform_buffer: &mut [f16],
 ) {
     match transform_type {
         HfTransformType::DCT => d.call(
@@ -507,159 +513,212 @@ pub fn transform_to_pixels_impl<D: SimdDescriptor>(
                 idct2d_128_256(d, &mut transform_buffer[0..32768]);
             },
         ),
-        HfTransformType::AFV0 => {
-            transform_buffer[0] = lf[0];
-            let block: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            afv_transform_to_pixels::<D>(d, 0, &block, &mut transform_buffer[0..64]);
-        }
-        HfTransformType::AFV1 => {
-            transform_buffer[0] = lf[0];
-            let block: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            afv_transform_to_pixels::<D>(d, 1, &block, &mut transform_buffer[0..64]);
-        }
-        HfTransformType::AFV2 => {
-            transform_buffer[0] = lf[0];
-            let block: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            afv_transform_to_pixels::<D>(d, 2, &block, &mut transform_buffer[0..64]);
-        }
-        HfTransformType::AFV3 => {
-            transform_buffer[0] = lf[0];
-            let block: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            afv_transform_to_pixels::<D>(d, 3, &block, &mut transform_buffer[0..64]);
-        }
-        HfTransformType::IDENTITY => {
-            transform_buffer[0] = lf[0];
-            let coefficients: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            let block00 = coefficients[0];
-            let block01 = coefficients[1];
-            let block10 = coefficients[8];
-            let block11 = coefficients[9];
-            let dcs: [f32; 4] = [
-                block00 + block01 + block10 + block11,
-                block00 + block01 - block10 - block11,
-                block00 - block01 + block10 - block11,
-                block00 - block01 - block10 + block11,
-            ];
-            for y in 0..2 {
+        HfTransformType::AFV0 => d.call(
+            #[inline(always)]
+            |_| {
+                transform_buffer[0] = lf[0];
+                let block: [f16; 64] = transform_buffer[0..64].try_into().unwrap();
+                afv_transform_to_pixels::<D>(d, 0, &block, &mut transform_buffer[0..64]);
+            },
+        ),
+        HfTransformType::AFV1 => d.call(
+            #[inline(always)]
+            |_| {
+                transform_buffer[0] = lf[0];
+                let block: [f16; 64] = transform_buffer[0..64].try_into().unwrap();
+                afv_transform_to_pixels::<D>(d, 1, &block, &mut transform_buffer[0..64]);
+            },
+        ),
+        HfTransformType::AFV2 => d.call(
+            #[inline(always)]
+            |_| {
+                transform_buffer[0] = lf[0];
+                let block: [f16; 64] = transform_buffer[0..64].try_into().unwrap();
+                afv_transform_to_pixels::<D>(d, 2, &block, &mut transform_buffer[0..64]);
+            },
+        ),
+        HfTransformType::AFV3 => d.call(
+            #[inline(always)]
+            |_| {
+                transform_buffer[0] = lf[0];
+                let block: [f16; 64] = transform_buffer[0..64].try_into().unwrap();
+                afv_transform_to_pixels::<D>(d, 3, &block, &mut transform_buffer[0..64]);
+            },
+        ),
+        HfTransformType::IDENTITY => d.call(
+            #[inline(always)]
+            |_| {
+                const { assert!(64usize.is_multiple_of(D::F32Vec::LEN)) };
+                transform_buffer[0] = lf[0];
+                let mut coefficients = [0.0f32; 64];
+                {
+                    let tb_bits = f16::slice_to_bits(&transform_buffer[0..64]);
+                    for k in (0..64).step_by(D::F32Vec::LEN) {
+                        D::F32Vec::load_f16_bits(d, &tb_bits[k..]).store(&mut coefficients[k..]);
+                    }
+                }
+                let block00 = coefficients[0];
+                let block01 = coefficients[1];
+                let block10 = coefficients[8];
+                let block11 = coefficients[9];
+                let dcs: [f32; 4] = [
+                    block00 + block01 + block10 + block11,
+                    block00 + block01 - block10 - block11,
+                    block00 - block01 + block10 - block11,
+                    block00 - block01 - block10 + block11,
+                ];
+                let mut out = [0.0f32; 64];
+                for y in 0..2 {
+                    for x in 0..2 {
+                        let block_dc = dcs[y * 2 + x];
+                        let mut residual_sum = 0.0;
+                        for iy in 0..4 {
+                            for ix in 0..4 {
+                                if ix == 0 && iy == 0 {
+                                    continue;
+                                }
+                                residual_sum += coefficients[(y + iy * 2) * 8 + x + ix * 2];
+                            }
+                        }
+                        let center = block_dc - residual_sum * (1.0 / 16.0);
+                        out[(4 * y + 1) * 8 + 4 * x + 1] = center;
+                        for iy in 0..4 {
+                            for ix in 0..4 {
+                                if ix == 1 && iy == 1 {
+                                    continue;
+                                }
+                                out[(y * 4 + iy) * 8 + x * 4 + ix] =
+                                    coefficients[(y + iy * 2) * 8 + x + ix * 2] + center;
+                            }
+                        }
+                        out[y * 4 * 8 + x * 4] = coefficients[(y + 2) * 8 + x + 2] + center;
+                    }
+                }
+                let tb_bits = f16::slice_to_bits_mut(&mut transform_buffer[0..64]);
+                for k in (0..64).step_by(D::F32Vec::LEN) {
+                    D::F32Vec::load(d, &out[k..]).store_f16_bits(&mut tb_bits[k..]);
+                }
+            },
+        ),
+        HfTransformType::DCT2X2 => d.call(
+            #[inline(always)]
+            |_| {
+                const { assert!(64usize.is_multiple_of(D::F32Vec::LEN)) };
+                transform_buffer[0] = lf[0];
+                let mut buf0 = [0.0f32; 64];
+                {
+                    let tb_bits = f16::slice_to_bits(&transform_buffer[0..64]);
+                    for k in (0..64).step_by(D::F32Vec::LEN) {
+                        D::F32Vec::load_f16_bits(d, &tb_bits[k..]).store(&mut buf0[k..]);
+                    }
+                }
+                let mut buf1 = buf0;
+                idct2_top_block(2, &buf0, &mut buf1);
+                idct2_top_block(4, &buf1, &mut buf0);
+                idct2_top_block(8, &buf0, &mut buf1);
+                let tb_bits = f16::slice_to_bits_mut(&mut transform_buffer[0..64]);
+                for k in (0..64).step_by(D::F32Vec::LEN) {
+                    D::F32Vec::load(d, &buf1[k..]).store_f16_bits(&mut tb_bits[k..]);
+                }
+            },
+        ),
+        HfTransformType::DCT4X4 => d.call(
+            #[inline(always)]
+            |_| {
+                transform_buffer[0] = lf[0];
+                let coefficients: [f16; 64] = transform_buffer[0..64].try_into().unwrap();
+                let mut dcs = [
+                    coefficients[0],
+                    coefficients[1],
+                    coefficients[8],
+                    coefficients[9],
+                ];
+                idct2d_2_2(d, &mut dcs);
+                for y in 0..2 {
+                    for x in 0..2 {
+                        let mut block = [f16::ZERO; 4 * 4];
+                        block[0] = dcs[y * 2 + x];
+                        for iy in 0..4 {
+                            for ix in 0..4 {
+                                if ix == 0 && iy == 0 {
+                                    continue;
+                                }
+                                block[iy * 4 + ix] = coefficients[(y + iy * 2) * 8 + x + ix * 2];
+                            }
+                        }
+                        idct2d_4_4(d, &mut block);
+                        for iy in 0..4 {
+                            for ix in 0..4 {
+                                transform_buffer[(y * 4 + iy) * 8 + x * 4 + ix] =
+                                    block[iy * 4 + ix];
+                            }
+                        }
+                    }
+                }
+            },
+        ),
+        HfTransformType::DCT8X4 => d.call(
+            #[inline(always)]
+            |_| {
+                transform_buffer[0] = lf[0];
+                let coefficients: [f16; 64] = transform_buffer[0..64].try_into().unwrap();
+                let block0 = coefficients[0].to_f32();
+                let block1 = coefficients[8].to_f32();
+                let dcs: [f16; 2] = [
+                    f16::from_f32(block0 + block1),
+                    f16::from_f32(block0 - block1),
+                ];
                 for x in 0..2 {
-                    let block_dc = dcs[y * 2 + x];
-                    let mut residual_sum = 0.0;
+                    let mut block = [f16::ZERO; 8 * 4];
                     for iy in 0..4 {
-                        for ix in 0..4 {
-                            if ix == 0 && iy == 0 {
-                                continue;
+                        for ix in 0..8 {
+                            block[iy * 8 + ix] = if ix == 0 && iy == 0 {
+                                dcs[x]
+                            } else {
+                                coefficients[(x + iy * 2) * 8 + ix]
                             }
-                            residual_sum += coefficients[(y + iy * 2) * 8 + x + ix * 2];
                         }
                     }
-                    transform_buffer[(4 * y + 1) * 8 + 4 * x + 1] =
-                        block_dc - residual_sum * (1.0 / 16.0);
-                    for iy in 0..4 {
+                    idct2d_8_4(d, &mut block);
+                    for iy in 0..8 {
                         for ix in 0..4 {
-                            if ix == 1 && iy == 1 {
-                                continue;
+                            transform_buffer[iy * 8 + x * 4 + ix] = block[iy * 4 + ix];
+                        }
+                    }
+                }
+            },
+        ),
+        HfTransformType::DCT4X8 => d.call(
+            #[inline(always)]
+            |_| {
+                transform_buffer[0] = lf[0];
+                let coefficients: [f16; 64] = transform_buffer[0..64].try_into().unwrap();
+                let block0 = coefficients[0].to_f32();
+                let block1 = coefficients[8].to_f32();
+                let dcs: [f16; 2] = [
+                    f16::from_f32(block0 + block1),
+                    f16::from_f32(block0 - block1),
+                ];
+                for y in 0..2 {
+                    let mut block = [f16::ZERO; 4 * 8];
+                    for iy in 0..4 {
+                        for ix in 0..8 {
+                            block[iy * 8 + ix] = if ix == 0 && iy == 0 {
+                                dcs[y]
+                            } else {
+                                coefficients[(y + iy * 2) * 8 + ix]
                             }
-                            transform_buffer[(y * 4 + iy) * 8 + x * 4 + ix] = coefficients
-                                [(y + iy * 2) * 8 + x + ix * 2]
-                                + transform_buffer[(4 * y + 1) * 8 + 4 * x + 1];
                         }
                     }
-                    transform_buffer[y * 4 * 8 + x * 4] = coefficients[(y + 2) * 8 + x + 2]
-                        + transform_buffer[(4 * y + 1) * 8 + 4 * x + 1];
-                }
-            }
-        }
-        HfTransformType::DCT2X2 => {
-            transform_buffer[0] = lf[0];
-            let mut tmp: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            idct2_top_block(2, &tmp, &mut transform_buffer[0..64]);
-            idct2_top_block(4, &transform_buffer[0..64], &mut tmp);
-            idct2_top_block(8, &tmp, &mut transform_buffer[0..64]);
-        }
-        HfTransformType::DCT4X4 => {
-            transform_buffer[0] = lf[0];
-            let coefficients: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            let block00 = coefficients[0];
-            let block01 = coefficients[1];
-            let block10 = coefficients[8];
-            let block11 = coefficients[9];
-            let dcs: [f32; 4] = [
-                block00 + block01 + block10 + block11,
-                block00 + block01 - block10 - block11,
-                block00 - block01 + block10 - block11,
-                block00 - block01 - block10 + block11,
-            ];
-            for y in 0..2 {
-                for x in 0..2 {
-                    let mut block = [0.0; 4 * 4];
-                    block[0] = dcs[y * 2 + x];
+                    idct2d_4_8(d, &mut block);
                     for iy in 0..4 {
-                        for ix in 0..4 {
-                            if ix == 0 && iy == 0 {
-                                continue;
-                            }
-                            block[iy * 4 + ix] = coefficients[(y + iy * 2) * 8 + x + ix * 2];
-                        }
-                    }
-                    idct2d_4_4(d, &mut block);
-                    for iy in 0..4 {
-                        for ix in 0..4 {
-                            transform_buffer[(y * 4 + iy) * 8 + x * 4 + ix] = block[iy * 4 + ix];
+                        for ix in 0..8 {
+                            transform_buffer[(y * 4 + iy) * 8 + ix] = block[iy * 8 + ix];
                         }
                     }
                 }
-            }
-        }
-        HfTransformType::DCT8X4 => {
-            transform_buffer[0] = lf[0];
-            let coefficients: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            let block0 = coefficients[0];
-            let block1 = coefficients[8];
-            let dcs: [f32; 2] = [block0 + block1, block0 - block1];
-            for x in 0..2 {
-                let mut block = [0.0; 8 * 4];
-                for iy in 0..4 {
-                    for ix in 0..8 {
-                        block[iy * 8 + ix] = if ix == 0 && iy == 0 {
-                            dcs[x]
-                        } else {
-                            coefficients[(x + iy * 2) * 8 + ix]
-                        }
-                    }
-                }
-                idct2d_8_4(d, &mut block);
-                for iy in 0..8 {
-                    for ix in 0..4 {
-                        transform_buffer[iy * 8 + x * 4 + ix] = block[iy * 4 + ix];
-                    }
-                }
-            }
-        }
-        HfTransformType::DCT4X8 => {
-            transform_buffer[0] = lf[0];
-            let coefficients: [f32; 64] = transform_buffer[0..64].try_into().unwrap();
-            let block0 = coefficients[0];
-            let block1 = coefficients[8];
-            let dcs: [f32; 2] = [block0 + block1, block0 - block1];
-            for y in 0..2 {
-                let mut block = [0.0; 4 * 8];
-                for iy in 0..4 {
-                    for ix in 0..8 {
-                        block[iy * 8 + ix] = if ix == 0 && iy == 0 {
-                            dcs[y]
-                        } else {
-                            coefficients[(y + iy * 2) * 8 + ix]
-                        }
-                    }
-                }
-                idct2d_4_8(d, &mut block);
-                for iy in 0..4 {
-                    for ix in 0..8 {
-                        transform_buffer[(y * 4 + iy) * 8 + ix] = block[iy * 8 + ix];
-                    }
-                }
-            }
-        }
+            },
+        ),
     };
 }
 
@@ -669,8 +728,8 @@ simd_function!(
     /// This includes a call to what libjxl calls lowest_frequencies_from_lf.
     pub fn transform_to_pixels_trampoline(
         transform_type: HfTransformType,
-        lf: &mut [f32],
-        transform_buffer: &mut [f32],
+        lf: &mut [f16],
+        transform_buffer: &mut [f16],
     ) {
         transform_to_pixels_impl(d, transform_type, lf, transform_buffer);
     }

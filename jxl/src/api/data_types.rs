@@ -124,6 +124,12 @@ impl JxlDataFormat {
         }
     }
 
+    pub fn f16() -> Self {
+        Self::F16 {
+            endianness: Endianness::native(),
+        }
+    }
+
     pub fn f32() -> Self {
         Self::F32 {
             endianness: Endianness::native(),

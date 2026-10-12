@@ -3,8 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
-use jxl_transforms::transform::*;
+use jxl_simd::{F16SimdMask, F16SimdVec, SimdDescriptor, simd_function};
 use jxl_transforms::transform_map::*;
 use num_traits::Float;
 
@@ -21,7 +20,8 @@ use crate::image::{Image, ImageRect, Rect};
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::util::tracing_wrappers::*;
 use crate::util::{
-    CacheLine, CeilLog2, ShiftRightCeil, SmallVec, num_cache_lines_for, slice_from_cachelines_mut,
+    CacheLine, CeilLog2, ShiftRightCeil, SmallVec, f16, num_cache_lines_for,
+    slice_from_cachelines_mut,
 };
 use crate::{BLOCK_DIM, BLOCK_SIZE, GROUP_DIM};
 
@@ -29,8 +29,8 @@ const LF_BUFFER_SIZE: usize = 32 * 32;
 
 /// Reusable buffers for VarDCT group decoding to avoid repeated allocations.
 pub struct VarDctBuffers {
-    pub scratch: Vec<f32>,
-    pub transform_buffer: [Vec<f32>; 3],
+    pub scratch: Vec<f16>,
+    pub transform_buffer: [Vec<f16>; 3],
     /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
     pub coeffs_storage: Vec<CacheLine>,
     pub num_nzeros_storage: Vec<[u8; 32]>,
@@ -59,10 +59,10 @@ impl VarDctBuffers {
             return Ok(());
         }
         self.scratch.try_reserve_exact(LF_BUFFER_SIZE)?;
-        self.scratch.resize(LF_BUFFER_SIZE, 0.0);
+        self.scratch.resize(LF_BUFFER_SIZE, f16::ZERO);
         for b in self.transform_buffer.iter_mut() {
             b.try_reserve_exact(64 * 64)?;
-            b.resize(64 * 64, 0.0);
+            b.resize(64 * 64, f16::ZERO);
         }
         let num_cache_lines = num_cache_lines_for::<i32>(3 * 64 * 64);
         self.coeffs_storage.try_reserve_exact(num_cache_lines)?;
@@ -101,25 +101,24 @@ fn predict_num_nonzeros(nzeros_row: &[u8; 32], bx: usize, by: usize) -> usize {
 fn adjust_quant_bias<D: SimdDescriptor>(
     d: D,
     c: usize,
-    quant_i: D::I32Vec,
+    quant: D::F16Vec,
     biases: &[f32; 4],
-) -> D::F32Vec {
-    let quant = quant_i.as_f32();
-    let adjusted = quant - D::F32Vec::splat(d, biases[3]) / quant;
-    D::I32Vec::splat(d, 2)
-        .gt(quant_i.abs())
-        .if_then_else_f32(quant_i.as_f32() * D::F32Vec::splat(d, biases[c]), adjusted)
+) -> D::F16Vec {
+    let adjusted = quant - D::F16Vec::splat(d, biases[3]) / quant;
+    D::F16Vec::splat(d, 2.0)
+        .gt(quant.abs())
+        .if_then_else_f16(quant * D::F16Vec::splat(d, biases[c]), adjusted)
 }
 
 pub trait CoeffStorage: Sized {
-    fn load_simd<D: SimdDescriptor>(slice: &[Self], d: D, offset: usize) -> D::I32Vec;
+    fn load_simd<D: SimdDescriptor>(slice: &[Self], d: D, offset: usize) -> D::F16Vec;
     fn add_coeff(&mut self, val: i32);
 }
 
 impl CoeffStorage for i32 {
     #[inline(always)]
-    fn load_simd<D: SimdDescriptor>(slice: &[i32], d: D, offset: usize) -> D::I32Vec {
-        D::I32Vec::load(d, &slice[offset..])
+    fn load_simd<D: SimdDescriptor>(slice: &[i32], d: D, offset: usize) -> D::F16Vec {
+        D::F16Vec::load_i32(d, &slice[offset..])
     }
     #[inline(always)]
     fn add_coeff(&mut self, val: i32) {
@@ -129,8 +128,8 @@ impl CoeffStorage for i32 {
 
 impl CoeffStorage for i16 {
     #[inline(always)]
-    fn load_simd<D: SimdDescriptor>(slice: &[i16], d: D, offset: usize) -> D::I32Vec {
-        D::I32Vec::load_from_i16(d, &slice[offset..])
+    fn load_simd<D: SimdDescriptor>(slice: &[i16], d: D, offset: usize) -> D::F16Vec {
+        D::F16Vec::load_i16(d, &slice[offset..])
     }
     #[inline(always)]
     fn add_coeff(&mut self, val: i32) {
@@ -312,20 +311,20 @@ fn dequant_lane<D: SimdDescriptor, S: CoeffStorage>(
     scaled_dequant_x: f32,
     scaled_dequant_y: f32,
     scaled_dequant_b: f32,
-    dequant_matrices: &[f32],
+    dequant_matrices: &[f16],
     size: usize,
     k: usize,
     x_cc_mul: f32,
     b_cc_mul: f32,
     biases: &[f32; 4],
     qblock: &[&[S]; 3],
-    block: &mut [Vec<f32>; 3],
+    block: &mut [Vec<f16>; 3],
 ) {
-    let x_mul = D::F32Vec::load(d, &dequant_matrices[k..]) * D::F32Vec::splat(d, scaled_dequant_x);
+    let x_mul = D::F16Vec::load(d, &dequant_matrices[k..]) * D::F16Vec::splat(d, scaled_dequant_x);
     let y_mul =
-        D::F32Vec::load(d, &dequant_matrices[size + k..]) * D::F32Vec::splat(d, scaled_dequant_y);
-    let b_mul = D::F32Vec::load(d, &dequant_matrices[2 * size + k..])
-        * D::F32Vec::splat(d, scaled_dequant_b);
+        D::F16Vec::load(d, &dequant_matrices[size + k..]) * D::F16Vec::splat(d, scaled_dequant_y);
+    let b_mul = D::F16Vec::load(d, &dequant_matrices[2 * size + k..])
+        * D::F16Vec::splat(d, scaled_dequant_b);
 
     let quantized_x = S::load_simd(qblock[0], d, k);
     let quantized_y = S::load_simd(qblock[1], d, k);
@@ -335,8 +334,8 @@ fn dequant_lane<D: SimdDescriptor, S: CoeffStorage>(
     let dequant_y = adjust_quant_bias(d, 1, quantized_y, biases) * y_mul;
     let dequant_b_cc = adjust_quant_bias(d, 2, quantized_b, biases) * b_mul;
 
-    let dequant_x = D::F32Vec::splat(d, x_cc_mul).mul_add(dequant_y, dequant_x_cc);
-    let dequant_b = D::F32Vec::splat(d, b_cc_mul).mul_add(dequant_y, dequant_b_cc);
+    let dequant_x = D::F16Vec::splat(d, x_cc_mul).mul_add(dequant_y, dequant_x_cc);
+    let dequant_b = D::F16Vec::splat(d, b_cc_mul).mul_add(dequant_y, dequant_b_cc);
     dequant_x.store(&mut block[0][k..]);
     dequant_y.store(&mut block[1][k..]);
     dequant_b.store(&mut block[2][k..]);
@@ -359,7 +358,7 @@ fn dequant_block<D: SimdDescriptor>(
     biases: &[f32; 4],
     coeffs: &CoeffsMut,
     offset: usize,
-    block: &mut [Vec<f32>; 3],
+    block: &mut [Vec<f16>; 3],
 ) {
     let scaled_dequant_y = inv_global_scale / (quant as f32);
 
@@ -368,11 +367,11 @@ fn dequant_block<D: SimdDescriptor>(
 
     let matrices = dequant_matrices.matrix(hf_type, 0);
 
-    assert!(BLOCK_SIZE.is_multiple_of(D::F32Vec::LEN));
+    assert!(BLOCK_SIZE.is_multiple_of(D::F16Vec::LEN));
     match coeffs {
         CoeffsMut::I32(qb) => {
             let qb_slices = [&qb[0][offset..], &qb[1][offset..], &qb[2][offset..]];
-            for k in (0..covered_blocks * BLOCK_SIZE).step_by(D::F32Vec::LEN) {
+            for k in (0..covered_blocks * BLOCK_SIZE).step_by(D::F16Vec::LEN) {
                 dequant_lane(
                     d,
                     scaled_dequant_x,
@@ -391,7 +390,7 @@ fn dequant_block<D: SimdDescriptor>(
         }
         CoeffsMut::I16(qb) => {
             let qb_slices = [&qb[0][offset..], &qb[1][offset..], &qb[2][offset..]];
-            for k in (0..covered_blocks * BLOCK_SIZE).step_by(D::F32Vec::LEN) {
+            for k in (0..covered_blocks * BLOCK_SIZE).step_by(D::F16Vec::LEN) {
                 dequant_lane(
                     d,
                     scaled_dequant_x,
@@ -412,7 +411,7 @@ fn dequant_block<D: SimdDescriptor>(
 }
 
 #[inline(always)]
-fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<f32>, ys: usize) {
+fn copy_lf_rows<const XS: usize>(lf: &mut [f16], rect: &ImageRect<f16>, ys: usize) {
     for (y, dst) in lf.chunks_exact_mut(XS).take(ys).enumerate() {
         dst.copy_from_slice(&rect.row(y)[..XS]);
     }
@@ -420,12 +419,12 @@ fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<f32>, ys: usiz
 
 #[inline(always)]
 fn copy_block_rows<const W: usize>(
-    src: &[f32],
-    output_rect: &mut crate::image::ImageRectMut<f32>,
+    src: &[f16],
+    output_rect: &mut crate::image::ImageRectMut<f16>,
     h: usize,
 ) {
-    for (i, chunk) in src.chunks_exact(W).take(h).enumerate() {
-        output_rect.row(i)[..W].copy_from_slice(chunk);
+    for (i, row_chunk) in src.chunks_exact(W).take(h).enumerate() {
+        output_rect.row(i)[..W].copy_from_slice(row_chunk);
     }
 }
 
@@ -436,10 +435,10 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     quant_biases: &[f32; 4],
     x_dm_multiplier: f32,
     b_dm_multiplier: f32,
-    pixels: &mut [Image<f32>; 3],
-    scratch: &mut [f32],
+    pixels: &mut [Image<f16>; 3],
+    scratch: &mut [f16],
     inv_global_scale: f32,
-    transform_buffer: &mut [Vec<f32>; 3],
+    transform_buffer: &mut [Vec<f16>; 3],
     hshift: [usize; 3],
     vshift: [usize; 3],
     by: usize,
@@ -449,7 +448,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     x_cc_mul: f32,
     b_cc_mul: f32,
     raw_quant: u32,
-    lf_rects: &[ImageRect<f32>; 3],
+    lf_rects: &[ImageRect<f16>; 3],
     transform_type: HfTransformType,
     block_rect: Rect,
     num_blocks: usize,
@@ -460,7 +459,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
 ) -> Result<(), Error> {
     for b in transform_buffer.iter_mut() {
         if b.len() < num_coeffs {
-            b.resize(num_coeffs, 0.0);
+            b.resize(num_coeffs, f16::ZERO);
         }
     }
     dequant_block::<D>(
@@ -498,7 +497,12 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             (32, _) => copy_lf_rows::<32>(lf, rect, ys),
             _ => unreachable!(),
         }
-        transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
+        jxl_transforms::transform::transform_to_pixels_trampoline(
+            d,
+            transform_type,
+            lf,
+            &mut transform_buffer[c],
+        );
         let downsampled_rect = Rect {
             origin: (
                 block_rect.origin.0 >> hshift[c],
@@ -530,10 +534,10 @@ simd_function!(
         quant_biases: &[f32; 4],
         x_dm_multiplier: f32,
         b_dm_multiplier: f32,
-        pixels: &mut [Image<f32>; 3],
-        scratch: &mut [f32],
+        pixels: &mut [Image<f16>; 3],
+        scratch: &mut [f16],
         inv_global_scale: f32,
-        transform_buffer: &mut [Vec<f32>; 3],
+        transform_buffer: &mut [Vec<f16>; 3],
         hshift: [usize; 3],
         vshift: [usize; 3],
         by: usize,
@@ -543,7 +547,7 @@ simd_function!(
         x_cc_mul: f32,
         b_cc_mul: f32,
         raw_quant: u32,
-        lf_rects: &[ImageRect<f32>; 3],
+        lf_rects: &[ImageRect<f16>; 3],
         transform_type: HfTransformType,
         block_rect: Rect,
         num_blocks: usize,
@@ -644,9 +648,9 @@ pub fn decode_vardct_group(
     lf_global: &LfGlobalState,
     hf_global: &HfGlobalState,
     hf_meta: &HfMetadata,
-    lf_image: &[Image<f32>; 3],
+    lf_image: &[Image<crate::util::f16>; 3],
     quant_biases: &[f32; 4],
-    pixels: &mut Option<[Image<f32>; 3]>,
+    pixels: &mut Option<[Image<crate::util::f16>; 3]>,
     buffers: &mut VarDctBuffers,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
@@ -949,11 +953,19 @@ mod test {
         let q_i16 = [&coeffs_i16_0[..], &coeffs_i16_1[..], &coeffs_i16_2[..]];
 
         let d = jxl_simd::ScalarDescriptor::new().unwrap();
-        let dequant_matrices = vec![1.0f32; 3 * 64];
+        let dequant_matrices = vec![f16::from_f32(1.0); 3 * 64];
         let biases = [0.5, 0.5, 0.5, 0.5];
 
-        let mut block_i32 = [vec![0.0f32; 64], vec![0.0f32; 64], vec![0.0f32; 64]];
-        let mut block_i16 = [vec![0.0f32; 64], vec![0.0f32; 64], vec![0.0f32; 64]];
+        let mut block_i32 = [
+            vec![f16::ZERO; 64],
+            vec![f16::ZERO; 64],
+            vec![f16::ZERO; 64],
+        ];
+        let mut block_i16 = [
+            vec![f16::ZERO; 64],
+            vec![f16::ZERO; 64],
+            vec![f16::ZERO; 64],
+        ];
 
         for k in 0..64 {
             dequant_lane(

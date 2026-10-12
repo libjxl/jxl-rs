@@ -207,7 +207,7 @@ fn test_premultiply_output_straight_alpha() {
                 let pa = premul_row[x * 4 + 3];
 
                 assert!(
-                    (sa - pa).abs() < 1e-5,
+                    (sa - pa).abs() < 5e-4,
                     "Alpha mismatch at ({},{}): straight={}, premul={} (use_simple={})",
                     x,
                     y,

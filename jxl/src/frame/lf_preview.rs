@@ -15,7 +15,7 @@ use crate::headers::frame_header::FrameType;
 use crate::image::{DataTypeTag, Rect};
 use crate::render::buffer_splitter::{BufferSplitter, OutputChannelRef, SaveStageBufferInfo};
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
-use crate::render::save::SaveStage;
+use crate::render::save::{SaveChannelType, SaveStage};
 use crate::render::stages::{OutputColorInfo, Upsample8x, XybColorConvertStage};
 use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::util::mirror;
@@ -34,7 +34,7 @@ impl Frame {
         output_color_info: &OutputColorInfo,
         output_tf: &TransferFunction,
     ) -> Result<()> {
-        let save_stage = SaveStage::new(
+        let mut save_stage = SaveStage::new(
             &[0, 1, 2],
             orientation,
             0,
@@ -42,6 +42,9 @@ impl Frame {
             data_format,
             color_type.has_alpha(),
         );
+        for c in 0..3 {
+            save_stage.set_channel_type(c, SaveChannelType::F16);
+        }
         let len = rect.size.0;
         let ulen = len * 8;
         let mut scratch = [
@@ -58,16 +61,16 @@ impl Frame {
         let xyb_stage = XybColorConvertStage::new(0, stage_color_info);
 
         let mut lf_rows = [
-            RowBuffer::new(DataTypeTag::F32, 2, 0, 0, len)?,
-            RowBuffer::new(DataTypeTag::F32, 2, 0, 0, len)?,
-            RowBuffer::new(DataTypeTag::F32, 2, 0, 0, len)?,
+            RowBuffer::new(DataTypeTag::F16, 2, 0, 0, len)?,
+            RowBuffer::new(DataTypeTag::F16, 2, 0, 0, len)?,
+            RowBuffer::new(DataTypeTag::F16, 2, 0, 0, len)?,
         ];
 
         // Converted to RGB in place.
         let mut upsampled_rows = [
-            RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
+            RowBuffer::new(DataTypeTag::F16, 0, 3, 3, ulen)?,
+            RowBuffer::new(DataTypeTag::F16, 0, 3, 3, ulen)?,
+            RowBuffer::new(DataTypeTag::F16, 0, 3, 3, ulen)?,
         ];
 
         // At this point, we already verified that lf_frame or lf_frame_data are present.
@@ -93,10 +96,10 @@ impl Frame {
             // Fill in input.
             for c in 0..3 {
                 let bufy = (yy + LF_ROW_OFFSET as isize) as usize;
-                let row = lf_rows[c].get_row_mut::<f32>(bufy);
+                let row = lf_rows[c].get_row_mut::<crate::util::f16>(bufy);
                 let srow = src[c].row(sy);
-                let off = RowBuffer::x0_offset::<f32>();
-                row[off..off + len].copy_from_slice(&srow[x0..x1]);
+                let off = RowBuffer::x0_offset::<crate::util::f16>();
+                row[off..off + len].copy_from_slice(&srow[x0..x0 + len]);
                 row[off - 1] = srow[mirror(x0 as isize - 1, lf_size.0)];
                 row[off - 2] = srow[mirror(x0 as isize - 2, lf_size.0)];
                 row[off + len] = srow[mirror(x1 as isize, lf_size.0)];
@@ -111,7 +114,7 @@ impl Frame {
 
             // Upsample.
             for c in 0..3 {
-                let x0_off = RowBuffer::x0_offset::<f32>();
+                let x0_off = RowBuffer::x0_offset::<crate::util::f16>();
                 let lf_row_ref = &lf_rows[c];
                 let input_channels = Channels::from_row_buffers(
                     std::slice::from_ref(&lf_row_ref),
@@ -141,7 +144,7 @@ impl Frame {
             for uy in y * 8..y * 8 + 8 {
                 // XYB
                 let [x, y, b] = &mut upsampled_rows;
-                let off = RowBuffer::x0_offset::<f32>();
+                let off = RowBuffer::x0_offset::<crate::util::f16>();
                 let mut rows = [
                     &mut x.get_row_mut(uy)[off..],
                     &mut y.get_row_mut(uy)[off..],

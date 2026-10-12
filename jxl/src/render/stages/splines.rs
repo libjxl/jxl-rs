@@ -24,7 +24,7 @@ impl std::fmt::Display for SplinesStage {
 }
 
 impl RenderPipelineInPlaceStage for SplinesStage {
-    type Type = f32;
+    type Type = crate::util::f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3
@@ -34,7 +34,7 @@ impl RenderPipelineInPlaceStage for SplinesStage {
         &self,
         position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [crate::util::f16]],
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {

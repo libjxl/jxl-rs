@@ -7,9 +7,12 @@
 
 use std::f32::consts::{PI, SQRT_2};
 
-use jxl_simd::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask, shl, shr};
+use jxl_simd::{
+    F16SimdMask, F16SimdVec, F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask,
+    shl, shr,
+};
 
-use super::{eval_rational_poly, eval_rational_poly_simd};
+use super::{eval_rational_poly, eval_rational_poly_f16_simd, eval_rational_poly_simd};
 
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
 const POW2F_DENOM_COEFFS: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
@@ -61,6 +64,7 @@ pub fn fast_erff(x: f32) -> f32 {
     result.copysign(x)
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 pub fn fast_erff_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     let absx = x.abs();
@@ -74,6 +78,22 @@ pub fn fast_erff_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     let denom5 = denom4 * denom4;
     let inv_denom5 = D::F32Vec::splat(d, 1.0) / denom5;
     let result = D::F32Vec::splat(d, 1.0) - inv_denom5 * inv_denom5;
+    result.copysign(x)
+}
+
+#[inline(always)]
+pub fn fast_erff_f16_simd<D: SimdDescriptor>(d: D, x: D::F16Vec) -> D::F16Vec {
+    let absx = x.abs();
+    let denom1 = absx.mul_add(
+        D::F16Vec::splat_f32(d, 7.77394369e-02),
+        D::F16Vec::splat_f32(d, 2.05260015e-04),
+    );
+    let denom2 = denom1.mul_add(absx, D::F16Vec::splat_f32(d, 2.32120216e-01));
+    let denom3 = denom2.mul_add(absx, D::F16Vec::splat_f32(d, 2.77820801e-01));
+    let denom4 = denom3.mul_add(absx, D::F16Vec::splat_f32(d, 1.0));
+    let denom5 = denom4 * denom4;
+    let inv_denom5 = D::F16Vec::splat_f32(d, 1.0) / denom5;
+    let result = D::F16Vec::splat_f32(d, 1.0) - inv_denom5 * inv_denom5;
     result.copysign(x)
 }
 
@@ -114,6 +134,24 @@ pub fn fast_pow2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     num / den
 }
 
+#[inline(always)]
+pub fn fast_pow2f_simd_f16<D: SimdDescriptor>(d: D, x: D::F16Vec) -> D::F16Vec {
+    let x_floor = x.floor();
+    let exp = x_floor.exp2_int();
+    let frac = x - x_floor;
+
+    let num = frac + D::F16Vec::splat(d, POW2F_NUMER_COEFFS[0]);
+    let num = num.mul_add(frac, D::F16Vec::splat(d, POW2F_NUMER_COEFFS[1]));
+    let num = num.mul_add(frac, D::F16Vec::splat(d, POW2F_NUMER_COEFFS[2]));
+
+    let den = D::F16Vec::splat(d, POW2F_DENOM_COEFFS[0])
+        .mul_add(frac, D::F16Vec::splat(d, POW2F_DENOM_COEFFS[1]));
+    let den = den.mul_add(frac, D::F16Vec::splat(d, POW2F_DENOM_COEFFS[2]));
+    let den = den.mul_add(frac, D::F16Vec::splat(d, POW2F_DENOM_COEFFS[3]));
+
+    (num / den) * exp
+}
+
 const LOG2F_P: [f32; 3] = [
     -1.8503833400518310e-6,
     1.4287160470083755,
@@ -149,15 +187,30 @@ pub fn fast_log2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     eval_rational_poly_simd(d, x, LOG2F_P, LOG2F_Q) + exp_val
 }
 
+#[inline(always)]
+pub fn fast_log2f_simd_f16<D: SimdDescriptor>(d: D, x: D::F16Vec) -> D::F16Vec {
+    let (mantissa, exp_val) = x.decompose_log2();
+    let x = mantissa - D::F16Vec::splat(d, 1.0);
+    eval_rational_poly_f16_simd(d, x, LOG2F_P, LOG2F_Q) + exp_val
+}
+
 // Max relative error: ~3e-5
 #[inline(always)]
 pub fn fast_powf(base: f32, exp: f32) -> f32 {
     fast_pow2f(fast_log2f(base) * exp)
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 pub fn fast_powf_simd<D: SimdDescriptor>(d: D, base: D::F32Vec, exp: D::F32Vec) -> D::F32Vec {
     fast_pow2f_simd(d, fast_log2f_simd(d, base) * exp)
+}
+
+#[inline(always)]
+pub fn fast_powf_simd_f16<D: SimdDescriptor>(d: D, base: D::F16Vec, exp: D::F16Vec) -> D::F16Vec {
+    let res = fast_pow2f_simd_f16(d, fast_log2f_simd_f16(d, base) * exp);
+    base.gt(D::F16Vec::zero(d))
+        .if_then_else_f16(res, D::F16Vec::zero(d))
 }
 
 #[inline(always)]

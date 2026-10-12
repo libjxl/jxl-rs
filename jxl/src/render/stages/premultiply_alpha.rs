@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F16SimdVec, simd_function};
 
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 
@@ -48,22 +48,31 @@ impl PremultiplyAlphaStage {
 simd_function!(
     premultiply_rows_simd_dispatch,
     d: D,
-    fn premultiply_rows_simd(color_rows: &mut [&mut [f32]], alpha_row: &[f32], xsize: usize) {
+    fn premultiply_rows_simd(
+        color_rows: &mut [&mut [crate::util::f16]],
+        alpha_row: &[crate::util::f16],
+        xsize: usize,
+    ) {
+        let alpha_u16 = crate::util::f16::slice_to_bits(alpha_row);
         for color_row in color_rows.iter_mut() {
-            let iter_color = color_row.chunks_exact_mut(D::F32Vec::LEN);
-            let iter_alpha = alpha_row.chunks_exact(D::F32Vec::LEN);
-            for (color_chunk, alpha_chunk) in iter_color.zip(iter_alpha).take(xsize.div_ceil(D::F32Vec::LEN)) {
-                let color_vec = D::F32Vec::load(d, color_chunk);
-                let alpha_vec = D::F32Vec::load(d, alpha_chunk);
+            let color_u16 = crate::util::f16::slice_to_bits_mut(color_row);
+            let iter_color = color_u16.chunks_exact_mut(D::F16Vec::LEN);
+            let iter_alpha = alpha_u16.chunks_exact(D::F16Vec::LEN);
+            for (color_chunk, alpha_chunk) in iter_color
+                .zip(iter_alpha)
+                .take(xsize.div_ceil(D::F16Vec::LEN))
+            {
+                let color_vec = D::F16Vec::load_f16_bits(d, color_chunk);
+                let alpha_vec = D::F16Vec::load_f16_bits(d, alpha_chunk);
                 let result = color_vec * alpha_vec;
-                result.store(color_chunk);
+                result.store_f16_bits(color_chunk);
             }
         }
     }
 );
 
 impl RenderPipelineInPlaceStage for PremultiplyAlphaStage {
-    type Type = f32;
+    type Type = crate::util::f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         (self.first_color_channel..self.first_color_channel + self.num_color_channels).contains(&c)
@@ -74,7 +83,7 @@ impl RenderPipelineInPlaceStage for PremultiplyAlphaStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [crate::util::f16]],
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -102,6 +111,7 @@ mod test {
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
     use crate::tests::assert_close;
+    use crate::util::f16;
 
     #[test]
     fn consistency() -> Result<()> {
@@ -120,10 +130,18 @@ mod test {
         let mut input_a = Image::new((4, 1))?;
 
         // Test values: full color with varying alpha
-        input_r.row_mut(0).copy_from_slice(&[1.0, 1.0, 0.5, 0.0]);
-        input_g.row_mut(0).copy_from_slice(&[0.5, 0.5, 0.5, 1.0]);
-        input_b.row_mut(0).copy_from_slice(&[0.0, 0.25, 1.0, 0.5]);
-        input_a.row_mut(0).copy_from_slice(&[1.0, 0.5, 0.0, 0.5]);
+        input_r
+            .row_mut(0)
+            .copy_from_slice(&[1.0, 1.0, 0.5, 0.0].map(f16::from_f32));
+        input_g
+            .row_mut(0)
+            .copy_from_slice(&[0.5, 0.5, 0.5, 1.0].map(f16::from_f32));
+        input_b
+            .row_mut(0)
+            .copy_from_slice(&[0.0, 0.25, 1.0, 0.5].map(f16::from_f32));
+        input_a
+            .row_mut(0)
+            .copy_from_slice(&[1.0, 0.5, 0.0, 0.5].map(f16::from_f32));
 
         let stage = PremultiplyAlphaStage::new(0, 3, 3);
         let output = make_and_run_simple_pipeline(
@@ -135,11 +153,47 @@ mod test {
         )?;
 
         // Expected: color * alpha
-        assert_close!(all, output[0].row(0), &[1.0, 0.5, 0.0, 0.0], 1e-6);
-        assert_close!(all, output[1].row(0), &[0.5, 0.25, 0.0, 0.5], 1e-6);
-        assert_close!(all, output[2].row(0), &[0.0, 0.125, 0.0, 0.25], 1e-6);
+        assert_close!(
+            all,
+            &output[0]
+                .row(0)
+                .iter()
+                .map(|x| x.to_f32())
+                .collect::<Vec<_>>(),
+            &[1.0, 0.5, 0.0, 0.0],
+            1e-6
+        );
+        assert_close!(
+            all,
+            &output[1]
+                .row(0)
+                .iter()
+                .map(|x| x.to_f32())
+                .collect::<Vec<_>>(),
+            &[0.5, 0.25, 0.0, 0.5],
+            1e-6
+        );
+        assert_close!(
+            all,
+            &output[2]
+                .row(0)
+                .iter()
+                .map(|x| x.to_f32())
+                .collect::<Vec<_>>(),
+            &[0.0, 0.125, 0.0, 0.25],
+            1e-6
+        );
         // Alpha unchanged
-        assert_close!(all, output[3].row(0), &[1.0, 0.5, 0.0, 0.5], 1e-6);
+        assert_close!(
+            all,
+            &output[3]
+                .row(0)
+                .iter()
+                .map(|x| x.to_f32())
+                .collect::<Vec<_>>(),
+            &[1.0, 0.5, 0.0, 0.5],
+            1e-6
+        );
 
         Ok(())
     }

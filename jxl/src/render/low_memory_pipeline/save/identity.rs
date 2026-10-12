@@ -118,6 +118,107 @@ simd_function!(
 );
 
 #[inline(always)]
+fn f16_to_u8_simd<D: SimdDescriptor>(
+    d: D,
+    input: &[u16],
+    output: &mut [u8],
+    max: f32,
+    position: (usize, usize),
+    channel: usize,
+    xsize: usize,
+) {
+    let (x0, y0) = position;
+    let simd_width = D::F32Vec::LEN;
+    let zero = D::F32Vec::splat(d, 0.0);
+    let scale = D::F32Vec::splat(d, max);
+    let dither_y = (y0 + channel * 13) % 32;
+
+    for (block, (input_chunk, output_chunk)) in input
+        .chunks_exact(simd_width)
+        .zip(output.chunks_exact_mut(simd_width))
+        .take(xsize.div_ceil(simd_width))
+        .enumerate()
+    {
+        let x = block * simd_width;
+        let val = D::F32Vec::load_f16_bits(d, input_chunk);
+        let dither_x = (x0 + x + channel * 23) % 32;
+        let dither = D::F32Vec::load(d, &DITHER_TABLE[dither_y][dither_x..]);
+        let scaled = val * scale;
+        let dithered = scaled + dither;
+        let clamped = dithered.max(zero).min(scale);
+        clamped.round_store_u8(output_chunk);
+    }
+}
+
+simd_function!(
+    f16_to_u8,
+    d: D,
+    pub(super) fn f16_to_u8_impl(
+        input: &[u16],
+        output: &mut [u8],
+        max: f32,
+        position: (usize, usize),
+        channel: usize,
+        xsize: usize,
+    ) {
+        f16_to_u8_simd(d, input, output, max, position, channel, xsize);
+    }
+);
+
+#[inline(always)]
+fn f16_to_u16_simd<D: SimdDescriptor>(
+    d: D,
+    input: &[u16],
+    output: &mut [u16],
+    max: f32,
+    xsize: usize,
+) {
+    let simd_width = D::F32Vec::LEN;
+    let zero = D::F32Vec::splat(d, 0.0);
+    let one = D::F32Vec::splat(d, 1.0);
+    let scale = D::F32Vec::splat(d, max);
+
+    for (input_chunk, output_chunk) in input
+        .chunks_exact(simd_width)
+        .zip(output.chunks_exact_mut(simd_width))
+        .take(xsize.div_ceil(simd_width))
+    {
+        let val = D::F32Vec::load_f16_bits(d, input_chunk);
+        let clamped = val.max(zero).min(one);
+        let scaled = clamped * scale;
+        scaled.round_store_u16(output_chunk);
+    }
+}
+
+simd_function!(
+    f16_to_u16,
+    d: D,
+    pub(super) fn f16_to_u16_impl(input: &[u16], output: &mut [u16], max: f32, xsize: usize) {
+        f16_to_u16_simd(d, input, output, max, xsize);
+    }
+);
+
+#[inline(always)]
+fn f16_to_f32_simd<D: SimdDescriptor>(d: D, input: &[u16], output: &mut [f32], xsize: usize) {
+    let simd_width = D::F32Vec::LEN;
+    for (input_chunk, output_chunk) in input
+        .chunks_exact(simd_width)
+        .zip(output.chunks_exact_mut(simd_width))
+        .take(xsize.div_ceil(simd_width))
+    {
+        D::F32Vec::load_f16_bits(d, input_chunk).store(output_chunk);
+    }
+}
+
+simd_function!(
+    f16_to_f32,
+    d: D,
+    pub(super) fn f16_to_f32_impl(input: &[u16], output: &mut [f32], xsize: usize) {
+        f16_to_f32_simd(d, input, output, xsize);
+    }
+);
+
+#[inline(always)]
 fn i16_to_u8_simd<D: SimdDescriptor>(
     d: D,
     input: &[i16],
@@ -242,6 +343,20 @@ fn load_f32_as_u8<D: SimdDescriptor>(
 }
 
 #[inline(always)]
+fn load_f16_as_u8<D: SimdDescriptor>(
+    d: D,
+    src: &[u16],
+    max: f32,
+    pos: (usize, usize),
+    c: usize,
+) -> D::U8Vec {
+    let len = D::U8Vec::LEN;
+    let mut buf = [0u8; 64];
+    f16_to_u8_simd(d, src, &mut buf[..len], max, pos, c, len);
+    D::U8Vec::load(d, &buf[..len])
+}
+
+#[inline(always)]
 fn load_i16_as_u8<D: SimdDescriptor>(d: D, src: &[i16], scale: i32, max: i32) -> D::U8Vec {
     let len = D::U8Vec::LEN;
     let mut buf = [0u8; 64];
@@ -348,6 +463,7 @@ enum AlphaU8<'a> {
     None,
     Opaque,
     I16(&'a [i16], i32),
+    F16(&'a [u16], usize),
 }
 
 #[derive(Clone, Copy)]
@@ -355,6 +471,7 @@ enum AlphaF16<'a> {
     None,
     Opaque,
     I16(&'a [i16], f32),
+    F16(&'a [u16]),
 }
 
 simd_function!(
@@ -401,6 +518,74 @@ simd_function!(
                     U8SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
                 });
             }
+            AlphaU8::F16(a, a_ch) => {
+                run_simd_chunks!(out, u8, U8Vec, 4, |n, out_chunk| {
+                    let p = (pos.0 + n, pos.1);
+                    let vr = load_f32_as_u8(d, &r[n..], max_f32, p, channels[0]);
+                    let vg = load_f32_as_u8(d, &g[n..], max_f32, p, channels[1]);
+                    let vb = load_f32_as_u8(d, &b[n..], max_f32, p, channels[2]);
+                    let va = load_f16_as_u8(d, &a[n..], max_f32, p, a_ch);
+                    U8SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+        }
+    }
+);
+
+simd_function!(
+    store_f16_to_u8_interleaved,
+    d: D,
+    #[allow(clippy::too_many_arguments)]
+    fn store_f16_to_u8_interleaved_impl(
+        r: &[u16],
+        g: &[u16],
+        b: &[u16],
+        channels: [usize; 3],
+        pos: (usize, usize),
+        max: u8,
+        alpha: AlphaU8<'_>,
+        out: &mut [u8],
+    ) {
+        let max_f32 = max as f32;
+        let max_i32 = max as i32;
+        match alpha {
+            AlphaU8::None => run_simd_chunks!(out, u8, U8Vec, 3, |n, out_chunk| {
+                let p = (pos.0 + n, pos.1);
+                let vr = load_f16_as_u8(d, &r[n..], max_f32, p, channels[0]);
+                let vg = load_f16_as_u8(d, &g[n..], max_f32, p, channels[1]);
+                let vb = load_f16_as_u8(d, &b[n..], max_f32, p, channels[2]);
+                U8SimdVec::store_interleaved_3(vr, vg, vb, out_chunk);
+            }),
+            AlphaU8::Opaque => {
+                let va = D::U8Vec::splat(d, max);
+                run_simd_chunks!(out, u8, U8Vec, 4, |n, out_chunk| {
+                    let p = (pos.0 + n, pos.1);
+                    let vr = load_f16_as_u8(d, &r[n..], max_f32, p, channels[0]);
+                    let vg = load_f16_as_u8(d, &g[n..], max_f32, p, channels[1]);
+                    let vb = load_f16_as_u8(d, &b[n..], max_f32, p, channels[2]);
+                    U8SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+            AlphaU8::I16(a, a_scale) => {
+                run_simd_chunks!(out, u8, U8Vec, 4, |n, out_chunk| {
+                    let p = (pos.0 + n, pos.1);
+                    let vr = load_f16_as_u8(d, &r[n..], max_f32, p, channels[0]);
+                    let vg = load_f16_as_u8(d, &g[n..], max_f32, p, channels[1]);
+                    let vb = load_f16_as_u8(d, &b[n..], max_f32, p, channels[2]);
+                    let va = load_i16_as_u8(d, &a[n..], a_scale, max_i32);
+                    U8SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+            AlphaU8::F16(a, a_ch) => {
+                run_simd_chunks!(out, u8, U8Vec, 4, |n, out_chunk| {
+                    let p = (pos.0 + n, pos.1);
+                    let vr = load_f16_as_u8(d, &r[n..], max_f32, p, channels[0]);
+                    let vg = load_f16_as_u8(d, &g[n..], max_f32, p, channels[1]);
+                    let vb = load_f16_as_u8(d, &b[n..], max_f32, p, channels[2]);
+                    let va = load_f16_as_u8(d, &a[n..], max_f32, p, a_ch);
+                    U8SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
         }
     }
 );
@@ -437,6 +622,63 @@ simd_function!(
                     let vg = load_f32_as_f16(d, &g[n..]);
                     let vb = load_f32_as_f16(d, &b[n..]);
                     let va = load_i16_as_f16(d, &a[n..], a_scale);
+                    U16SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+            AlphaF16::F16(a) => {
+                run_simd_chunks!(out, u16, U16Vec, 4, |n, out_chunk| {
+                    let vr = load_f32_as_f16(d, &r[n..]);
+                    let vg = load_f32_as_f16(d, &g[n..]);
+                    let vb = load_f32_as_f16(d, &b[n..]);
+                    let va = D::U16Vec::load(d, &a[n..]);
+                    U16SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+        }
+    }
+);
+
+simd_function!(
+    store_f16_to_f16_interleaved,
+    d: D,
+    fn store_f16_to_f16_interleaved_impl(
+        r: &[u16],
+        g: &[u16],
+        b: &[u16],
+        alpha: AlphaF16<'_>,
+        out: &mut [u16],
+    ) {
+        match alpha {
+            AlphaF16::None => run_simd_chunks!(out, u16, U16Vec, 3, |n, out_chunk| {
+                let vr = D::U16Vec::load(d, &r[n..]);
+                let vg = D::U16Vec::load(d, &g[n..]);
+                let vb = D::U16Vec::load(d, &b[n..]);
+                U16SimdVec::store_interleaved_3(vr, vg, vb, out_chunk);
+            }),
+            AlphaF16::Opaque => {
+                let va = D::U16Vec::splat(d, 0x3c00);
+                run_simd_chunks!(out, u16, U16Vec, 4, |n, out_chunk| {
+                    let vr = D::U16Vec::load(d, &r[n..]);
+                    let vg = D::U16Vec::load(d, &g[n..]);
+                    let vb = D::U16Vec::load(d, &b[n..]);
+                    U16SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+            AlphaF16::I16(a, a_scale) => {
+                run_simd_chunks!(out, u16, U16Vec, 4, |n, out_chunk| {
+                    let vr = D::U16Vec::load(d, &r[n..]);
+                    let vg = D::U16Vec::load(d, &g[n..]);
+                    let vb = D::U16Vec::load(d, &b[n..]);
+                    let va = load_i16_as_f16(d, &a[n..], a_scale);
+                    U16SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+            AlphaF16::F16(a) => {
+                run_simd_chunks!(out, u16, U16Vec, 4, |n, out_chunk| {
+                    let vr = D::U16Vec::load(d, &r[n..]);
+                    let vg = D::U16Vec::load(d, &g[n..]);
+                    let vb = D::U16Vec::load(d, &b[n..]);
+                    let va = D::U16Vec::load(d, &a[n..]);
                     U16SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
                 });
             }
@@ -481,6 +723,7 @@ simd_function!(
                     U8SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
                 });
             }
+            AlphaU8::F16(_, _) => unreachable!(),
         }
     }
 );
@@ -499,6 +742,10 @@ pub(super) fn store_fused(
     let f32_row = |i: usize| {
         let off = RowBuffer::x0_offset::<f32>() + xrange.start;
         &input_buf[i].get_row::<f32>(input_y)[off..]
+    };
+    let f16_row = |i: usize| {
+        let off = RowBuffer::x0_offset::<u16>() + xrange.start;
+        &input_buf[i].get_row::<u16>(input_y)[off..]
     };
     let i16_row = |i: usize| {
         let off = RowBuffer::x0_offset::<i16>() + xrange.start;
@@ -523,6 +770,9 @@ pub(super) fn store_fused(
                         ([SaveChannelType::I16 { bit_depth: a_bd }], false) => {
                             AlphaU8::I16(i16_row(3), scale(*a_bd))
                         }
+                        ([SaveChannelType::F16], false) => {
+                            AlphaU8::F16(f16_row(3), stage.channels[3])
+                        }
                         _ => return false,
                     };
                     let chs = [stage.channels[0], stage.channels[1], stage.channels[2]];
@@ -530,6 +780,36 @@ pub(super) fn store_fused(
                         f32_row(0),
                         f32_row(1),
                         f32_row(2),
+                        chs,
+                        pos,
+                        max,
+                        alpha,
+                        output_slice,
+                    );
+                    true
+                }
+                [
+                    SaveChannelType::F16,
+                    SaveChannelType::F16,
+                    SaveChannelType::F16,
+                    rest @ ..,
+                ] => {
+                    let alpha = match (rest, stage.fill_opaque_alpha) {
+                        ([], false) => AlphaU8::None,
+                        ([], true) => AlphaU8::Opaque,
+                        ([SaveChannelType::I16 { bit_depth: a_bd }], false) => {
+                            AlphaU8::I16(i16_row(3), scale(*a_bd))
+                        }
+                        ([SaveChannelType::F16], false) => {
+                            AlphaU8::F16(f16_row(3), stage.channels[3])
+                        }
+                        _ => return false,
+                    };
+                    let chs = [stage.channels[0], stage.channels[1], stage.channels[2]];
+                    store_f16_to_u8_interleaved(
+                        f16_row(0),
+                        f16_row(1),
+                        f16_row(2),
                         chs,
                         pos,
                         max,
@@ -575,29 +855,146 @@ pub(super) fn store_fused(
                 return false;
             }
             let output_u16 = u16::cast_slice_mut(output_slice);
+            match stage.channel_types.as_slice() {
+                [
+                    SaveChannelType::F32,
+                    SaveChannelType::F32,
+                    SaveChannelType::F32,
+                    rest @ ..,
+                ] => {
+                    let alpha = match (rest, stage.fill_opaque_alpha) {
+                        ([], false) => AlphaF16::None,
+                        ([], true) => AlphaF16::Opaque,
+                        ([SaveChannelType::I16 { bit_depth: a_bd }], false) => {
+                            AlphaF16::I16(i16_row(3), 1.0 / ((1u64 << a_bd) - 1) as f32)
+                        }
+                        ([SaveChannelType::F16], false) => AlphaF16::F16(f16_row(3)),
+                        _ => return false,
+                    };
+                    store_f32_to_f16_interleaved(
+                        f32_row(0),
+                        f32_row(1),
+                        f32_row(2),
+                        alpha,
+                        output_u16,
+                    );
+                    true
+                }
+                [
+                    SaveChannelType::F16,
+                    SaveChannelType::F16,
+                    SaveChannelType::F16,
+                    rest @ ..,
+                ] => {
+                    let alpha = match (rest, stage.fill_opaque_alpha) {
+                        ([], false) => AlphaF16::None,
+                        ([], true) => AlphaF16::Opaque,
+                        ([SaveChannelType::I16 { bit_depth: a_bd }], false) => {
+                            AlphaF16::I16(i16_row(3), 1.0 / ((1u64 << a_bd) - 1) as f32)
+                        }
+                        ([SaveChannelType::F16], false) => AlphaF16::F16(f16_row(3)),
+                        _ => return false,
+                    };
+                    store_f16_to_f16_interleaved(
+                        f16_row(0),
+                        f16_row(1),
+                        f16_row(2),
+                        alpha,
+                        output_u16,
+                    );
+                    true
+                }
+                _ => false,
+            }
+        }
+        JxlDataFormat::F32 { endianness } if endianness == Endianness::native() => {
+            let output_slice = &mut output_buf.row_mut(output_y)[0..len * out_channels * 4];
+            if output_slice
+                .as_mut_ptr()
+                .align_offset(std::mem::align_of::<f32>())
+                != 0
+            {
+                return false;
+            }
+            let output_f32 = f32::cast_slice_mut(output_slice);
             let [
-                SaveChannelType::F32,
-                SaveChannelType::F32,
-                SaveChannelType::F32,
+                SaveChannelType::F16,
+                SaveChannelType::F16,
+                SaveChannelType::F16,
                 rest @ ..,
             ] = stage.channel_types.as_slice()
             else {
                 return false;
             };
             let alpha = match (rest, stage.fill_opaque_alpha) {
-                ([], false) => AlphaF16::None,
-                ([], true) => AlphaF16::Opaque,
-                ([SaveChannelType::I16 { bit_depth: a_bd }], false) => {
-                    AlphaF16::I16(i16_row(3), 1.0 / ((1u64 << a_bd) - 1) as f32)
-                }
+                ([], false) => AlphaF32::None,
+                ([], true) => AlphaF32::Opaque,
+                ([SaveChannelType::F32], false) => AlphaF32::F32(f32_row(3)),
+                ([SaveChannelType::F16], false) => AlphaF32::F16(f16_row(3)),
                 _ => return false,
             };
-            store_f32_to_f16_interleaved(f32_row(0), f32_row(1), f32_row(2), alpha, output_u16);
+            store_f16_to_f32_interleaved(f16_row(0), f16_row(1), f16_row(2), alpha, output_f32);
             true
         }
         _ => false,
     }
 }
+
+#[derive(Clone, Copy)]
+enum AlphaF32<'a> {
+    None,
+    Opaque,
+    F32(&'a [f32]),
+    F16(&'a [u16]),
+}
+
+simd_function!(
+    store_f16_to_f32_interleaved,
+    d: D,
+    fn store_f16_to_f32_interleaved_impl(
+        r: &[u16],
+        g: &[u16],
+        b: &[u16],
+        alpha: AlphaF32<'_>,
+        out: &mut [f32],
+    ) {
+        match alpha {
+            AlphaF32::None => run_simd_chunks!(out, f32, F32Vec, 3, |n, out_chunk| {
+                let vr = D::F32Vec::load_f16_bits(d, &r[n..]);
+                let vg = D::F32Vec::load_f16_bits(d, &g[n..]);
+                let vb = D::F32Vec::load_f16_bits(d, &b[n..]);
+                F32SimdVec::store_interleaved_3(vr, vg, vb, out_chunk);
+            }),
+            AlphaF32::Opaque => {
+                let va = D::F32Vec::splat(d, 1.0);
+                run_simd_chunks!(out, f32, F32Vec, 4, |n, out_chunk| {
+                    let vr = D::F32Vec::load_f16_bits(d, &r[n..]);
+                    let vg = D::F32Vec::load_f16_bits(d, &g[n..]);
+                    let vb = D::F32Vec::load_f16_bits(d, &b[n..]);
+                    F32SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+            AlphaF32::F32(a) => {
+                run_simd_chunks!(out, f32, F32Vec, 4, |n, out_chunk| {
+                    let vr = D::F32Vec::load_f16_bits(d, &r[n..]);
+                    let vg = D::F32Vec::load_f16_bits(d, &g[n..]);
+                    let vb = D::F32Vec::load_f16_bits(d, &b[n..]);
+                    let va = D::F32Vec::load(d, &a[n..]);
+                    F32SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+            AlphaF32::F16(a) => {
+                run_simd_chunks!(out, f32, F32Vec, 4, |n, out_chunk| {
+                    let vr = D::F32Vec::load_f16_bits(d, &r[n..]);
+                    let vg = D::F32Vec::load_f16_bits(d, &g[n..]);
+                    let vb = D::F32Vec::load_f16_bits(d, &b[n..]);
+                    let va = D::F32Vec::load_f16_bits(d, &a[n..]);
+                    F32SimdVec::store_interleaved_4(vr, vg, vb, va, out_chunk);
+                });
+            }
+        }
+    }
+);
 
 pub(super) fn store(
     input_buf: &[&RowBuffer],

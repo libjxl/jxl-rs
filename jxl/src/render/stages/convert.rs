@@ -3,7 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, simd_function};
+use jxl_simd::{
+    F16SimdVec, F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, simd_function,
+};
 
 use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::bit_depth::BitDepth;
@@ -40,47 +42,34 @@ impl std::fmt::Display for ConvertModularXYBToF32Stage {
     }
 }
 
-#[inline(always)]
-fn modular_xyb_to_float_simd<D: SimdDescriptor, T: VecLoad<D, Vec = D::I32Vec>>(
-    d: D,
-    input_rows: &Channels<T>,
-    output_rows: &mut ChannelsMut<f32>,
-    [scale_x, scale_y, scale_b]: [f32; 3],
-    xsize: usize,
-) {
-    let scale_x = D::F32Vec::splat(d, scale_x);
-    let scale_y = D::F32Vec::splat(d, scale_y);
-    let scale_b = D::F32Vec::splat(d, scale_b);
-
-    // Input channels: [Y, X, B] (modular XYB order)
-    // Output channels: [X, Y, B] (standard XYB order)
-    for_each_chunk(
-        d,
-        xsize,
-        input_rows.view::<3, 1, 0>(),
-        output_rows.view::<3, 1, 1>(),
-        |_x, inv, outv| {
-            let vy = inv.load::<_, 0>(d, 0, 0).as_f32();
-            let vx = inv.load::<_, 1>(d, 0, 0).as_f32();
-            let vb = inv.load::<_, 2>(d, 0, 0).as_f32();
-
-            outv.store::<_, 0>(d, 0, vx * scale_x);
-            outv.store::<_, 1>(d, 0, vy * scale_y);
-            outv.store::<_, 2>(d, 0, (vb + vy) * scale_b);
-        },
-    );
-}
-
 simd_function!(
     modular32_xyb_to_float_simd_dispatch,
     d: D,
     fn modular32_xyb_to_float(
         input_rows: &Channels<i32>,
-        output_rows: &mut ChannelsMut<f32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
         scales: [f32; 3],
         xsize: usize,
     ) {
-        modular_xyb_to_float_simd(d, input_rows, output_rows, scales, xsize);
+        let [scale_x, scale_y, scale_b] = scales;
+        let scale_b_over_y = D::F16Vec::splat(d, scale_b / scale_y);
+        // Input channels: [Y, X, B] (modular XYB order)
+        // Output channels: [X, Y, B] (standard XYB order)
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<3, 1, 0>(),
+            output_rows.view::<3, 1, 1>(),
+            |_x, inv, outv| {
+                let vy = D::F16Vec::load_i32_scaled(d, inv.slice::<0>(0, 0, D::F16Vec::LEN), scale_y);
+                let vx = D::F16Vec::load_i32_scaled(d, inv.slice::<1>(0, 0, D::F16Vec::LEN), scale_x);
+                let vb = D::F16Vec::load_i32_scaled(d, inv.slice::<2>(0, 0, D::F16Vec::LEN), scale_b);
+
+                outv.store::<_, 0>(d, 0, vx);
+                outv.store::<_, 1>(d, 0, vy);
+                outv.store::<_, 2>(d, 0, vy.mul_add(scale_b_over_y, vb));
+            },
+        );
     }
 );
 
@@ -89,17 +78,35 @@ simd_function!(
     d: D,
     fn modular16_xyb_to_float(
         input_rows: &Channels<i16>,
-        output_rows: &mut ChannelsMut<f32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
         scales: [f32; 3],
         xsize: usize,
     ) {
-        modular_xyb_to_float_simd(d, input_rows, output_rows, scales, xsize);
+        let [scale_x, scale_y, scale_b] = scales;
+        let scale_b_over_y = D::F16Vec::splat(d, scale_b / scale_y);
+        // Input channels: [Y, X, B] (modular XYB order)
+        // Output channels: [X, Y, B] (standard XYB order)
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<3, 1, 0>(),
+            output_rows.view::<3, 1, 1>(),
+            |_x, inv, outv| {
+                let vy = D::F16Vec::load_i16_scaled(d, inv.slice::<0>(0, 0, D::F16Vec::LEN), scale_y);
+                let vx = D::F16Vec::load_i16_scaled(d, inv.slice::<1>(0, 0, D::F16Vec::LEN), scale_x);
+                let vb = D::F16Vec::load_i16_scaled(d, inv.slice::<2>(0, 0, D::F16Vec::LEN), scale_b);
+
+                outv.store::<_, 0>(d, 0, vx);
+                outv.store::<_, 1>(d, 0, vy);
+                outv.store::<_, 2>(d, 0, vy.mul_add(scale_b_over_y, vb));
+            },
+        );
     }
 );
 
 impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
     type InputT = i32;
-    type OutputT = f32;
+    type OutputT = crate::util::f16;
     const SHIFT: (u8, u8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
@@ -112,7 +119,7 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         _position: (usize, usize),
         xsize: usize,
         input_rows: &Channels<i32>,
-        output_rows: &mut ChannelsMut<f32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -156,7 +163,7 @@ impl std::fmt::Display for ConvertModular16XYBToF32Stage {
 
 impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
     type InputT = i16;
-    type OutputT = f32;
+    type OutputT = crate::util::f16;
     const SHIFT: (u8, u8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
@@ -169,7 +176,7 @@ impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
         _position: (usize, usize),
         xsize: usize,
         input_rows: &Channels<i16>,
-        output_rows: &mut ChannelsMut<f32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -516,6 +523,277 @@ impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
         } else {
             let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
             modular16_to_float_simd_dispatch(input_rows, output_rows, scale, xsize);
+        }
+    }
+}
+
+pub struct ConvertModularToF16Stage {
+    channel: usize,
+    bit_depth: BitDepth,
+}
+
+impl ConvertModularToF16Stage {
+    pub fn new(channel: usize, bit_depth: BitDepth) -> ConvertModularToF16Stage {
+        ConvertModularToF16Stage { channel, bit_depth }
+    }
+}
+
+impl std::fmt::Display for ConvertModularToF16Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert modular data to F16 in channel {} with bit depth {:?}",
+            self.channel, self.bit_depth
+        )
+    }
+}
+
+simd_function!(
+    int_to_f16_32bit_simd_dispatch,
+    d: D,
+    fn int_to_f16_32bit_simd(
+        input_rows: &Channels<i32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
+        xsize: usize,
+    ) {
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<1, 1, 0>(),
+            output_rows.view::<1, 1, 1>(),
+            |_x, inv, outv| {
+                let val = D::F16Vec::load_f32_bits_i32(d, inv.slice::<0>(0, 0, D::F16Vec::LEN));
+                outv.store::<_, 0>(d, 0, val);
+            },
+        );
+    }
+);
+
+simd_function!(
+    int32_to_f16_16bit_simd_dispatch,
+    d: D,
+    fn int32_to_f16_16bit(
+        input_rows: &Channels<i32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
+        xsize: usize,
+    ) {
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<1, 1, 0>(),
+            output_rows.view::<1, 1, 1>(),
+            |_x, inv, outv| {
+                let result = D::F16Vec::load_f16_bits_i32(d, inv.slice::<0>(0, 0, D::F16Vec::LEN));
+                outv.store::<_, 0>(d, 0, result);
+            },
+        );
+    }
+);
+
+simd_function!(
+    int16_to_f16_16bit_simd_dispatch,
+    d: D,
+    fn int16_to_f16_16bit(
+        input_rows: &Channels<i16>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
+        xsize: usize,
+    ) {
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<1, 1, 0>(),
+            output_rows.view::<1, 1, 1>(),
+            |_x, inv, outv| {
+                let result = D::F16Vec::load_f16_bits_i16(d, inv.slice::<0>(0, 0, D::F16Vec::LEN));
+                outv.store::<_, 0>(d, 0, result);
+            },
+        );
+    }
+);
+
+fn int_to_f16_generic<T>(
+    input_rows: &Channels<T>,
+    output_rows: &mut ChannelsMut<crate::util::f16>,
+    bits: u32,
+    exp_bits: u32,
+    xsize: usize,
+) where
+    T: VecLoad<ScalarDescriptor, Vec = std::num::Wrapping<i32>>,
+{
+    let d = ScalarDescriptor::new().unwrap();
+    for_each_chunk(
+        d,
+        xsize,
+        input_rows.view::<1, 1, 0>(),
+        output_rows.view::<1, 1, 1>(),
+        |_x, inv, outv| {
+            let in_val = inv.load::<_, 0>(d, 0, 0).0;
+            let out_val = custom_float_sample_to_f32(in_val as u32, bits, exp_bits);
+            outv.store::<_, 0>(
+                d,
+                0,
+                <ScalarDescriptor as SimdDescriptor>::F16Vec::splat(d, out_val),
+            );
+        },
+    );
+}
+
+fn int_to_f16(
+    input_rows: &Channels<i32>,
+    output_rows: &mut ChannelsMut<crate::util::f16>,
+    bit_depth: &BitDepth,
+    xsize: usize,
+) {
+    let bits = bit_depth.bits_per_sample();
+    let exp_bits = bit_depth.exponent_bits_per_sample();
+
+    if bits == 32 && exp_bits == 8 {
+        int_to_f16_32bit_simd_dispatch(input_rows, output_rows, xsize);
+        return;
+    }
+
+    if bits == 16 && exp_bits == 5 {
+        int32_to_f16_16bit_simd_dispatch(input_rows, output_rows, xsize);
+        return;
+    }
+
+    int_to_f16_generic(input_rows, output_rows, bits, exp_bits, xsize);
+}
+
+fn int16_to_f16(
+    input_rows: &Channels<i16>,
+    output_rows: &mut ChannelsMut<crate::util::f16>,
+    bit_depth: &BitDepth,
+    xsize: usize,
+) {
+    let bits = bit_depth.bits_per_sample();
+    let exp_bits = bit_depth.exponent_bits_per_sample();
+
+    if bits == 16 && exp_bits == 5 {
+        int16_to_f16_16bit_simd_dispatch(input_rows, output_rows, xsize);
+        return;
+    }
+
+    int_to_f16_generic(input_rows, output_rows, bits, exp_bits, xsize);
+}
+
+simd_function!(
+    modular32_to_f16_simd_dispatch,
+    d: D,
+    fn modular32_to_f16(
+        input_rows: &Channels<i32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
+        scale: f32,
+        xsize: usize,
+    ) {
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<1, 1, 0>(),
+            output_rows.view::<1, 1, 1>(),
+            |_x, inv, outv| {
+                let val = D::F16Vec::load_i32_scaled(d, inv.slice::<0>(0, 0, D::F16Vec::LEN), scale);
+                outv.store::<_, 0>(d, 0, val);
+            },
+        );
+    }
+);
+
+simd_function!(
+    modular16_to_f16_simd_dispatch,
+    d: D,
+    fn modular16_to_f16(
+        input_rows: &Channels<i16>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
+        scale: f32,
+        xsize: usize,
+    ) {
+        for_each_chunk(
+            d,
+            xsize,
+            input_rows.view::<1, 1, 0>(),
+            output_rows.view::<1, 1, 1>(),
+            |_x, inv, outv| {
+                let val = D::F16Vec::load_i16_scaled(d, inv.slice::<0>(0, 0, D::F16Vec::LEN), scale);
+                outv.store::<_, 0>(d, 0, val);
+            },
+        );
+    }
+);
+
+impl RenderPipelineInOutStage for ConvertModularToF16Stage {
+    type InputT = i32;
+    type OutputT = crate::util::f16;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<i32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
+        _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
+    ) {
+        if self.bit_depth.floating_point_sample() {
+            int_to_f16(input_rows, output_rows, &self.bit_depth, xsize);
+        } else {
+            let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
+            modular32_to_f16_simd_dispatch(input_rows, output_rows, scale, xsize);
+        }
+    }
+}
+
+pub struct ConvertModular16ToF16Stage {
+    channel: usize,
+    bit_depth: BitDepth,
+}
+
+impl ConvertModular16ToF16Stage {
+    pub fn new(channel: usize, bit_depth: BitDepth) -> ConvertModular16ToF16Stage {
+        ConvertModular16ToF16Stage { channel, bit_depth }
+    }
+}
+
+impl std::fmt::Display for ConvertModular16ToF16Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert modular data to F16 in channel {} with bit depth {:?}",
+            self.channel, self.bit_depth
+        )
+    }
+}
+
+impl RenderPipelineInOutStage for ConvertModular16ToF16Stage {
+    type InputT = i16;
+    type OutputT = crate::util::f16;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<i16>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
+        _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
+    ) {
+        if self.bit_depth.floating_point_sample() {
+            int16_to_f16(input_rows, output_rows, &self.bit_depth, xsize);
+        } else {
+            let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
+            modular16_to_f16_simd_dispatch(input_rows, output_rows, scale, xsize);
         }
     }
 }

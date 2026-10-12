@@ -13,7 +13,9 @@ use super::super::{
     F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
 };
 use crate::x86_64::sse42::Sse42Descriptor;
-use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface, impl_i16_array_interface};
+use crate::{
+    F16VecConvert, U32SimdVec, U64SimdVec, impl_f32_array_interface, impl_i16_array_interface,
+};
 
 /// Core 8x8 transpose algorithm for AVX2.
 /// Takes 8 __m256 vectors representing rows and returns 8 transposed vectors.
@@ -122,6 +124,7 @@ pub struct Bf16Table8Avx(__m256);
 
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
+    type F16Vec = F16VecConvert<F32VecAvx>;
     type I32Vec = I32VecAvx;
     type I16Vec = I16VecAvx;
     type U64Vec = U64VecAvx;
@@ -129,8 +132,10 @@ impl SimdDescriptor for AvxDescriptor {
     type U8Vec = U8VecAvx;
     type U16Vec = U16VecAvx;
     type Mask = MaskAvx;
+    type F16Mask = MaskAvx;
     type Mask16 = Mask16Avx;
     type Bf16Table8 = Bf16Table8Avx;
+    type F16Table8 = Bf16Table8Avx;
 
     type Descriptor256 = Self;
     type Descriptor128 = Sse42Descriptor;
@@ -200,6 +205,11 @@ impl F32SimdVec for F32VecAvx {
     type Descriptor = AvxDescriptor;
 
     const LEN: usize = 8;
+
+    #[inline(always)]
+    fn descriptor(&self) -> Self::Descriptor {
+        self.1
+    }
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
@@ -683,6 +693,18 @@ impl F32SimdVec for F32VecAvx {
     }
 
     #[inline(always)]
+    fn splat_f16_bits(d: Self::Descriptor, v: u16) -> Self {
+        #[target_feature(enable = "avx2,f16c")]
+        #[inline]
+        fn splat_f16_impl(d: AvxDescriptor, v: u16) -> F32VecAvx {
+            let bits = _mm_set1_epi16(v as i16);
+            F32VecAvx(_mm256_cvtph_ps(bits), d)
+        }
+        // SAFETY: avx2 and f16c are available from the safety invariant on the descriptor
+        unsafe { splat_f16_impl(d, v) }
+    }
+
+    #[inline(always)]
     fn store_f16_bits(self, dest: &mut [u16]) {
         #[target_feature(enable = "avx2,f16c")]
         #[inline]
@@ -728,6 +750,22 @@ impl F32SimdVec for F32VecAvx {
         unsafe {
             transpose8x8f32(d, data, stride);
         }
+    }
+
+    #[inline(always)]
+    fn transpose_square_f16(
+        d: Self::Descriptor,
+        data: &mut [Self::UnderlyingF16Array],
+        stride: usize,
+    ) {
+        // SAFETY: f16 is #[repr(transparent)] over u16, which has the same size and alignment as i16.
+        let data_i16: &mut [[i16; 8]] =
+            unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast(), data.len()) };
+        <Sse42Descriptor as SimdDescriptor>::I16Vec::transpose_square(
+            d.as_sse42(),
+            data_i16,
+            stride,
+        );
     }
 }
 
@@ -1953,3 +1991,5 @@ impl BitOr<Mask16Avx> for Mask16Avx {
         Mask16Avx(_mm256_or_si256(this.0, rhs.0), this.1)
     });
 }
+
+crate::impl_f16_convert_mask!(MaskAvx, AvxDescriptor);

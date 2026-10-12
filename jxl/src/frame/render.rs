@@ -549,7 +549,7 @@ impl Frame {
                 };
                 channel_types.push((modular_ty, bd));
             } else {
-                channel_types.push((DataTypeTag::F32, None));
+                channel_types.push((DataTypeTag::F16, None));
             }
         }
         for i in 0..frame_header.num_extra_channels as usize {
@@ -710,7 +710,7 @@ impl Frame {
                     Orientation::Identity,
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
-                    JxlDataFormat::f32(),
+                    JxlDataFormat::f16(),
                     false,
                 );
             }
@@ -722,7 +722,7 @@ impl Frame {
                     Orientation::Identity,
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
-                    JxlDataFormat::f32(),
+                    JxlDataFormat::f16(),
                     false,
                 );
             }
@@ -776,7 +776,7 @@ impl Frame {
                     Orientation::Identity,
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
-                    JxlDataFormat::f32(),
+                    JxlDataFormat::f16(),
                     false,
                 );
             }

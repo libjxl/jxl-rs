@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(clippy::incompatible_msrv)]
+
 //! IEEE 754 half-precision (binary16) floating-point type.
 //!
 //! This is a minimal implementation providing only the operations needed for JPEG XL decoding,
@@ -21,20 +23,48 @@ impl f16 {
     pub const ZERO: Self = Self(0);
 
     /// Creates an f16 from its raw bit representation.
-    #[inline]
+    #[inline(always)]
     pub const fn from_bits(bits: u16) -> Self {
         Self(bits)
     }
 
     /// Returns the raw bit representation.
-    #[inline]
+    #[inline(always)]
     pub const fn to_bits(self) -> u16 {
         self.0
     }
 
-    /// Converts to f32.
-    #[inline]
-    pub fn to_f32(self) -> f32 {
+    /// Reinterprets a slice of f16 as a slice of u16 bit patterns.
+    #[inline(always)]
+    pub fn slice_to_bits(slice: &[Self]) -> &[u16] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16.
+        unsafe { std::slice::from_raw_parts(slice.as_ptr().cast(), slice.len()) }
+    }
+
+    /// Reinterprets a mutable slice of f16 as a mutable slice of u16 bit patterns.
+    #[inline(always)]
+    pub fn slice_to_bits_mut(slice: &mut [Self]) -> &mut [u16] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16.
+        unsafe { std::slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), slice.len()) }
+    }
+
+    /// Reinterprets a slice of u16 bit patterns as a slice of f16.
+    #[inline(always)]
+    pub fn slice_from_bits(slice: &[u16]) -> &[Self] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16.
+        unsafe { std::slice::from_raw_parts(slice.as_ptr().cast(), slice.len()) }
+    }
+
+    /// Reinterprets a mutable slice of u16 bit patterns as a mutable slice of f16.
+    #[inline(always)]
+    pub fn slice_from_bits_mut(slice: &mut [u16]) -> &mut [Self] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16.
+        unsafe { std::slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), slice.len()) }
+    }
+
+    /// Converts to f32 in `const` context.
+    #[inline(always)]
+    pub const fn to_f32_const(self) -> f32 {
         let bits = self.0;
         let sign = ((bits >> 15) & 1) as u32;
         let exp = ((bits >> 10) & 0x1F) as u32;
@@ -46,14 +76,9 @@ impl f16 {
                 sign << 31
             } else {
                 // Denormal f16 -> normalized f32
-                // Find the leading 1 bit in mantissa
-                let mut m = mant;
-                let mut e = 0u32;
-                while (m & 0x400) == 0 {
-                    m <<= 1;
-                    e += 1;
-                }
-                m &= 0x3FF; // Remove the implicit leading 1
+                // Find the leading 1 bit in mantissa without a loop
+                let e = mant.leading_zeros() - 21;
+                let m = (mant << e) & 0x3FF; // Remove the implicit leading 1
                 // f16 denormal exponent is -14 (not -15), adjust by shift count
                 let new_exp = 127 - 14 - e;
                 (sign << 31) | (new_exp << 23) | (m << 13)
@@ -78,9 +103,30 @@ impl f16 {
         f32::from_bits(f32_bits)
     }
 
-    /// Creates an f16 from an f32.
-    #[inline]
-    pub fn from_f32(f: f32) -> Self {
+    /// Converts to f32.
+    #[inline(always)]
+    pub fn to_f32(self) -> f32 {
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            use std::arch::aarch64::{
+                vcvt_f32_f16, vdup_n_u16, vdups_laneq_f32, vreinterpret_f16_u16, vset_lane_u16,
+            };
+            // SAFETY: neon is statically enabled via cfg(target_feature = "neon"),
+            // and fcvtl (vcvt_f32_f16) is part of baseline AArch64 NEON.
+            unsafe {
+                let v = vset_lane_u16::<0>(self.0, vdup_n_u16(0));
+                vdups_laneq_f32::<0>(vcvt_f32_f16(vreinterpret_f16_u16(v)))
+            }
+        }
+        #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+        {
+            Self::to_f32_const(self)
+        }
+    }
+
+    /// Creates an f16 from an f32 in `const` context.
+    #[inline(always)]
+    pub const fn from_f32_const(f: f32) -> Self {
         let bits = f.to_bits();
         let sign = ((bits >> 31) & 1) as u16;
         let exp = ((bits >> 23) & 0xFF) as i32;
@@ -150,48 +196,69 @@ impl f16 {
         Self(h_bits)
     }
 
+    /// Creates an f16 from an f32.
+    #[inline(always)]
+    pub fn from_f32(f: f32) -> Self {
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            use std::arch::aarch64::{
+                vcvt_f16_f32, vdupq_n_f32, vget_lane_u16, vreinterpret_u16_f16,
+            };
+            // SAFETY: neon is statically enabled via cfg(target_feature = "neon"),
+            // and fcvtn (vcvt_f16_f32) is part of baseline AArch64 NEON.
+            unsafe {
+                let v = vcvt_f16_f32(vdupq_n_f32(f));
+                Self(vget_lane_u16::<0>(vreinterpret_u16_f16(v)))
+            }
+        }
+        #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+        {
+            Self::from_f32_const(f)
+        }
+    }
+
     /// Creates an f16 from an f64.
-    #[inline]
+    #[inline(always)]
     pub fn from_f64(f: f64) -> Self {
         // Convert via f32 - sufficient precision for f16
         Self::from_f32(f as f32)
     }
 
     /// Converts to f64.
-    #[inline]
+    #[inline(always)]
     pub fn to_f64(self) -> f64 {
         self.to_f32() as f64
     }
 
     /// Returns true if this is neither infinite nor NaN.
-    #[inline]
+    #[inline(always)]
     pub fn is_finite(self) -> bool {
         // Exponent of 31 means infinity or NaN
         ((self.0 >> 10) & 0x1F) != 31
     }
 
     /// Returns the bytes in little-endian order.
-    #[inline]
+    #[inline(always)]
     pub const fn to_le_bytes(self) -> [u8; 2] {
         self.0.to_le_bytes()
     }
 
     /// Returns the bytes in big-endian order.
-    #[inline]
+    #[inline(always)]
     pub const fn to_be_bytes(self) -> [u8; 2] {
         self.0.to_be_bytes()
     }
 }
 
 impl From<f16> for f32 {
-    #[inline]
+    #[inline(always)]
     fn from(f: f16) -> f32 {
         f.to_f32()
     }
 }
 
 impl From<f16> for f64 {
-    #[inline]
+    #[inline(always)]
     fn from(f: f16) -> f64 {
         f.to_f64()
     }

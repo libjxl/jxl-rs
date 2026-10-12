@@ -50,8 +50,8 @@ use crate::util::{CeilLog2, PerThreadStorage, ShiftRightCeil, Xorshift128Plus, m
 
 fn upsample_lf_group(
     group: usize,
-    pixels: &mut [Image<f32>; 3],
-    lf_image: &[Image<f32>; 3],
+    pixels: &mut [Image<crate::util::f16>; 3],
+    lf_image: &[Image<crate::util::f16>; 3],
     header: &FrameHeader,
     factors: &CustomTransformData,
     buffers: &mut VarDctBuffers,
@@ -71,8 +71,8 @@ fn upsample_lf_group(
         .as_ref()
         .is_none_or(|(_, _, w)| *w < max_width)
     {
-        let temp_out_buf = RowBuffer::new(DataTypeTag::F32, 0, 3, 3, max_width)?;
-        let input_rows_storage = RowBuffer::new(DataTypeTag::F32, 2, 0, 0, max_width.div_ceil(8))?;
+        let temp_out_buf = RowBuffer::new(DataTypeTag::F16, 0, 3, 3, max_width)?;
+        let input_rows_storage = RowBuffer::new(DataTypeTag::F16, 2, 0, 0, max_width.div_ceil(8))?;
         buffers.lf_upsample_bufs = Some((temp_out_buf, input_rows_storage, max_width));
     }
     let (temp_out_buf, input_rows_storage, _) = buffers.lf_upsample_bufs.as_mut().unwrap();
@@ -107,7 +107,7 @@ fn upsample_lf_group(
         let ix2 = to_storage_x(mirror(lf_x1 as isize, lf_width));
         let ix3 = to_storage_x(mirror(lf_x1 as isize + 1, lf_width));
 
-        let x0_off = RowBuffer::x0_offset::<f32>();
+        let x0_off = RowBuffer::x0_offset::<crate::util::f16>();
 
         for y in 0..lf_group_dim_y {
             let cy = lf_y0 + y;
@@ -117,7 +117,7 @@ fn upsample_lf_group(
                 let iy = mirror(iy, lf_height);
                 let row = lf_img.row(to_storage_y(iy));
 
-                let storage = input_rows_storage.get_row_mut::<f32>((dy + 2) as usize);
+                let storage = input_rows_storage.get_row_mut::<crate::util::f16>((dy + 2) as usize);
                 storage[x0_off - 2] = row[ix0];
                 storage[x0_off - 1] = row[ix1];
                 storage[x0_off..x0_off + num_blocks]
@@ -148,7 +148,7 @@ fn upsample_lf_group(
             for i in 0..8 {
                 let out_y = base_y + i;
                 if out_y < out_height {
-                    let buf = temp_out_buf.get_row::<f32>(i);
+                    let buf = temp_out_buf.get_row::<crate::util::f16>(i);
                     out_img.row_mut(out_y)[..out_width]
                         .copy_from_slice(&buf[x0_off..x0_off + out_width]);
                 }
@@ -762,7 +762,7 @@ impl Frame {
         };
         let hf_meta = self.hf_meta.as_ref().unwrap();
 
-        let lf_image: &[Image<f32>; 3] = if self.header.has_lf_frame() {
+        let lf_image: &[Image<crate::util::f16>; 3] = if self.header.has_lf_frame() {
             self.decoder_state.lf_frames[self.header.lf_level as usize]
                 .as_ref()
                 .unwrap()

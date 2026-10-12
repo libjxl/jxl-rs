@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use jxl_simd::{F16SimdVec, simd_function};
+
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
+use crate::util::f16;
 
 /// Render spot color
 pub struct SpotColorStage {
@@ -29,8 +32,50 @@ impl SpotColorStage {
     }
 }
 
+simd_function!(
+    spot_color_simd_dispatch,
+    d: D,
+    fn spot_color_simd(
+        row_r: &mut [f16],
+        row_g: &mut [f16],
+        row_b: &mut [f16],
+        row_s: &[f16],
+        spot_color: [f32; 4],
+        xsize: usize,
+    ) {
+        let scale = D::F16Vec::splat_f32(d, spot_color[3]);
+        let one = D::F16Vec::splat_f32(d, 1.0);
+        let sc_r = D::F16Vec::splat_f32(d, spot_color[0]);
+        let sc_g = D::F16Vec::splat_f32(d, spot_color[1]);
+        let sc_b = D::F16Vec::splat_f32(d, spot_color[2]);
+
+        let iter_r = row_r.chunks_exact_mut(D::F16Vec::LEN);
+        let iter_g = row_g.chunks_exact_mut(D::F16Vec::LEN);
+        let iter_b = row_b.chunks_exact_mut(D::F16Vec::LEN);
+        let iter_s = row_s.chunks_exact(D::F16Vec::LEN);
+        for (((r_chunk, g_chunk), b_chunk), s_chunk) in iter_r
+            .zip(iter_g)
+            .zip(iter_b)
+            .zip(iter_s)
+            .take(xsize.div_ceil(D::F16Vec::LEN))
+        {
+            let s = D::F16Vec::load(d, s_chunk);
+            let mix = scale * s;
+            let one_minus_mix = one - mix;
+
+            let r = D::F16Vec::load(d, r_chunk);
+            let g = D::F16Vec::load(d, g_chunk);
+            let b = D::F16Vec::load(d, b_chunk);
+
+            mix.mul_add(sc_r, one_minus_mix * r).store(r_chunk);
+            mix.mul_add(sc_g, one_minus_mix * g).store(g_chunk);
+            mix.mul_add(sc_b, one_minus_mix * b).store(b_chunk);
+        }
+    }
+);
+
 impl RenderPipelineInPlaceStage for SpotColorStage {
-    type Type = f32;
+    type Type = f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 || c == self.spot_c
@@ -41,7 +86,7 @@ impl RenderPipelineInPlaceStage for SpotColorStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [f16]],
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -52,19 +97,13 @@ impl RenderPipelineInPlaceStage for SpotColorStage {
             );
         };
 
-        let scale = self.spot_color[3];
         assert!(
             xsize <= row_r.len()
                 && xsize <= row_g.len()
                 && xsize <= row_b.len()
                 && xsize <= row_s.len()
         );
-        for idx in 0..xsize {
-            let mix = scale * row_s[idx];
-            row_r[idx] = mix * self.spot_color[0] + (1.0 - mix) * row_r[idx];
-            row_g[idx] = mix * self.spot_color[1] + (1.0 - mix) * row_g[idx];
-            row_b[idx] = mix * self.spot_color[2] + (1.0 - mix) * row_b[idx];
-        }
+        spot_color_simd_dispatch(row_r, row_g, row_b, row_s, self.spot_color, xsize);
     }
 }
 
@@ -77,6 +116,7 @@ mod test {
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
     use crate::tests::assert_close;
+    use crate::util::f16;
 
     #[test]
     fn consistency() -> Result<()> {
@@ -93,10 +133,18 @@ mod test {
         let mut input_g = Image::new((3, 1))?;
         let mut input_b = Image::new((3, 1))?;
         let mut input_s = Image::new((3, 1))?;
-        input_r.row_mut(0).copy_from_slice(&[1.0, 0.0, 0.0]);
-        input_g.row_mut(0).copy_from_slice(&[0.0, 1.0, 0.0]);
-        input_b.row_mut(0).copy_from_slice(&[0.0, 0.0, 1.0]);
-        input_s.row_mut(0).copy_from_slice(&[1.0, 1.0, 1.0]);
+        input_r
+            .row_mut(0)
+            .copy_from_slice(&[1.0, 0.0, 0.0].map(f16::from_f32));
+        input_g
+            .row_mut(0)
+            .copy_from_slice(&[0.0, 1.0, 0.0].map(f16::from_f32));
+        input_b
+            .row_mut(0)
+            .copy_from_slice(&[0.0, 0.0, 1.0].map(f16::from_f32));
+        input_s
+            .row_mut(0)
+            .copy_from_slice(&[1.0, 1.0, 1.0].map(f16::from_f32));
 
         let stage = SpotColorStage::new(0, [0.5; 4]);
         let output = make_and_run_simple_pipeline(
@@ -107,9 +155,36 @@ mod test {
             256,
         )?;
 
-        assert_close!(all, output[0].row(0), &[0.75, 0.25, 0.25], 1e-6);
-        assert_close!(all, output[1].row(0), &[0.25, 0.75, 0.25], 1e-6);
-        assert_close!(all, output[2].row(0), &[0.25, 0.25, 0.75], 1e-6);
+        assert_close!(
+            all,
+            &output[0]
+                .row(0)
+                .iter()
+                .map(|x| x.to_f32())
+                .collect::<Vec<_>>(),
+            &[0.75, 0.25, 0.25],
+            1e-6
+        );
+        assert_close!(
+            all,
+            &output[1]
+                .row(0)
+                .iter()
+                .map(|x| x.to_f32())
+                .collect::<Vec<_>>(),
+            &[0.25, 0.75, 0.25],
+            1e-6
+        );
+        assert_close!(
+            all,
+            &output[2]
+                .row(0)
+                .iter()
+                .map(|x| x.to_f32())
+                .collect::<Vec<_>>(),
+            &[0.25, 0.25, 0.75],
+            1e-6
+        );
 
         Ok(())
     }

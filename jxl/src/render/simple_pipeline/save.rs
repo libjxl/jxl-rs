@@ -56,7 +56,10 @@ impl SaveStage {
                     }
 
                     match (ch_ty, self.data_format) {
-                        (SaveChannelType::F32, JxlDataFormat::U8 { bit_depth }) => {
+                        (
+                            SaveChannelType::F32 | SaveChannelType::F16,
+                            JxlDataFormat::U8 { bit_depth },
+                        ) => {
                             let max = ((1u32 << bit_depth) - 1) as f32;
                             let dither = DITHER_TABLE[(y + chan * 13) % 32][(x + chan * 23) % 32];
                             let v = ((px as f32) * max + dither).clamp(0.0, max).round() as u8;
@@ -73,7 +76,7 @@ impl SaveStage {
                             write_pixel!(v, Endianness::LittleEndian);
                         }
                         (
-                            SaveChannelType::F32,
+                            SaveChannelType::F32 | SaveChannelType::F16,
                             JxlDataFormat::U16 {
                                 endianness,
                                 bit_depth,
@@ -83,10 +86,16 @@ impl SaveStage {
                             let v = ((px as f32).clamp(0.0, 1.0) * max).round() as u16;
                             write_pixel!(v, endianness);
                         }
-                        (SaveChannelType::F32, JxlDataFormat::F32 { endianness }) => {
+                        (
+                            SaveChannelType::F32 | SaveChannelType::F16,
+                            JxlDataFormat::F32 { endianness },
+                        ) => {
                             write_pixel!(px as f32, endianness);
                         }
-                        (SaveChannelType::F32, JxlDataFormat::F16 { endianness }) => {
+                        (
+                            SaveChannelType::F32 | SaveChannelType::F16,
+                            JxlDataFormat::F16 { endianness },
+                        ) => {
                             write_pixel!(f16::from_f64(px), endianness);
                         }
                         (

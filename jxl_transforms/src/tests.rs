@@ -5,7 +5,7 @@
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI, SQRT_2};
 
-use jxl_simd::{test_all_instruction_sets, ScalarDescriptor, SimdDescriptor};
+use jxl_simd::{f16, test_all_instruction_sets, ScalarDescriptor, SimdDescriptor};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
 use test_log::test;
@@ -192,7 +192,10 @@ macro_rules! test_reinterpreting_dct1d_eq_slow_n {
 
             let output_matrix_slow: Vec<Vec<f64>> = dct1d(&input_matrix_for_ref);
 
-            let mut output: Vec<_> = input_matrix_for_ref.iter().map(|x| x[0] as f32).collect();
+            let mut output: Vec<_> = input_matrix_for_ref
+                .iter()
+                .map(|x| f16::from_f32(x[0] as f32))
+                .collect();
             let d = ScalarDescriptor {};
 
             let (output_chunks, remainder) = output.as_chunks_mut::<1>();
@@ -203,7 +206,7 @@ macro_rules! test_reinterpreting_dct1d_eq_slow_n {
 
             for i in 0..N {
                 check_close(
-                    output[i] as f64,
+                    output[i].to_f32() as f64,
                     output_matrix_slow[i][0] / scales[i],
                     $tolerance,
                 );
@@ -216,31 +219,31 @@ test_reinterpreting_dct1d_eq_slow_n!(
     test_reinterpreting_dct1d_2_eq_slow,
     2,
     do_reinterpreting_dct_2,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct1d_eq_slow_n!(
     test_reinterpreting_dct1d_4_eq_slow,
     4,
     do_reinterpreting_dct_4,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct1d_eq_slow_n!(
     test_reinterpreting_dct1d_8_eq_slow,
     8,
     do_reinterpreting_dct_8,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct1d_eq_slow_n!(
     test_reinterpreting_dct1d_16_eq_slow,
     16,
     do_reinterpreting_dct_16,
-    5e-6
+    5e-3
 );
 test_reinterpreting_dct1d_eq_slow_n!(
     test_reinterpreting_dct1d_32_eq_slow,
     32,
     do_reinterpreting_dct_32,
-    5e-6
+    5e-3
 );
 
 fn random_matrix(n: usize, m: usize) -> Vec<Vec<f64>> {
@@ -264,7 +267,10 @@ macro_rules! test_idct1d_eq_slow_n {
 
             let output_matrix_slow: Vec<Vec<f64>> = idct1d(&input_matrix_for_ref);
 
-            let mut output: Vec<_> = input_matrix_for_ref.iter().map(|x| x[0] as f32).collect();
+            let mut output: Vec<_> = input_matrix_for_ref
+                .iter()
+                .map(|x| f16::from_f32(x[0] as f32))
+                .collect();
             let d = ScalarDescriptor {};
 
             let (output_chunks, remainder) = output.as_chunks_mut::<1>();
@@ -272,20 +278,24 @@ macro_rules! test_idct1d_eq_slow_n {
             $do_idct_fun(d, output_chunks, 1);
 
             for i in 0..N {
-                check_close(output[i] as f64, output_matrix_slow[i][0], $tolerance);
+                check_close(
+                    output[i].to_f32() as f64,
+                    output_matrix_slow[i][0],
+                    $tolerance,
+                );
             }
         }
     };
 }
 
-test_idct1d_eq_slow_n!(test_idct1d_2_eq_slow, 2, do_idct_2, 1e-6);
-test_idct1d_eq_slow_n!(test_idct1d_4_eq_slow, 4, do_idct_4, 1e-6);
-test_idct1d_eq_slow_n!(test_idct1d_8_eq_slow, 8, do_idct_8, 1e-6);
-test_idct1d_eq_slow_n!(test_idct1d_16_eq_slow, 16, do_idct_16, 1e-6);
-test_idct1d_eq_slow_n!(test_idct1d_32_eq_slow, 32, do_idct_32, 5e-6);
-test_idct1d_eq_slow_n!(test_idct1d_64_eq_slow, 64, do_idct_64, 5e-6);
-test_idct1d_eq_slow_n!(test_idct1d_128_eq_slow, 128, do_idct_128, 5e-5);
-test_idct1d_eq_slow_n!(test_idct1d_256_eq_slow, 256, do_idct_256, 5e-5);
+test_idct1d_eq_slow_n!(test_idct1d_2_eq_slow, 2, do_idct_2, 5e-3);
+test_idct1d_eq_slow_n!(test_idct1d_4_eq_slow, 4, do_idct_4, 5e-3);
+test_idct1d_eq_slow_n!(test_idct1d_8_eq_slow, 8, do_idct_8, 5e-3);
+test_idct1d_eq_slow_n!(test_idct1d_16_eq_slow, 16, do_idct_16, 1e-2);
+test_idct1d_eq_slow_n!(test_idct1d_32_eq_slow, 32, do_idct_32, 1e-2);
+test_idct1d_eq_slow_n!(test_idct1d_64_eq_slow, 64, do_idct_64, 2e-2);
+test_idct1d_eq_slow_n!(test_idct1d_128_eq_slow, 128, do_idct_128, 2e-2);
+test_idct1d_eq_slow_n!(test_idct1d_256_eq_slow, 256, do_idct_256, 3e-2);
 
 macro_rules! test_idct2d_eq_slow {
     ($test_name:ident, $rows:expr, $cols:expr, $fast_idct:ident, $tol:expr) => {
@@ -300,14 +310,18 @@ macro_rules! test_idct2d_eq_slow {
             let mut fast_input: Vec<_> = slow_input
                 .iter()
                 .flat_map(|x| x.iter())
-                .map(|x| *x as f32)
+                .map(|x| f16::from_f32(*x as f32))
                 .collect();
 
             $fast_idct(d, &mut fast_input);
 
             for r in 0..N {
                 for c in 0..M {
-                    check_close(fast_input[r * M + c] as f64, slow_output[r][c], $tol);
+                    check_close(
+                        fast_input[r * M + c].to_f32() as f64,
+                        slow_output[r][c],
+                        $tol,
+                    );
                 }
             }
         }
@@ -315,28 +329,28 @@ macro_rules! test_idct2d_eq_slow {
     };
 }
 
-test_idct2d_eq_slow!(test_idct2d_2_2_eq_slow, 2, 2, idct2d_2_2, 1e-6);
-test_idct2d_eq_slow!(test_idct2d_4_4_eq_slow, 4, 4, idct2d_4_4, 1e-6);
-test_idct2d_eq_slow!(test_idct2d_4_8_eq_slow, 4, 8, idct2d_4_8, 1e-6);
-test_idct2d_eq_slow!(test_idct2d_8_4_eq_slow, 8, 4, idct2d_8_4, 1e-6);
-test_idct2d_eq_slow!(test_idct2d_8_8_eq_slow, 8, 8, idct2d_8_8, 5e-6);
-test_idct2d_eq_slow!(test_idct2d_16_8_eq_slow, 16, 8, idct2d_16_8, 5e-6);
-test_idct2d_eq_slow!(test_idct2d_8_16_eq_slow, 8, 16, idct2d_8_16, 5e-6);
-test_idct2d_eq_slow!(test_idct2d_16_16_eq_slow, 16, 16, idct2d_16_16, 1e-5);
-test_idct2d_eq_slow!(test_idct2d_32_8_eq_slow, 32, 8, idct2d_32_8, 5e-6);
-test_idct2d_eq_slow!(test_idct2d_8_32_eq_slow, 8, 32, idct2d_8_32, 5e-6);
-test_idct2d_eq_slow!(test_idct2d_32_16_eq_slow, 32, 16, idct2d_32_16, 1e-5);
-test_idct2d_eq_slow!(test_idct2d_16_32_eq_slow, 16, 32, idct2d_16_32, 1e-5);
-test_idct2d_eq_slow!(test_idct2d_32_32_eq_slow, 32, 32, idct2d_32_32, 5e-5);
-test_idct2d_eq_slow!(test_idct2d_64_32_eq_slow, 64, 32, idct2d_64_32, 1e-4);
-test_idct2d_eq_slow!(test_idct2d_32_64_eq_slow, 32, 64, idct2d_32_64, 1e-4);
-test_idct2d_eq_slow!(test_idct2d_64_64_eq_slow, 64, 64, idct2d_64_64, 1e-4);
-test_idct2d_eq_slow!(test_idct2d_128_64_eq_slow, 128, 64, idct2d_128_64, 5e-4);
-test_idct2d_eq_slow!(test_idct2d_64_128_eq_slow, 64, 128, idct2d_64_128, 5e-4);
-test_idct2d_eq_slow!(test_idct2d_128_128_eq_slow, 128, 128, idct2d_128_128, 5e-4);
-test_idct2d_eq_slow!(test_idct2d_256_128_eq_slow, 256, 128, idct2d_256_128, 1e-3);
-test_idct2d_eq_slow!(test_idct2d_128_256_eq_slow, 128, 256, idct2d_128_256, 1e-3);
-test_idct2d_eq_slow!(test_idct2d_256_256_eq_slow, 256, 256, idct2d_256_256, 5e-3);
+test_idct2d_eq_slow!(test_idct2d_2_2_eq_slow, 2, 2, idct2d_2_2, 5e-3);
+test_idct2d_eq_slow!(test_idct2d_4_4_eq_slow, 4, 4, idct2d_4_4, 1e-2);
+test_idct2d_eq_slow!(test_idct2d_4_8_eq_slow, 4, 8, idct2d_4_8, 1e-2);
+test_idct2d_eq_slow!(test_idct2d_8_4_eq_slow, 8, 4, idct2d_8_4, 1e-2);
+test_idct2d_eq_slow!(test_idct2d_8_8_eq_slow, 8, 8, idct2d_8_8, 2e-2);
+test_idct2d_eq_slow!(test_idct2d_16_8_eq_slow, 16, 8, idct2d_16_8, 2e-2);
+test_idct2d_eq_slow!(test_idct2d_8_16_eq_slow, 8, 16, idct2d_8_16, 2e-2);
+test_idct2d_eq_slow!(test_idct2d_16_16_eq_slow, 16, 16, idct2d_16_16, 3e-2);
+test_idct2d_eq_slow!(test_idct2d_32_8_eq_slow, 32, 8, idct2d_32_8, 3e-2);
+test_idct2d_eq_slow!(test_idct2d_8_32_eq_slow, 8, 32, idct2d_8_32, 3e-2);
+test_idct2d_eq_slow!(test_idct2d_32_16_eq_slow, 32, 16, idct2d_32_16, 5e-2);
+test_idct2d_eq_slow!(test_idct2d_16_32_eq_slow, 16, 32, idct2d_16_32, 5e-2);
+test_idct2d_eq_slow!(test_idct2d_32_32_eq_slow, 32, 32, idct2d_32_32, 1e-1);
+test_idct2d_eq_slow!(test_idct2d_64_32_eq_slow, 64, 32, idct2d_64_32, 1e-1);
+test_idct2d_eq_slow!(test_idct2d_32_64_eq_slow, 32, 64, idct2d_32_64, 1e-1);
+test_idct2d_eq_slow!(test_idct2d_64_64_eq_slow, 64, 64, idct2d_64_64, 2e-1);
+test_idct2d_eq_slow!(test_idct2d_128_64_eq_slow, 128, 64, idct2d_128_64, 3e-1);
+test_idct2d_eq_slow!(test_idct2d_64_128_eq_slow, 64, 128, idct2d_64_128, 3e-1);
+test_idct2d_eq_slow!(test_idct2d_128_128_eq_slow, 128, 128, idct2d_128_128, 5e-1);
+test_idct2d_eq_slow!(test_idct2d_256_128_eq_slow, 256, 128, idct2d_256_128, 5e-1);
+test_idct2d_eq_slow!(test_idct2d_128_256_eq_slow, 128, 256, idct2d_128_256, 5e-1);
+test_idct2d_eq_slow!(test_idct2d_256_256_eq_slow, 256, 256, idct2d_256_256, 1.0);
 
 macro_rules! test_reinterpreting_dct_eq_slow {
     ($test_name:ident, $fun: ident, $rows:expr, $cols:expr, $tol:expr) => {
@@ -351,10 +365,10 @@ macro_rules! test_reinterpreting_dct_eq_slow {
             let mut fast_input: Vec<_> = slow_input
                 .iter()
                 .flat_map(|x| x.iter())
-                .map(|x| *x as f32)
+                .map(|x| f16::from_f32(*x as f32))
                 .collect();
 
-            let mut output = [0.0; $rows * $cols * 64];
+            let mut output = [f16::ZERO; $rows * $cols * 64];
 
             $fun(d, &mut fast_input, &mut output);
 
@@ -363,7 +377,11 @@ macro_rules! test_reinterpreting_dct_eq_slow {
 
             for r in 0..on {
                 for c in 0..om {
-                    check_close(output[r * om * 8 + c] as f64, slow_output[r][c], $tol);
+                    check_close(
+                        output[r * om * 8 + c].to_f32() as f64,
+                        slow_output[r][c],
+                        $tol,
+                    );
                 }
             }
         }
@@ -376,117 +394,117 @@ test_reinterpreting_dct_eq_slow!(
     reinterpreting_dct2d_1_2,
     1,
     2,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_2x1_eq_slow,
     reinterpreting_dct2d_2_1,
     2,
     1,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_2x2_eq_slow,
     reinterpreting_dct2d_2_2,
     2,
     2,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_1x4_eq_slow,
     reinterpreting_dct2d_1_4,
     1,
     4,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_4x1_eq_slow,
     reinterpreting_dct2d_4_1,
     4,
     1,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_2x4_eq_slow,
     reinterpreting_dct2d_2_4,
     2,
     4,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_4x2_eq_slow,
     reinterpreting_dct2d_4_2,
     4,
     2,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_4x4_eq_slow,
     reinterpreting_dct2d_4_4,
     4,
     4,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_8x4_eq_slow,
     reinterpreting_dct2d_8_4,
     8,
     4,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_4x8_eq_slow,
     reinterpreting_dct2d_4_8,
     4,
     8,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_8x8_eq_slow,
     reinterpreting_dct2d_8_8,
     8,
     8,
-    1e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_8x16_eq_slow,
     reinterpreting_dct2d_8_16,
     8,
     16,
-    5e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_16x8_eq_slow,
     reinterpreting_dct2d_16_8,
     16,
     8,
-    5e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_16x16_eq_slow,
     reinterpreting_dct2d_16_16,
     16,
     16,
-    5e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_32x16_eq_slow,
     reinterpreting_dct2d_32_16,
     32,
     16,
-    5e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_16x32_eq_slow,
     reinterpreting_dct2d_16_32,
     16,
     32,
-    5e-6
+    5e-3
 );
 test_reinterpreting_dct_eq_slow!(
     test_reinterpreting_dct_32x32_eq_slow,
     reinterpreting_dct2d_32_32,
     32,
     32,
-    5e-6
+    5e-3
 );

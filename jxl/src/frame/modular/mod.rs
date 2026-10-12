@@ -943,51 +943,79 @@ impl FullModularImage {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn dequant_lf(
-    r: Rect,
-    lf: &mut [OutputChannelRef],
-    quant_lf: &mut OutputChannelRef,
-    input: [RawImageRect<'_>; 3],
-    storage: ModularStorage,
-    color_correlation_params: &ColorCorrelationParams,
-    quant_params: &QuantizerParams,
-    lf_quant: &LfQuantFactors,
-    mul: f32,
-    frame_header: &FrameHeader,
-    bctx: &BlockContextMap,
-) -> Result<()> {
-    if storage == ModularStorage::I16 {
-        dequant_lf_impl::<i16>(
-            r,
-            lf,
-            quant_lf,
-            input.map(ImageRect::<i16>::from_raw),
-            color_correlation_params,
-            quant_params,
-            lf_quant,
-            mul,
-            frame_header,
-            bctx,
-        )
-    } else {
-        dequant_lf_impl::<i32>(
-            r,
-            lf,
-            quant_lf,
-            input.map(ImageRect::<i32>::from_raw),
-            color_correlation_params,
-            quant_params,
-            lf_quant,
-            mul,
-            frame_header,
-            bctx,
-        )
+jxl_simd::simd_function!(
+    dequant_lf,
+    d: D,
+    #[allow(clippy::too_many_arguments)]
+    fn dequant_lf_simd(
+        r: Rect,
+        lf: &mut [OutputChannelRef],
+        quant_lf: &mut OutputChannelRef,
+        input: [RawImageRect<'_>; 3],
+        storage: ModularStorage,
+        color_correlation_params: &ColorCorrelationParams,
+        quant_params: &QuantizerParams,
+        lf_quant: &LfQuantFactors,
+        mul: f32,
+        frame_header: &FrameHeader,
+        bctx: &BlockContextMap,
+    ) -> Result<()> {
+        if storage == ModularStorage::I16 {
+            dequant_lf_impl::<D, i16>(
+                d,
+                r,
+                lf,
+                quant_lf,
+                input.map(ImageRect::<i16>::from_raw),
+                color_correlation_params,
+                quant_params,
+                lf_quant,
+                mul,
+                frame_header,
+                bctx,
+            )
+        } else {
+            dequant_lf_impl::<D, i32>(
+                d,
+                r,
+                lf,
+                quant_lf,
+                input.map(ImageRect::<i32>::from_raw),
+                color_correlation_params,
+                quant_params,
+                lf_quant,
+                mul,
+                frame_header,
+                bctx,
+            )
+        }
+    }
+);
+
+trait LoadI32Simd: ImageDataType + Into<i32> + Copy {
+    fn load_i32_simd<D: jxl_simd::SimdDescriptor>(d: D, slice: &[Self]) -> D::I32Vec;
+}
+
+impl LoadI32Simd for i16 {
+    #[inline(always)]
+    fn load_i32_simd<D: jxl_simd::SimdDescriptor>(d: D, slice: &[Self]) -> D::I32Vec {
+        use jxl_simd::I32SimdVec;
+        D::I32Vec::load_from_i16(d, slice)
+    }
+}
+
+impl LoadI32Simd for i32 {
+    #[inline(always)]
+    fn load_i32_simd<D: jxl_simd::SimdDescriptor>(d: D, slice: &[Self]) -> D::I32Vec {
+        use jxl_simd::I32SimdVec;
+        D::I32Vec::load(d, slice)
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn dequant_lf_impl<T: ImageDataType + Into<i32> + Copy>(
+#[inline(always)]
+fn dequant_lf_impl<D: jxl_simd::SimdDescriptor, T: LoadI32Simd>(
+    d: D,
     r: Rect,
     lf: &mut [OutputChannelRef],
     quant_lf: &mut OutputChannelRef,
@@ -999,6 +1027,8 @@ fn dequant_lf_impl<T: ImageDataType + Into<i32> + Copy>(
     frame_header: &FrameHeader,
     bctx: &BlockContextMap,
 ) -> Result<()> {
+    use jxl_simd::{F32SimdVec, I32SimdVec};
+    let len = D::F32Vec::LEN;
     let inv_quant_lf = (quantizer::GLOBAL_SCALE_DENOM as f32)
         / (quant_params.global_scale as f32 * quant_params.quant_lf as f32);
     let lf_factors = lf_quant.quant_factors.map(|factor| factor * inv_quant_lf);
@@ -1012,20 +1042,43 @@ fn dequant_lf_impl<T: ImageDataType + Into<i32> + Copy>(
         let fac_b = lf_factors[2] * mul;
         let cfl_fac_x = color_correlation_params.y_to_x_lf();
         let cfl_fac_b = color_correlation_params.y_to_b_lf();
+        let fac_x_v = D::F32Vec::splat(d, fac_x);
+        let fac_y_v = D::F32Vec::splat(d, fac_y);
+        let fac_b_v = D::F32Vec::splat(d, fac_b);
+        let cfl_fac_x_v = D::F32Vec::splat(d, cfl_fac_x);
+        let cfl_fac_b_v = D::F32Vec::splat(d, cfl_fac_b);
+        let width = r.size.0;
         for y in 0..r.size.1 {
             let quant_row_x = input[1].row(y);
             let quant_row_y = input[0].row(y);
             let quant_row_b = input[2].row(y);
-            let dec_row_x = lf0.typed_row_mut::<f32>(y);
-            let dec_row_y = lf1.typed_row_mut::<f32>(y);
-            let dec_row_b = lf2.typed_row_mut::<f32>(y);
-            for x in 0..r.size.0 {
+            let dec_row_x = lf0.typed_row_mut::<crate::util::f16>(y);
+            let dec_row_y = lf1.typed_row_mut::<crate::util::f16>(y);
+            let dec_row_b = lf2.typed_row_mut::<crate::util::f16>(y);
+            let mut x = 0;
+            {
+                let dec_x_bits = crate::util::f16::slice_to_bits_mut(dec_row_x);
+                let dec_y_bits = crate::util::f16::slice_to_bits_mut(dec_row_y);
+                let dec_b_bits = crate::util::f16::slice_to_bits_mut(dec_row_b);
+                while x + len <= width {
+                    let in_x = T::load_i32_simd(d, &quant_row_x[x..]).as_f32() * fac_x_v;
+                    let in_y = T::load_i32_simd(d, &quant_row_y[x..]).as_f32() * fac_y_v;
+                    let in_b = T::load_i32_simd(d, &quant_row_b[x..]).as_f32() * fac_b_v;
+                    in_y.store_f16_bits(&mut dec_y_bits[x..]);
+                    in_y.mul_add(cfl_fac_x_v, in_x)
+                        .store_f16_bits(&mut dec_x_bits[x..]);
+                    in_y.mul_add(cfl_fac_b_v, in_b)
+                        .store_f16_bits(&mut dec_b_bits[x..]);
+                    x += len;
+                }
+            }
+            for x in x..width {
                 let in_x = quant_row_x[x].into() as f32 * fac_x;
                 let in_y = quant_row_y[x].into() as f32 * fac_y;
                 let in_b = quant_row_b[x].into() as f32 * fac_b;
-                dec_row_y[x] = in_y;
-                dec_row_x[x] = in_y * cfl_fac_x + in_x;
-                dec_row_b[x] = in_y * cfl_fac_b + in_b;
+                dec_row_y[x] = crate::util::f16::from_f32(in_y);
+                dec_row_x[x] = crate::util::f16::from_f32(in_y * cfl_fac_x + in_x);
+                dec_row_b[x] = crate::util::f16::from_f32(in_y * cfl_fac_b + in_b);
             }
         }
     } else {
@@ -1034,13 +1087,24 @@ fn dequant_lf_impl<T: ImageDataType + Into<i32> + Copy>(
                 r.size.0 >> frame_header.hshift(c),
                 r.size.1 >> frame_header.vshift(c),
             );
+            let width = rect_size.0;
             let fac = lf_factors[c] * mul;
+            let fac_v = D::F32Vec::splat(d, fac);
             let ch = &input[if c < 2 { c ^ 1 } else { c }];
             for y in 0..rect_size.1 {
                 let quant_row = ch.row(y);
-                let row = lf[c].typed_row_mut::<f32>(y);
-                for (x, val) in quant_row.iter().enumerate() {
-                    row[x] = (*val).into() as f32 * fac;
+                let row = lf[c].typed_row_mut::<crate::util::f16>(y);
+                let mut x = 0;
+                {
+                    let row_bits = crate::util::f16::slice_to_bits_mut(row);
+                    while x + len <= width {
+                        (T::load_i32_simd(d, &quant_row[x..]).as_f32() * fac_v)
+                            .store_f16_bits(&mut row_bits[x..]);
+                        x += len;
+                    }
+                }
+                for x in x..width {
+                    row[x] = crate::util::f16::from_f32(quant_row[x].into() as f32 * fac);
                 }
             }
         }

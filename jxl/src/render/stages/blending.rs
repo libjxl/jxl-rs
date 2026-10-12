@@ -23,11 +23,11 @@ pub struct BlendingStage {
     pub ec_patch_blending_info: Vec<PatchBlending>,
     pub extra_channels: Vec<ExtraChannelInfo>,
     pub reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
-    pub zeros: Vec<f32>,
+    pub zeros: Vec<crate::util::f16>,
 }
 
 struct BlendingScratch {
-    scratch: Vec<f32>,
+    scratch: Vec<crate::util::f16>,
 }
 
 impl BlendingScratch {
@@ -88,7 +88,7 @@ impl BlendingStage {
             ec_patch_blending_info,
             extra_channels: file_header.image_metadata.extra_channel_info.clone(),
             reference_frames,
-            zeros: vec![0f32; image_size.0],
+            zeros: vec![crate::util::f16::ZERO; image_size.0],
         })
     }
 }
@@ -100,7 +100,7 @@ impl std::fmt::Display for BlendingStage {
 }
 
 impl RenderPipelineInPlaceStage for BlendingStage {
-    type Type = f32;
+    type Type = crate::util::f16;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 + self.extra_channels.len()
@@ -114,7 +114,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         &self,
         position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
+        row: &mut [&mut [crate::util::f16]],
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
@@ -146,8 +146,8 @@ impl RenderPipelineInPlaceStage for BlendingStage {
 
         let total_channels = 3 + num_ec;
 
-        let zeros_slice: &[f32] = self.zeros.as_slice();
-        let mut fg_buf: ChannelVec<&[f32]> = ChannelVec::new();
+        let zeros_slice: &[crate::util::f16] = self.zeros.as_slice();
+        let mut fg_buf: ChannelVec<&[crate::util::f16]> = ChannelVec::new();
         for _ in 0..total_channels {
             fg_buf.push(zeros_slice);
         }
@@ -165,7 +165,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         let blending_info = PatchBlending::from(&self.blending_info);
 
         // Per-channel mutable slices into the in-place row buffer.
-        let mut bg_slices: ChannelVec<&mut [f32]> = ChannelVec::new();
+        let mut bg_slices: ChannelVec<&mut [crate::util::f16]> = ChannelVec::new();
         for r in row[..total_channels].iter_mut() {
             bg_slices.push(&mut r[bg_x0..bg_x1]);
         }

@@ -36,16 +36,16 @@ macro_rules! simd_function {
 #[macro_export]
 macro_rules! simd_function_body_neon {
     ($name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )?; ($($val:expr),* $(,)?)) => {
-        if cfg!(target_feature = "neon") {
-            // SAFETY: we just checked for neon.
+        if cfg!(all(target_feature = "neon", target_feature = "fp16")) {
+            // SAFETY: we just checked for neon and fp16.
             let d = unsafe { $crate::NeonDescriptor::new_unchecked() };
             return $name(d, $($val),*);
         } else if let Some(d) = $crate::NeonDescriptor::new() {
-            #[target_feature(enable = "neon")]
+            #[target_feature(enable = "neon,fp16")]
             fn neon(d: $crate::NeonDescriptor, $($arg: $ty),*) $(-> $ret)? {
                 $name(d, $($val),*)
             }
-            // SAFETY: we just checked for neon.
+            // SAFETY: we just checked for neon and fp16.
             return unsafe { neon(d, $($arg),*) };
         }
     };
@@ -86,11 +86,11 @@ macro_rules! test_neon {
             fn [<$name _neon>]() {
                 use $crate::SimdDescriptor;
                 let Some(d) = $crate::NeonDescriptor::new() else { return; };
-                #[target_feature(enable = "neon")]
+                #[target_feature(enable = "neon,fp16")]
                 fn inner(d: $crate::NeonDescriptor) {
                     $name(d)
                 }
-                // SAFETY: we just checked for neon.
+                // SAFETY: we just checked for neon and fp16.
                 return unsafe { inner(d) };
 
             }
