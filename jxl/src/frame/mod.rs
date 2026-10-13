@@ -387,19 +387,23 @@ impl Frame {
         if rem_ds <= 1 {
             return num_passes;
         }
+        let modular_passes = (0..num_passes)
+            .rev()
+            .find(|&p| {
+                self.lf_global
+                    .as_ref()
+                    .is_none_or(|lfg| !lfg.modular_global.hf_pass_is_empty(p))
+            })
+            .map_or(0, |p| p + 1);
         if self.header.encoding == Encoding::VarDCT {
             let vardct_passes = if rem_ds >= 8 {
                 0
             } else {
                 self.header.passes.num_passes_for_downsampling(rem_ds)
             };
-            if self.header.num_extra_channels > 0 {
-                vardct_passes.max(num_passes)
-            } else {
-                vardct_passes
-            }
+            vardct_passes.max(modular_passes)
         } else {
-            num_passes
+            modular_passes
         }
     }
 
@@ -489,6 +493,12 @@ impl Frame {
                 || (0..3).any(|ch| header.hshift(ch) != 0 || header.vshift(ch) != 0);
             has_subsampling && (!c.origin.0.is_multiple_of(16) || !c.origin.1.is_multiple_of(16))
         })
+    }
+
+    pub fn has_skipped_hf_channels(&self) -> bool {
+        self.lf_global
+            .as_ref()
+            .is_some_and(|lfg| lfg.modular_global.has_skipped_hf_channels())
     }
 
     pub fn toc(&self) -> &Toc {

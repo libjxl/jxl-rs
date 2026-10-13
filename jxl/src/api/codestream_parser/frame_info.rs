@@ -649,6 +649,28 @@ impl FrameInfo {
             return Ok(data_for_next_section);
         }
 
+        if frame.has_skipped_hf_channels() {
+            for &g in &self.candidate_hf_sections {
+                if !frame.needed_hf_group(g) {
+                    for grp in self.hf_sections[g].iter_mut() {
+                        *grp = None;
+                    }
+                } else {
+                    for p in max_passes..self.hf_sections[g].len() {
+                        self.hf_sections[g][p] = None;
+                    }
+                }
+            }
+            let all_ready = (0..self.hf_sections.len()).all(|g| {
+                !frame.needed_hf_group(g)
+                    || (self.section_state.completed_passes[g] as usize..max_passes)
+                        .all(|p| self.hf_sections[g][p].is_some())
+            });
+            if !all_ready {
+                return Ok(data_for_next_section);
+            }
+        }
+
         let mut group_readers = vec![];
         let mut processed_groups = vec![];
 

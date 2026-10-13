@@ -67,7 +67,7 @@ pub enum TransformStep {
 
 #[derive(Debug)]
 pub struct TransformStepChunk {
-    pub(super) step: TransformStep,
+    pub(in crate::frame::modular) step: TransformStep,
 
     // Grid position this transform should produce.
     // Note that this is a lie for Palette with AverageAll or Weighted, as the transform with

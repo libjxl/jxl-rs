@@ -257,11 +257,13 @@ impl Frame {
 
         let max_passes = self.max_needed_passes();
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+        let has_skipped_hf = modular_global.has_skipped_hf_channels();
 
         modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
 
         // STEP 1: figure out what modular buffers will be finalized during this decode, and mark them
         // as such.
+        let mut finished_skipped_hf_groups = Vec::new();
         for (group, passes) in groups.iter() {
             self.group_status.need_vardct_flush.insert(*group);
             self.group_status.need_modular_flush.insert(*group);
@@ -279,6 +281,9 @@ impl Frame {
             }
             for (pass, _) in passes.iter() {
                 modular_global.mark_final(2 + *pass, *group);
+            }
+            if has_skipped_hf && all_needed_done && !should_render_non_final {
+                finished_skipped_hf_groups.push(*group);
             }
         }
 
@@ -381,6 +386,11 @@ impl Frame {
                     modular_global.request_rerender(&self.header, group);
                 }
             }
+        } else {
+            for group in finished_skipped_hf_groups {
+                self.group_status.need_modular_flush.remove(&group);
+                modular_global.request_rerender(&self.header, group);
+            }
         }
 
         let largest_group_area = self.header.group_dim().min(self.header.size().0)
@@ -406,6 +416,7 @@ impl Frame {
         // STEP 3: Make sure modular_global is ready to run, and prepare the list of
         // all the decoding/rendering steps that we want to run.
         modular_global.prepare_render(&self.header, |g, c, is_final| {
+            let is_final = is_final || (has_skipped_hf && !should_render_non_final);
             let sz = self.header.group_rect(g).size;
             let area = sz.0 * sz.1;
             if area >= largest_group_area {
@@ -491,6 +502,7 @@ impl Frame {
         let storage = self.lf_global.as_ref().unwrap().modular_global.storage();
 
         let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
+            let complete = complete || (has_skipped_hf && !should_render_non_final);
             match storage {
                 ModularStorage::I16 => {
                     let image = Image::<i16>::from_raw(raw_image);

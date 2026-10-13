@@ -423,6 +423,14 @@ impl Frame {
                 None
             };
 
+            let eff_up = Self::effective_upsampling_div(&self.header, &self.decoder_state);
+            let rem_ds = self.decoder_state.downsampling / eff_up;
+            let ds_shift = if Self::is_leaf_frame(&self.header) && rem_ds > 1 {
+                (rem_ds.ilog2() as usize).min(3)
+            } else {
+                0
+            };
+
             let modular_global = FullModularImage::read(
                 &self.header,
                 &self.decoder_state.file_header.image_metadata,
@@ -432,6 +440,7 @@ impl Frame {
                 self.decoder_state.sample_limit,
                 self.decoder_state.modular_storage(),
                 self.decoder_state.level5_limits,
+                ds_shift,
             )?;
 
             // Ensure that, if we call this function again, we resume from just after
@@ -842,7 +851,11 @@ impl Frame {
 
         let lf_global = self.lf_global.as_ref().unwrap();
         let storage = lf_global.modular_global.storage();
+        let has_skipped_hf = lf_global.modular_global.has_skipped_hf_channels();
+        let all_needed_done =
+            max_passes == 0 || passes.last().is_some_and(|x| x.0 + 1 >= max_passes);
         let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
+            let complete = complete || (!force_render && has_skipped_hf && all_needed_done);
             match storage {
                 ModularStorage::I16 => {
                     let image = Image::<i16>::from_raw(raw_image);
