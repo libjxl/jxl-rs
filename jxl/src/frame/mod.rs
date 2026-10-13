@@ -24,7 +24,7 @@ use crate::headers::extra_channels::ExtraChannelInfo;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::permutation::Permutation;
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, Image, Rect};
+use crate::image::{BufferRecycler, Image, OwnedRawImage, Rect};
 use crate::render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter};
 use crate::util::PerThreadStorage;
 use crate::util::sync::{Arc, Mutex, RwLock};
@@ -135,6 +135,8 @@ pub struct DecoderState {
     // If this is set to `true`, early flushing in the main frame
     // (before HF is available) will do nothing.
     pub lf_frame_was_rendered: bool,
+    pub crop: Option<Rect>,
+    pub downsampling: usize,
 }
 
 impl DecoderState {
@@ -175,6 +177,8 @@ impl DecoderState {
             level5_limits,
             sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,
+            crop: None,
+            downsampling: 1,
         }
     }
 
@@ -340,9 +344,29 @@ pub struct Frame {
     // LF groups that received data or have modified neighbors and need to be previewed.
     lf_preview_dirty_groups: BTreeSet<usize>,
     frame_counters: (usize, usize),
+    pub(super) post_downsample_buffers: Vec<OwnedRawImage>,
 }
 
 impl Frame {
+    pub fn needs_post_downsample(&self) -> bool {
+        Self::needs_post_downsample_with(&self.header, &self.decoder_state)
+    }
+
+    pub fn needs_post_downsample_with(header: &FrameHeader, decoder_state: &DecoderState) -> bool {
+        if decoder_state.downsampling <= 1 || !header.is_visible() {
+            return false;
+        }
+        if header.have_crop {
+            return true;
+        }
+        decoder_state.crop.is_some_and(|c| {
+            let has_subsampling = header.upsampling > 1
+                || header.ec_upsampling.iter().any(|&u| u > 1)
+                || (0..3).any(|ch| header.hshift(ch) != 0 || header.vshift(ch) != 0);
+            has_subsampling && (!c.origin.0.is_multiple_of(16) || !c.origin.1.is_multiple_of(16))
+        })
+    }
+
     pub fn toc(&self) -> &Toc {
         &self.toc
     }

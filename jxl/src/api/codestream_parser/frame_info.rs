@@ -11,16 +11,16 @@ use crate::api::codestream_parser::{
     CodestreamParser, ProcessMode, check_size_limit, validate_output_buffers,
 };
 use crate::api::{
-    JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
+    JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat, Rect,
     SmallBuffer,
 };
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::frame::{DecoderState, Frame, HfMetaSplitter, LfImageSplitter, Section};
-use crate::headers::FileHeader;
 use crate::headers::encodings::UnconditionalCoder;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::{IncrementalTocReader, Toc};
+use crate::headers::{FileHeader, Orientation};
 use crate::util::NewWithCapacity;
 
 struct SectionBuffer {
@@ -210,6 +210,8 @@ impl FrameInfo {
         output_profile: &JxlColorProfile,
         process_mode: ProcessMode,
         level5_limits: bool,
+        crop: Option<Rect>,
+        downsampling: usize,
     ) -> Result<()> {
         self.section_size = toc.entries.iter().map(|x| *x as u64).sum();
         self.ready_section_data = 0;
@@ -240,6 +242,19 @@ impl FrameInfo {
                     DecoderState::new(file_header.clone(), decode_options, level5_limits)
                 });
             decoder_state.level5_limits = level5_limits;
+            let output_orientation = if decode_options.adjust_orientation {
+                file_header.image_metadata.orientation
+            } else {
+                Orientation::Identity
+            };
+            let unoriented_size = (
+                file_header.size.xsize() as usize,
+                file_header.size.ysize() as usize,
+            );
+            let oriented_size = output_orientation.map_size(unoriented_size);
+            decoder_state.crop =
+                crop.map(|c| output_orientation.inverse().display_rect(c, oriented_size));
+            decoder_state.downsampling = downsampling;
             decoder_state.keep_slots(std::mem::replace(&mut self.keep_slots, [true; 8]));
             let mut frame = Frame::from_header_and_toc(
                 self.frame_header.take().unwrap(),

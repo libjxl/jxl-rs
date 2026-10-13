@@ -180,7 +180,10 @@ impl Frame {
         output_profile: &JxlColorProfile,
         parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<bool> {
-        if self.header.needs_blending() {
+        if self.header.needs_blending()
+            || self.decoder_state.crop.is_some()
+            || self.decoder_state.downsampling > 1
+        {
             return Ok(false);
         }
         if !((self.header.has_lf_frame() && self.header.frame_type == FrameType::RegularFrame)

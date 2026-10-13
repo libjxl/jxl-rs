@@ -311,6 +311,7 @@ impl Frame {
             dirty_lf_groups: BTreeSet::new(),
             buffer_recycler: Arc::new(BufferRecycler::new(group_dim)),
             lf_preview_dirty_groups: BTreeSet::new(),
+            post_downsample_buffers: Vec::new(),
         }))
     }
 

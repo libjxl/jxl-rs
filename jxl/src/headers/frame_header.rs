@@ -349,7 +349,7 @@ pub struct FrameHeader {
 
     #[default(false)]
     #[condition(frame_type != FrameType::LFFrame)]
-    have_crop: bool,
+    pub have_crop: bool,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]

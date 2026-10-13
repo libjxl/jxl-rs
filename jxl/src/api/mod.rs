@@ -28,7 +28,7 @@ pub use signature::*;
 
 use crate::error::Result;
 pub use crate::headers::image_metadata::Orientation;
-pub use crate::image::JxlOutputBuffer;
+pub use crate::image::{JxlOutputBuffer, Rect};
 
 /// Events emitted by [`JxlDecoder::process`] as decoding progresses.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

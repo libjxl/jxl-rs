@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use crate::api::{
-    JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
+    Endianness, JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
     JxlPixelFormat,
 };
 use crate::bit_reader::BitReader;
@@ -125,6 +125,65 @@ impl Frame {
         }
 
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
+        let needs_post_ds = self.needs_post_downsample();
+        let mut api_formats: Vec<(JxlDataFormat, JxlColorType, usize)> = Vec::new();
+        if let Some(df) = pixel_format.color_data_format {
+            api_formats.push((
+                df,
+                pixel_format.color_type,
+                pixel_format.color_type.samples_per_pixel(),
+            ));
+        }
+        for df in pixel_format.extra_channel_format.iter().flatten() {
+            api_formats.push((*df, JxlColorType::Grayscale, 1));
+        }
+
+        let output_orientation = if self.decoder_state.adjust_orientation {
+            self.decoder_state.file_header.image_metadata.orientation
+        } else {
+            Orientation::Identity
+        };
+        let image_size = (
+            self.decoder_state.file_header.size.xsize() as usize,
+            self.decoder_state.file_header.size.ysize() as usize,
+        );
+        let unoriented_crop_size = if let Some(crop) = self.decoder_state.crop {
+            crop.clip(image_size).size
+        } else {
+            image_size
+        };
+        let full_oriented_size = output_orientation.map_size(unoriented_crop_size);
+
+        let mut post_downsample_buffers = std::mem::take(&mut self.post_downsample_buffers);
+        if needs_post_ds && let Some(api_buffers) = api_buffers.as_ref() {
+            let ds = self.decoder_state.downsampling;
+            let expected_size = (
+                full_oriented_size.0.div_ceil(ds),
+                full_oriented_size.1.div_ceil(ds),
+            );
+            for (b, &(df, ct, chans)) in api_buffers.iter().zip(api_formats.iter()) {
+                let expected_w = expected_size.0 * chans * df.bytes_per_sample();
+                if b.byte_size() != (expected_w, expected_size.1) {
+                    self.post_downsample_buffers = post_downsample_buffers;
+                    return Err(Error::InvalidOutputBufferSize(
+                        b.byte_size().0,
+                        b.byte_size().1,
+                        expected_size.0,
+                        expected_size.1,
+                        ct,
+                        df,
+                    ));
+                }
+            }
+            if post_downsample_buffers.is_empty() {
+                for &(df, _, chans) in &api_formats {
+                    post_downsample_buffers.push(OwnedRawImage::new((
+                        full_oriented_size.0 * chans * df.bytes_per_sample(),
+                        full_oriented_size.1,
+                    ))?);
+                }
+            }
+        }
 
         macro_rules! buffers_from_api {
             ($get_next: expr) => {
@@ -140,7 +199,17 @@ impl Frame {
             };
         }
 
-        if let Some(api_buffers) = api_buffers {
+        if needs_post_ds && api_buffers.is_some() {
+            let mut post_iter = post_downsample_buffers.iter_mut();
+            buffers_from_api!({
+                let img = post_iter.next().unwrap();
+                let rect = Rect {
+                    origin: (0, 0),
+                    size: img.byte_size(),
+                };
+                Some(JxlOutputBuffer::from_image_rect_mut(img.get_rect_mut(rect)))
+            });
+        } else if let Some(api_buffers) = api_buffers {
             let mut api_buffers_iter = api_buffers.iter_mut();
             buffers_from_api!(Some(JxlOutputBuffer::reborrow(
                 api_buffers_iter.next().unwrap(),
@@ -465,6 +534,21 @@ impl Frame {
 
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;
+
+        if needs_post_ds
+            && rendered
+            && let Some(api_buffers) = api_buffers.as_mut()
+        {
+            let ds = self.decoder_state.downsampling;
+            for ((src, dst), &(df, _, chans)) in post_downsample_buffers
+                .iter()
+                .zip(api_buffers.iter_mut())
+                .zip(api_formats.iter())
+            {
+                downsample_raw_to_output_buffer(src, dst, full_oriented_size, ds, chans, df);
+            }
+        }
+        self.post_downsample_buffers = post_downsample_buffers;
 
         if self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1 {
             let (gsx, gsy) = self.header.size_groups();
@@ -869,6 +953,13 @@ impl Frame {
                     (false, Some(c)) => &[0, 1, 2, c],
                 }
             };
+            let needs_post_ds = Self::needs_post_downsample_with(frame_header, decoder_state);
+            let api_crop = decoder_state.crop;
+            let api_save_downsample = if needs_post_ds {
+                0
+            } else {
+                decoder_state.downsampling.ilog2() as u8
+            };
             if let Some(df) = &pixel_format.color_data_format {
                 // Add premultiply stage if needed (before conversion to output format)
                 if should_premultiply && let Some(alpha_channel) = alpha_in_color {
@@ -883,13 +974,15 @@ impl Frame {
                         alpha_channel,
                     ));
                 }
-                pipeline = pipeline.add_save_stage(
+                pipeline = pipeline.add_save_stage_with_crop_downsample(
                     color_source_channels,
                     output_orientation,
                     0,
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
+                    api_crop,
+                    api_save_downsample,
                 );
             }
             let mut save_idx = if pixel_format.color_data_format.is_some() {
@@ -899,13 +992,15 @@ impl Frame {
             };
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
-                    pipeline = pipeline.add_save_stage(
+                    pipeline = pipeline.add_save_stage_with_crop_downsample(
                         &[3 + i],
                         output_orientation,
                         save_idx,
                         JxlColorType::Grayscale,
                         *df,
                         false,
+                        api_crop,
+                        api_save_downsample,
                     );
                     save_idx += 1;
                 }
@@ -966,5 +1061,120 @@ impl Frame {
         self.render_pipeline = Some(render_pipeline);
         self.section0_render_up_to_date = false;
         Ok(())
+    }
+}
+
+fn downsample_raw_to_output_buffer(
+    src: &OwnedRawImage,
+    dst: &mut JxlOutputBuffer<'_>,
+    src_size: (usize, usize),
+    ds: usize,
+    chans: usize,
+    df: JxlDataFormat,
+) {
+    use crate::image::f16;
+    use byteorder::{BigEndian, ByteOrder, LittleEndian};
+
+    let (src_w, src_h) = src_size;
+    let dst_w = src_w.div_ceil(ds);
+    let dst_h = src_h.div_ceil(ds);
+    let bps = df.bytes_per_sample();
+    let pixel_bytes = chans * bps;
+
+    let read_sample = |bytes: &[u8]| -> f32 {
+        match df {
+            JxlDataFormat::U8 { .. } => bytes[0] as f32,
+            JxlDataFormat::U16 {
+                endianness: Endianness::LittleEndian,
+                ..
+            } => LittleEndian::read_u16(bytes) as f32,
+            JxlDataFormat::U16 {
+                endianness: Endianness::BigEndian,
+                ..
+            } => BigEndian::read_u16(bytes) as f32,
+            JxlDataFormat::F16 {
+                endianness: Endianness::LittleEndian,
+                ..
+            } => f16::from_bits(LittleEndian::read_u16(bytes)).to_f32(),
+            JxlDataFormat::F16 {
+                endianness: Endianness::BigEndian,
+                ..
+            } => f16::from_bits(BigEndian::read_u16(bytes)).to_f32(),
+            JxlDataFormat::F32 {
+                endianness: Endianness::LittleEndian,
+                ..
+            } => LittleEndian::read_f32(bytes),
+            JxlDataFormat::F32 {
+                endianness: Endianness::BigEndian,
+                ..
+            } => BigEndian::read_f32(bytes),
+        }
+    };
+
+    let write_sample = |bytes: &mut [u8], val: f32| match df {
+        JxlDataFormat::U8 { .. } => {
+            bytes[0] = val.round().clamp(0.0, u8::MAX as f32) as u8;
+        }
+        JxlDataFormat::U16 {
+            endianness: Endianness::LittleEndian,
+            ..
+        } => {
+            LittleEndian::write_u16(bytes, val.round().clamp(0.0, u16::MAX as f32) as u16);
+        }
+        JxlDataFormat::U16 {
+            endianness: Endianness::BigEndian,
+            ..
+        } => {
+            BigEndian::write_u16(bytes, val.round().clamp(0.0, u16::MAX as f32) as u16);
+        }
+        JxlDataFormat::F16 {
+            endianness: Endianness::LittleEndian,
+            ..
+        } => {
+            LittleEndian::write_u16(bytes, f16::from_f32(val).to_bits());
+        }
+        JxlDataFormat::F16 {
+            endianness: Endianness::BigEndian,
+            ..
+        } => {
+            BigEndian::write_u16(bytes, f16::from_f32(val).to_bits());
+        }
+        JxlDataFormat::F32 {
+            endianness: Endianness::LittleEndian,
+            ..
+        } => {
+            LittleEndian::write_f32(bytes, val);
+        }
+        JxlDataFormat::F32 {
+            endianness: Endianness::BigEndian,
+            ..
+        } => {
+            BigEndian::write_f32(bytes, val);
+        }
+    };
+
+    let mut row_buf = vec![0u8; dst_w * pixel_bytes];
+    for oy in 0..dst_h {
+        let sy0 = oy * ds;
+        let sy1 = (sy0 + ds).min(src_h);
+        for ox in 0..dst_w {
+            let sx0 = ox * ds;
+            let sx1 = (sx0 + ds).min(src_w);
+            let count = ((sy1 - sy0) * (sx1 - sx0)) as f32;
+            let inv_count = 1.0 / count;
+            for c in 0..chans {
+                let mut sum = 0.0f32;
+                for sy in sy0..sy1 {
+                    let src_row = src.row(sy);
+                    for sx in sx0..sx1 {
+                        let offset = sx * pixel_bytes + c * bps;
+                        sum += read_sample(&src_row[offset..offset + bps]);
+                    }
+                }
+                let dst_offset = ox * pixel_bytes + c * bps;
+                write_sample(&mut row_buf[dst_offset..dst_offset + bps], sum * inv_count);
+            }
+        }
+        dst.row_mut(oy)[..row_buf.len()].copy_from_slice(&row_buf);
     }
 }
