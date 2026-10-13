@@ -56,6 +56,10 @@ pub struct VisibleFrameSeekTarget {
 }
 
 /// JPEG XL decoder.
+///
+/// Internal buffers and scratch allocations are retained across frames and across calls to
+/// [`Self::reset`] so that they can be reused without reallocating. To release this memory,
+/// drop the `JxlDecoder`.
 pub struct JxlDecoder {
     options: JxlDecoderOptions,
     box_parser: BoxParser,
@@ -71,6 +75,16 @@ impl JxlDecoder {
             box_parser,
             codestream_parser: CodestreamParser::new(),
         }
+    }
+
+    /// Resets the decoder to its initial state so it can be reused to decode a new file with the
+    /// same [`JxlDecoderOptions`].
+    ///
+    /// Internal buffers and scratch allocations are retained across resets to avoid repeated
+    /// allocations when decoding multiple images.
+    pub fn reset(&mut self) {
+        self.box_parser.reset();
+        self.codestream_parser.reset();
     }
 
     #[cfg(test)]

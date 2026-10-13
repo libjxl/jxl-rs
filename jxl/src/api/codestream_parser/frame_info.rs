@@ -21,7 +21,9 @@ use crate::headers::FileHeader;
 use crate::headers::encodings::UnconditionalCoder;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::{IncrementalTocReader, Toc};
+use crate::image::BufferRecycler;
 use crate::util::NewWithCapacity;
+use crate::util::sync::Arc;
 
 struct SectionBuffer {
     len: usize,
@@ -56,6 +58,7 @@ pub struct FrameInfo {
     frame: Option<Box<Frame>>,
     // Keeps track of whether pixels have been modified.
     pixels_dirty: bool,
+    buffer_recycler: Arc<BufferRecycler>,
 
     // Section information.
     sections: VecDeque<SectionBuffer>,
@@ -95,6 +98,7 @@ impl FrameInfo {
             hf_sections: vec![],
             candidate_hf_sections: HashSet::new(),
             pixels_dirty: false,
+            buffer_recycler: Arc::new(BufferRecycler::new()),
             frame_counters: (0, 0),
             keep_slots: [true; 8],
         }
@@ -106,6 +110,7 @@ impl FrameInfo {
         self.clear();
         if keep_slots == [false; 8] {
             self.frame = None;
+            self.pixels_dirty = false;
         }
         self.frame_counters = frame_counters;
         self.keep_slots = keep_slots;
@@ -114,6 +119,7 @@ impl FrameInfo {
     pub fn clear(&mut self) {
         self.frame_header = None;
         self.toc_parser = None;
+        self.section_size = 0;
         self.ready_section_data = 0;
 
         // Clear sections
@@ -246,6 +252,7 @@ impl FrameInfo {
                 toc,
                 decoder_state,
                 self.frame_counters,
+                self.buffer_recycler.clone(),
             )?;
 
             let num_groups = frame.header().num_groups();

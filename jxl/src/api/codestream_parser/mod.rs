@@ -154,6 +154,25 @@ impl CodestreamParser {
         }
     }
 
+    pub(super) fn reset(&mut self) {
+        self.state = ParserState::FileHeader;
+        self.image_info = ImageInfo::new();
+        self.frame_info.reset((0, 0), [false; 8]);
+        self.frame_scan_info = FrameScanInfo::new();
+        self.file_length = None;
+        self.local_buffer.reset();
+        self.header_needed_bytes = None;
+        self.output_color_profile = None;
+        self.pixel_format = None;
+        self.visible_frames_to_skip = None;
+        self.next_frame_index = 0;
+        self.slot_frames = [None; 8];
+        #[cfg(test)]
+        {
+            self.frames_decoded = 0;
+        }
+    }
+
     pub(super) fn start_new_frame(
         &mut self,
         seek_target: &VisibleFrameSeekTarget,
@@ -180,7 +199,7 @@ impl CodestreamParser {
         let keep_slots = std::array::from_fn(|s| kept(s, start.frame_index));
         self.slot_frames = std::array::from_fn(|s| have[s].filter(|_| keep_slots[s]));
         self.frame_info.reset(start.frame_counters, keep_slots);
-        self.local_buffer = SmallBuffer::new(4096);
+        self.local_buffer.reset();
         self.local_buffer
             .mark_consumed(start.box_parser_checkpoint.consumed_codestream);
         self.visible_frames_to_skip = (start.frame_index < seek_target.target.frame_index)

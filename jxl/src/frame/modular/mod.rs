@@ -26,7 +26,7 @@ use crate::render::buffer_splitter::OutputChannelRef;
 use crate::util::sync::Mutex;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
 use crate::util::tracing_wrappers::*;
-use crate::util::{CeilLog2, PerThreadStorage, PerThreadStorageRef};
+use crate::util::{CeilLog2, PerThreadStorageRef};
 
 mod buffers;
 mod decode;
@@ -213,7 +213,7 @@ impl ModularBufferInfo {
 use crate::frame::modular::decode::specialized_trees::LUT_TABLE_SIZE;
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 
-pub(super) struct ScratchSpace {
+pub(crate) struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 4],
     decode_row_scratch: [Vec<i32>; 3],
@@ -228,7 +228,7 @@ impl Debug for ScratchSpace {
 }
 
 impl ScratchSpace {
-    fn new() -> ScratchSpace {
+    pub(crate) fn new() -> ScratchSpace {
         ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![], vec![], vec![]],
@@ -249,7 +249,6 @@ impl ScratchSpace {
 /// transforms to each of the groups in the input of the transforms.
 #[derive(Debug)]
 pub struct FullModularImage {
-    scratch_space: PerThreadStorage<ScratchSpace>,
     buffer_info: Vec<ModularBufferInfo>,
     transform_steps: Vec<TransformStepChunk>,
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
@@ -268,7 +267,7 @@ pub struct FullModularImage {
     pipeline_used_channels: Vec<bool>,
     // Stack of transforms that are ready to process
     ready_transform_steps: Mutex<Vec<usize>>,
-    pub(super) recycler: Arc<BufferRecycler>,
+    recycler: Arc<BufferRecycler>,
     storage: ModularStorage,
     pub(super) level5_limits: bool,
 }
@@ -279,7 +278,7 @@ pub(super) fn max_channels(level5_limits: bool) -> usize {
 
 impl FullModularImage {
     pub(super) fn get_scratch_space(&self) -> PerThreadStorageRef<'_, ScratchSpace> {
-        self.scratch_space.get()
+        self.recycler.modular_scratch.get()
     }
 
     #[inline(always)]
@@ -355,7 +354,6 @@ impl FullModularImage {
 
         if channels.is_empty() {
             return Ok(Self {
-                scratch_space: PerThreadStorage::new(ScratchSpace::new),
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
@@ -556,7 +554,6 @@ impl FullModularImage {
         let can_do_partial_render = !has_problematic_palette_transform && !has_small_group_tiles;
 
         Ok(FullModularImage {
-            scratch_space: PerThreadStorage::new(ScratchSpace::new),
             buffer_info,
             transform_steps,
             section_buffer_indices,
@@ -588,7 +585,7 @@ impl FullModularImage {
     ) -> Result<bool> {
         let allow_partial = allow_partial && self.can_do_early_partial_render;
         let mut decoded_if_partial = 0;
-        let mut scratch = self.scratch_space.get();
+        let mut scratch = self.recycler.modular_scratch.get();
         let ret = with_buffers(
             &self.buffer_info,
             &self.section_buffer_indices[0],
@@ -681,7 +678,7 @@ impl FullModularImage {
             }
         };
 
-        let mut scratch = self.scratch_space.get();
+        let mut scratch = self.recycler.modular_scratch.get();
         with_buffers(
             &self.buffer_info,
             &self.section_buffer_indices[section_id],
@@ -909,7 +906,7 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, OwnedRawImage) -> Result<()>,
     ) -> Result<()> {
-        let mut scratch_space = self.scratch_space.get();
+        let mut scratch_space = self.recycler.modular_scratch.get();
         loop {
             let Some(t) = self.ready_transform_steps.lock().unwrap().pop() else {
                 return Ok(());

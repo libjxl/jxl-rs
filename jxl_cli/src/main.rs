@@ -175,16 +175,17 @@ fn main() -> Result<()> {
     let mut duration_sum = Duration::new(0, 0);
     // When extracting preview, don't skip it; otherwise skip preview by default
     let skip_preview = !opt.preview;
+    let mut decoder = JxlDecoder::new(options(skip_preview));
 
     macro_rules! run_decoder {
-        ($input: expr) => {{
+        ($input: expr, $prev_output: expr) => {{
             #[cfg(feature = "exr")]
             let linear_output = matches!(output_format, Some(OutputFormat::Exr));
             #[cfg(not(feature = "exr"))]
             let linear_output = false;
             let (mut output, duration) = dec::decode_frames(
                 $input,
-                options(skip_preview),
+                &mut decoder,
                 opt.override_bitdepth,
                 opt.data_type,
                 output_format
@@ -195,6 +196,7 @@ fn main() -> Result<()> {
                 linear_output,
                 opt.render_interval,
                 opt.allow_partial_files,
+                $prev_output,
             )?;
             if opt.preview {
                 output.frames.truncate(1);
@@ -213,14 +215,15 @@ fn main() -> Result<()> {
         let mut input_bytes = Vec::<u8>::new();
         file.read_to_end(&mut input_bytes)?;
 
-        for _ in 0..opt.warmup_reps {
-            run_decoder!(&mut input_bytes.as_slice());
-        }
-
         let mut last_output = None;
 
+        for _ in 0..opt.warmup_reps {
+            let (output, _) = run_decoder!(&mut input_bytes.as_slice(), last_output.take());
+            last_output = Some(output);
+        }
+
         for _ in 0..opt.num_reps {
-            let (output, duration) = run_decoder!(&mut input_bytes.as_slice());
+            let (output, duration) = run_decoder!(&mut input_bytes.as_slice(), last_output.take());
             duration_sum += duration;
             last_output = Some(output);
         }
@@ -228,10 +231,10 @@ fn main() -> Result<()> {
     } else if opt.render_interval.is_some() {
         let mut input_bytes = Vec::<u8>::new();
         file.read_to_end(&mut input_bytes)?;
-        run_decoder!(&mut input_bytes.as_slice()).0
+        run_decoder!(&mut input_bytes.as_slice(), None).0
     } else {
         // For single decode without speedtest, stream from file
-        run_decoder!(&mut BufReader::new(file)).0
+        run_decoder!(&mut BufReader::new(file), None).0
     };
 
     // Get metadata from typed output before converting

@@ -28,17 +28,17 @@ use crate::{BLOCK_DIM, BLOCK_SIZE, GROUP_DIM};
 const LF_BUFFER_SIZE: usize = 32 * 32;
 
 /// Reusable buffers for VarDCT group decoding to avoid repeated allocations.
-pub struct VarDctBuffers {
-    pub scratch: Vec<f32>,
-    pub transform_buffer: [Vec<f32>; 3],
+pub(crate) struct VarDctBuffers {
+    pub(super) scratch: Vec<f32>,
+    pub(super) transform_buffer: [Vec<f32>; 3],
     /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
-    pub coeffs_storage: Vec<CacheLine>,
-    pub num_nzeros_storage: Vec<[u8; 32]>,
-    pub lf_upsample_bufs: Option<(RowBuffer, RowBuffer, usize)>,
+    pub(super) coeffs_storage: Vec<CacheLine>,
+    pub(super) num_nzeros_storage: Vec<[u8; 32]>,
+    pub(super) lf_upsample_bufs: Option<(RowBuffer, RowBuffer, usize)>,
 }
 
 impl VarDctBuffers {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             scratch: vec![],
             transform_buffer: [vec![], vec![], vec![]],
@@ -48,13 +48,13 @@ impl VarDctBuffers {
         }
     }
 
-    pub fn ensure_num_nzeros(&mut self, num_passes: usize) {
+    pub(super) fn ensure_num_nzeros(&mut self, num_passes: usize) {
         let needed = num_passes * 3;
         self.num_nzeros_storage.clear();
         self.num_nzeros_storage.resize(needed, [0u8; 32]);
     }
 
-    pub fn ensure_allocated(&mut self) -> Result<()> {
+    pub(super) fn ensure_allocated(&mut self) -> Result<()> {
         if !self.scratch.is_empty() {
             return Ok(());
         }

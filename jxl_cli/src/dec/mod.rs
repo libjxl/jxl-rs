@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
     Endianness, Event, ExtraChannel, JxlAnimation, JxlBitDepth, JxlBitstreamInput,
-    JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
-    JxlOutputBuffer, JxlParallelRunner, JxlParallelRunnerFun, JxlPixelFormat,
+    JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder, JxlOutputBuffer,
+    JxlParallelRunner, JxlParallelRunnerFun, JxlPixelFormat,
 };
 use jxl::image::{OwnedRawImage, Rect, f16};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -133,7 +133,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub fn decode_frames<In: JxlBitstreamInputExt>(
     input: &mut In,
-    decoder_options: JxlDecoderOptions,
+    decoder: &mut JxlDecoder,
     requested_bit_depth: Option<usize>,
     requested_output_type: Option<OutputDataType>,
     accepted_output_types: &[OutputDataType],
@@ -142,11 +142,15 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     linear_output: bool,
     render_interval: Option<usize>,
     allow_partial_files: bool,
+    prev_output: Option<DecodeOutput>,
 ) -> Result<(DecodeOutput, Duration)> {
+    let mut recycled_buffers: Vec<Vec<OwnedRawImage>> = prev_output
+        .map(|out| out.frames.into_iter().rev().map(|f| f.channels).collect())
+        .unwrap_or_default();
     let start = Instant::now();
     let total_bytes = input.available_bytes()?;
 
-    let mut decoder = JxlDecoder::new(decoder_options);
+    decoder.reset();
     while input.with_capped_size(render_interval, |inp| decoder.process(inp, None, None))?
         != Event::BasicInfo
     {
@@ -262,12 +266,17 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         samples_per_pixel
     };
 
-    let make_outputs = || -> Result<Vec<OwnedRawImage>> {
+    let mut make_outputs = || -> Result<Vec<OwnedRawImage>> {
         let byte_size = (info.size.0 * output_type.bits_per_sample() / 8, info.size.1);
-        let mut outputs = vec![OwnedRawImage::new((
-            byte_size.0 * samples_per_pixel,
-            byte_size.1,
-        ))?];
+        let color_byte_size = (byte_size.0 * samples_per_pixel, byte_size.1);
+        if let Some(outputs) = recycled_buffers.pop()
+            && outputs.len() == 1 + extra_channels
+            && outputs[0].byte_size() == color_byte_size
+            && outputs[1..].iter().all(|x| x.byte_size() == byte_size)
+        {
+            return Ok(outputs);
+        }
+        let mut outputs = vec![OwnedRawImage::new(color_byte_size)?];
         for _ in 0..extra_channels {
             outputs.push(OwnedRawImage::new(byte_size)?);
         }

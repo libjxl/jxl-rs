@@ -10,7 +10,7 @@ pub mod enc;
 mod tests {
     use std::path::PathBuf;
 
-    use jxl::api::JxlDecoderOptions;
+    use jxl::api::{JxlDecoder, JxlDecoderOptions};
 
     use crate::dec::{DecodeOutput, OutputDataType, decode_frames};
 
@@ -69,9 +69,10 @@ mod tests {
     }
 
     fn do_decode(mut input: &[u8], ty: OutputDataType) -> DecodeOutput {
+        let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
         decode_frames(
             &mut input,
-            JxlDecoderOptions::default(),
+            &mut decoder,
             None,
             None,
             &[ty],
@@ -80,6 +81,7 @@ mod tests {
             false,
             None,
             false,
+            None,
         )
         .unwrap()
         .0
@@ -177,13 +179,14 @@ mod tests {
         }
         let file = std::fs::read(&path).unwrap();
 
+        let mut options = JxlDecoderOptions::default();
+        options.high_precision = true;
+        let mut decoder = JxlDecoder::new(options);
         for ty in OutputDataType::ALL {
-            let mut options = JxlDecoderOptions::default();
-            options.high_precision = true;
             let mut input = file.as_slice();
             decode_frames(
                 &mut input,
-                options,
+                &mut decoder,
                 None,
                 None,
                 &[*ty],
@@ -192,6 +195,7 @@ mod tests {
                 false,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
