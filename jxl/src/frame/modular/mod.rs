@@ -271,6 +271,7 @@ pub struct FullModularImage {
     pub(super) recycler: Arc<BufferRecycler>,
     storage: ModularStorage,
     pub(super) level5_limits: bool,
+    has_cross_group_deps: bool,
 }
 
 pub(super) fn max_channels(level5_limits: bool) -> usize {
@@ -294,6 +295,10 @@ impl FullModularImage {
 
     pub fn can_do_early_partial_render(&self) -> bool {
         self.can_do_early_partial_render
+    }
+
+    pub fn has_cross_group_deps(&self) -> bool {
+        self.has_cross_group_deps
     }
 
     pub fn set_pipeline_used_channels(&mut self, used: &[bool]) {
@@ -373,6 +378,7 @@ impl FullModularImage {
                 recycler,
                 storage,
                 level5_limits,
+                has_cross_group_deps: false,
             });
         }
 
@@ -574,6 +580,7 @@ impl FullModularImage {
             recycler,
             storage,
             level5_limits,
+            has_cross_group_deps: has_squeeze_transform || has_small_group_tiles,
         })
     }
 

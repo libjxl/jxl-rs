@@ -255,6 +255,7 @@ impl Frame {
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
+        let max_passes = self.max_needed_passes();
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
 
         modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
@@ -264,11 +265,10 @@ impl Frame {
         for (group, passes) in groups.iter() {
             self.group_status.need_vardct_flush.insert(*group);
             self.group_status.need_modular_flush.insert(*group);
+            let all_needed_done =
+                max_passes == 0 || passes.last().is_some_and(|x| x.0 + 1 >= max_passes);
             if self.header.encoding == Encoding::VarDCT {
-                let status = if passes
-                    .last()
-                    .is_some_and(|x| x.0 + 1 >= self.header.passes.num_passes as usize)
-                {
+                let status = if all_needed_done {
                     DataStatus::Final
                 } else {
                     DataStatus::Partial
@@ -312,16 +312,43 @@ impl Frame {
         }
 
         let has_decoded_data = match self.header.encoding {
-            Encoding::VarDCT => self.hf_global.is_some() || self.header.has_lf_frame(),
+            Encoding::VarDCT => {
+                self.hf_global.is_some() || self.header.has_lf_frame() || max_passes == 0
+            }
             Encoding::Modular => modular_global.has_decoded_data(),
         };
+
+        if self.decoder_state.crop.is_some() {
+            let has_cross_group_deps = modular_global.has_cross_group_deps();
+            for g in 0..self.header.num_groups() {
+                if !Self::needed_hf_group_with(
+                    &self.header,
+                    &self.decoder_state,
+                    has_cross_group_deps,
+                    g,
+                ) {
+                    for c in 0..self.group_status.channel_status[g].len() {
+                        self.group_status.update_status(g, c, DataStatus::Final);
+                    }
+                    pipeline_mut!(self, p, p.mark_group_skipped(g));
+                }
+            }
+        }
 
         // If section0 data is dirty, re-render everything.
         if !self.section0_render_up_to_date && has_decoded_data {
             self.section0_render_up_to_date = true;
+            let has_cross_group_deps = modular_global.has_cross_group_deps();
             for g in 0..self.header.num_groups() {
-                self.group_status.need_vardct_flush.insert(g);
-                self.group_status.need_modular_flush.insert(g);
+                if Self::needed_hf_group_with(
+                    &self.header,
+                    &self.decoder_state,
+                    has_cross_group_deps,
+                    g,
+                ) {
+                    self.group_status.need_vardct_flush.insert(g);
+                    self.group_status.need_modular_flush.insert(g);
+                }
             }
         }
 
@@ -644,10 +671,25 @@ impl Frame {
             channel_types.push((DataTypeTag::U16, None));
         }
 
+        let is_leaf = Self::is_leaf_frame(frame_header);
+        let eff_up = Self::effective_upsampling_div(frame_header, decoder_state);
+        let rem_ds = decoder_state.downsampling / eff_up;
+        let skip_filters = is_leaf && rem_ds >= 2;
+        let pipeline_size = if eff_up > 1 {
+            frame_header.size()
+        } else {
+            frame_header.size_upsampled()
+        };
+        let downsampling_shift = if eff_up > 1 {
+            0
+        } else {
+            frame_header.upsampling.ilog2() as usize
+        };
+
         let mut pipeline = RenderPipelineBuilder::<T>::new(
             &channel_types,
-            frame_header.size_upsampled(),
-            frame_header.upsampling.ilog2() as usize,
+            pipeline_size,
+            downsampling_shift,
             frame_header.log_group_dim(),
             buffer_recycler,
         );
@@ -673,7 +715,7 @@ impl Frame {
         }
 
         let filters = &frame_header.restoration_filter;
-        if filters.gab {
+        if filters.gab && !skip_filters {
             pipeline = pipeline.add_inout_stage(GaborishStage::new(
                 [
                     filters.gab_x_weight1,
@@ -689,29 +731,31 @@ impl Frame {
         }
 
         let rf = &frame_header.restoration_filter;
-        if rf.epf_iters >= 3 {
-            pipeline = pipeline.add_inout_stage(Epf0Stage::new(
-                rf.epf_pass0_sigma_scale,
-                rf.epf_border_sad_mul,
-                rf.epf_channel_scale,
-                epf_sigma.clone(),
-            ))
-        }
-        if rf.epf_iters >= 1 {
-            pipeline = pipeline.add_inout_stage(Epf1Stage::new(
-                1.0,
-                rf.epf_border_sad_mul,
-                rf.epf_channel_scale,
-                epf_sigma.clone(),
-            ))
-        }
-        if rf.epf_iters >= 2 {
-            pipeline = pipeline.add_inout_stage(Epf2Stage::new(
-                rf.epf_pass2_sigma_scale,
-                rf.epf_border_sad_mul,
-                rf.epf_channel_scale,
-                epf_sigma.clone(),
-            ))
+        if !skip_filters {
+            if rf.epf_iters >= 3 {
+                pipeline = pipeline.add_inout_stage(Epf0Stage::new(
+                    rf.epf_pass0_sigma_scale,
+                    rf.epf_border_sad_mul,
+                    rf.epf_channel_scale,
+                    epf_sigma.clone(),
+                ))
+            }
+            if rf.epf_iters >= 1 {
+                pipeline = pipeline.add_inout_stage(Epf1Stage::new(
+                    1.0,
+                    rf.epf_border_sad_mul,
+                    rf.epf_channel_scale,
+                    epf_sigma.clone(),
+                ))
+            }
+            if rf.epf_iters >= 2 {
+                pipeline = pipeline.add_inout_stage(Epf2Stage::new(
+                    rf.epf_pass2_sigma_scale,
+                    rf.epf_border_sad_mul,
+                    rf.epf_channel_scale,
+                    epf_sigma.clone(),
+                ))
+            }
         }
 
         let late_ec_upsample = frame_header.upsampling > 1
@@ -746,7 +790,7 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(SplinesStage::new(splines))
         }
 
-        if frame_header.upsampling > 1 {
+        if frame_header.upsampling > 1 && eff_up == 1 {
             let transform_data = &decoder_state.file_header.transform_data;
             let nb_channels = if late_ec_upsample {
                 3 + frame_header.ec_upsampling.len()
@@ -954,11 +998,14 @@ impl Frame {
                 }
             };
             let needs_post_ds = Self::needs_post_downsample_with(frame_header, decoder_state);
-            let api_crop = decoder_state.crop;
+            let api_crop = decoder_state.crop.map(|c| Rect {
+                origin: (c.origin.0 / eff_up, c.origin.1 / eff_up),
+                size: (c.size.0 / eff_up, c.size.1 / eff_up),
+            });
             let api_save_downsample = if needs_post_ds {
                 0
             } else {
-                decoder_state.downsampling.ilog2() as u8
+                rem_ds.ilog2() as u8
             };
             if let Some(df) = &pixel_format.color_data_format {
                 // Add premultiply stage if needed (before conversion to output format)

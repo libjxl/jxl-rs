@@ -464,6 +464,7 @@ impl Frame {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn decode_lf_group(
         header: &FrameHeader,
         decoder_state: &DecoderState,
@@ -472,6 +473,7 @@ impl Frame {
         br: &mut BitReader,
         lf_splitter: Option<&LfImageSplitter>,
         hf_meta_splitter: Option<&HfMetaSplitter>,
+        need_hf_meta: bool,
     ) -> Result<()> {
         debug!(section_size = br.total_bits_available());
         let r = header.lf_group_rect(group);
@@ -516,7 +518,7 @@ impl Frame {
             br,
             None,
         )?;
-        if header.encoding == Encoding::VarDCT {
+        if header.encoding == Encoding::VarDCT && need_hf_meta {
             info!("decoding HF metadata with group id {}", group);
             let splitter_hf = hf_meta_splitter.as_ref().unwrap();
             let mut hf_views = HfMetaViews {
@@ -598,9 +600,10 @@ impl Frame {
                 .max()
                 .unwrap_or(0);
             let use_i16 = max_num_bits < 16;
+            let max_needed_passes = self.max_needed_passes();
             // Since the render pipeline keeps finalized channels, we only need to store
             // HF coefficients across calls if passes are decoded incrementally.
-            let hf_coefficients = if passes.len() <= 1 {
+            let hf_coefficients = if max_needed_passes <= 1 {
                 vec![]
             } else {
                 (0..self.header.num_groups())
@@ -616,8 +619,11 @@ impl Frame {
                 use_i16,
             });
         }
+        let eff_up = Self::effective_upsampling_div(&self.header, &self.decoder_state);
+        let skip_filters =
+            Self::is_leaf_frame(&self.header) && (self.decoder_state.downsampling / eff_up) >= 2;
         // Set EPF sigma values to the correct values if we are doing EPF.
-        if self.header.restoration_filter.epf_iters > 0 {
+        if self.header.restoration_filter.epf_iters > 0 && !skip_filters {
             *self.epf_sigma.try_write().unwrap() = SigmaSource::new(
                 &self.header,
                 self.lf_global.as_ref().unwrap(),
@@ -772,7 +778,9 @@ impl Frame {
         };
 
         let mut vardct_buffers = self.vardct_buffers.get();
-        if self.group_status.channel_status[group][0] == DataStatus::Zero && render_vardct {
+        let use_lf_upsample = self.group_status.channel_status[group][0] == DataStatus::Zero
+            || self.max_needed_passes() == 0;
+        if use_lf_upsample && render_vardct {
             info!("Upsampling LF for group {group}");
             upsample_lf_group(
                 group,
@@ -825,8 +833,9 @@ impl Frame {
         buffer_splitter: &BufferSplitter,
         force_render: bool,
     ) -> Result<()> {
+        let max_passes = self.max_needed_passes();
         if passes.is_empty() {
-            assert!(force_render);
+            assert!(force_render || max_passes == 0);
         }
 
         self.decode_and_render_varct_and_noise(group, passes, buffer_splitter, force_render)?;

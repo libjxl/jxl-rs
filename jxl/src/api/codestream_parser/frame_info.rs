@@ -34,6 +34,7 @@ struct SectionState {
     lf_global_done: bool,
     remaining_lf: usize,
     hf_global_done: bool,
+    hf_groups_done: bool,
     completed_passes: Vec<u8>,
     lf_global_flush_len: usize,
 }
@@ -44,6 +45,7 @@ impl SectionState {
             lf_global_done: false,
             remaining_lf: num_lf_groups,
             hf_global_done: false,
+            hf_groups_done: false,
             completed_passes: vec![0; num_groups],
             lf_global_flush_len: 0,
         }
@@ -470,6 +472,11 @@ impl FrameInfo {
     ) -> Result<bool> {
         let mut br = BitReader::new(buf);
         frame.decode_lf_global(&mut br, !is_complete)?;
+        let max_passes = if is_complete {
+            frame.max_needed_passes()
+        } else {
+            frame.header.passes.num_passes as usize
+        };
         {
             let lf_splitter = frame.lf_image.as_mut().map(LfImageSplitter::new);
             let hf_meta_splitter = frame.hf_meta.as_mut().map(HfMetaSplitter::new);
@@ -481,15 +488,23 @@ impl FrameInfo {
                 &mut br,
                 lf_splitter.as_ref(),
                 hf_meta_splitter.as_ref(),
+                max_passes > 0,
             )?;
         }
         frame.post_decode_lf_group(0);
-        frame.decode_hf_global(&mut br)?;
+        if max_passes > 0 {
+            frame.decode_hf_global(&mut br)?;
+        }
         frame.finalize_lf(parallel_runner)?;
+        let group_readers = if max_passes > 0 {
+            vec![(0, vec![(0, br)])]
+        } else {
+            vec![(0, vec![])]
+        };
         frame.decode_and_render_hf_groups(
             output_buffers,
             pixel_format,
-            vec![(0, vec![(0, br)])],
+            group_readers,
             do_flush,
             output_profile,
             parallel_runner,
@@ -542,6 +557,20 @@ impl FrameInfo {
             return Ok(data_for_next_section);
         }
 
+        let max_passes = frame.max_needed_passes();
+        let need_hf_meta = max_passes > 0;
+        self.lf_sections.retain(|lf_section| {
+            let Section::Lf { group } = lf_section.section else {
+                unreachable!()
+            };
+            if frame.needed_lf_group(group) {
+                true
+            } else {
+                self.section_state.remaining_lf -= 1;
+                false
+            }
+        });
+
         {
             let lf_splitter = frame.lf_image.as_mut().map(LfImageSplitter::new);
             let hf_meta_splitter = frame.hf_meta.as_mut().map(HfMetaSplitter::new);
@@ -565,6 +594,7 @@ impl FrameInfo {
                         &mut BitReader::new(&lf_section.data),
                         lf_splitter.as_ref(),
                         hf_meta_splitter.as_ref(),
+                        need_hf_meta,
                     )?;
                     Ok(())
                 },
@@ -584,7 +614,9 @@ impl FrameInfo {
         }
 
         if let Some(hf_global) = self.hf_global_section.take() {
-            frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
+            if max_passes > 0 {
+                frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
+            }
             frame.finalize_lf(parallel_runner)?;
             self.section_state.hf_global_done = true;
         }
@@ -593,11 +625,37 @@ impl FrameInfo {
             return Ok(data_for_next_section);
         }
 
+        if max_passes == 0 {
+            for g in self.candidate_hf_sections.drain() {
+                for grp in self.hf_sections[g].iter_mut() {
+                    *grp = None;
+                }
+            }
+            if !self.section_state.hf_groups_done {
+                self.section_state.hf_groups_done = true;
+                let group_readers: Vec<_> = (0..frame.header().num_groups())
+                    .filter(|&g| frame.needed_hf_group(g))
+                    .map(|g| (g, vec![]))
+                    .collect();
+                self.pixels_dirty |= frame.decode_and_render_hf_groups(
+                    &mut output_buffers,
+                    pixel_format,
+                    group_readers,
+                    false,
+                    output_profile,
+                    parallel_runner,
+                )?;
+            }
+            return Ok(data_for_next_section);
+        }
+
         let mut group_readers = vec![];
         let mut processed_groups = vec![];
 
         let mut check_group = |g: usize| {
+            let needed = frame.needed_hf_group(g);
             let mut sections = vec![];
+            let mut advanced = false;
             for (pass, grp) in self.hf_sections[g]
                 .iter()
                 .enumerate()
@@ -607,10 +665,15 @@ impl FrameInfo {
                     break;
                 };
                 self.section_state.completed_passes[g] += 1;
-                sections.push((pass, BitReader::new(&s.data)));
+                advanced = true;
+                if needed && pass < max_passes {
+                    sections.push((pass, BitReader::new(&s.data)));
+                }
             }
             if !sections.is_empty() {
                 group_readers.push((g, sections));
+            }
+            if advanced {
                 processed_groups.push(g);
             }
         };
@@ -631,19 +694,28 @@ impl FrameInfo {
             self.candidate_hf_sections.clear();
         }
 
-        self.pixels_dirty |= frame.decode_and_render_hf_groups(
-            &mut output_buffers,
-            pixel_format,
-            group_readers,
-            false,
-            output_profile,
-            parallel_runner,
-        )?;
+        if !group_readers.is_empty() || !self.section_state.hf_groups_done {
+            self.pixels_dirty |= frame.decode_and_render_hf_groups(
+                &mut output_buffers,
+                pixel_format,
+                group_readers,
+                false,
+                output_profile,
+                parallel_runner,
+            )?;
+        }
 
         for g in processed_groups.into_iter() {
             for i in 0..self.section_state.completed_passes[g] {
                 self.hf_sections[g][i as usize] = None;
             }
+        }
+
+        if (0..self.hf_sections.len()).all(|g| {
+            !frame.needed_hf_group(g)
+                || self.section_state.completed_passes[g] as usize >= max_passes
+        }) {
+            self.section_state.hf_groups_done = true;
         }
 
         Ok(data_for_next_section)
@@ -656,6 +728,9 @@ impl FrameInfo {
         pixel_format: &JxlPixelFormat,
         parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<()> {
+        if self.section_state.hf_groups_done {
+            return Ok(());
+        }
         let Some(frame) = self.frame.as_mut() else {
             return Ok(());
         };

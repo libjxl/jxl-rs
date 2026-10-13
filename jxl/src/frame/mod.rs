@@ -348,6 +348,130 @@ pub struct Frame {
 }
 
 impl Frame {
+    pub fn is_leaf_frame(header: &FrameHeader) -> bool {
+        !header.can_be_referenced && header.lf_level == 0
+    }
+
+    pub fn effective_upsampling_div(header: &FrameHeader, decoder_state: &DecoderState) -> usize {
+        if !Self::is_leaf_frame(header)
+            || header.have_crop
+            || header.needs_blending()
+            || header.has_patches()
+            || header.has_splines()
+            || header.has_noise()
+            || header.upsampling <= 1
+            || decoder_state.downsampling < header.upsampling as usize
+            || !header.ec_upsampling.iter().all(|&x| x == header.upsampling)
+        {
+            return 1;
+        }
+        let u = header.upsampling as usize;
+        if let Some(c) = decoder_state.crop
+            && (!c.origin.0.is_multiple_of(u)
+                || !c.origin.1.is_multiple_of(u)
+                || !c.size.0.is_multiple_of(u)
+                || !c.size.1.is_multiple_of(u))
+        {
+            return 1;
+        }
+        u
+    }
+
+    pub fn max_needed_passes(&self) -> usize {
+        let num_passes = self.header.passes.num_passes as usize;
+        if !Self::is_leaf_frame(&self.header) || self.decoder_state.downsampling <= 1 {
+            return num_passes;
+        }
+        let eff_up = Self::effective_upsampling_div(&self.header, &self.decoder_state);
+        let rem_ds = self.decoder_state.downsampling / eff_up;
+        if rem_ds <= 1 {
+            return num_passes;
+        }
+        if self.header.encoding == Encoding::VarDCT {
+            let vardct_passes = if rem_ds >= 8 {
+                0
+            } else {
+                self.header.passes.num_passes_for_downsampling(rem_ds)
+            };
+            if self.header.num_extra_channels > 0 {
+                vardct_passes.max(num_passes)
+            } else {
+                vardct_passes
+            }
+        } else {
+            num_passes
+        }
+    }
+
+    pub fn needed_hf_group(&self, group: usize) -> bool {
+        let has_cross_group_deps = self
+            .lf_global
+            .as_ref()
+            .is_some_and(|lfg| lfg.modular_global.has_cross_group_deps());
+        Self::needed_hf_group_with(
+            &self.header,
+            &self.decoder_state,
+            has_cross_group_deps,
+            group,
+        )
+    }
+
+    pub fn needed_hf_group_with(
+        header: &FrameHeader,
+        decoder_state: &DecoderState,
+        has_cross_group_deps: bool,
+        group: usize,
+    ) -> bool {
+        if !Self::is_leaf_frame(header) || header.have_crop || has_cross_group_deps {
+            return true;
+        }
+        let Some(crop) = decoder_state.crop else {
+            return true;
+        };
+        let u = header.upsampling as usize;
+        let group_px = header.group_dim() * u;
+        let halo = (group_px + 64 * u).max(2 * decoder_state.downsampling) as isize;
+        let r = header.group_rect(group);
+        let gx0 = (r.origin.0 * u) as isize;
+        let gy0 = (r.origin.1 * u) as isize;
+        let gx1 = gx0 + (r.size.0 * u) as isize;
+        let gy1 = gy0 + (r.size.1 * u) as isize;
+        let cx0 = crop.origin.0 as isize - halo;
+        let cy0 = crop.origin.1 as isize - halo;
+        let cx1 = (crop.origin.0 + crop.size.0) as isize + halo;
+        let cy1 = (crop.origin.1 + crop.size.1) as isize + halo;
+        gx0 < cx1 && gx1 > cx0 && gy0 < cy1 && gy1 > cy0
+    }
+
+    pub fn needed_lf_group(&self, lf_group: usize) -> bool {
+        if !Self::is_leaf_frame(&self.header) || self.header.have_crop {
+            return true;
+        }
+        let Some(crop) = self.decoder_state.crop else {
+            return true;
+        };
+        if self
+            .lf_global
+            .as_ref()
+            .is_some_and(|lfg| lfg.modular_global.has_cross_group_deps())
+        {
+            return true;
+        }
+        let u = self.header.upsampling as usize;
+        let group_px = self.header.group_dim() * u;
+        let halo = (group_px + 80 * u).max(2 * self.decoder_state.downsampling) as isize;
+        let r = self.header.lf_group_rect(lf_group);
+        let gx0 = (r.origin.0 * 8 * u) as isize;
+        let gy0 = (r.origin.1 * 8 * u) as isize;
+        let gx1 = gx0 + (r.size.0 * 8 * u) as isize;
+        let gy1 = gy0 + (r.size.1 * 8 * u) as isize;
+        let cx0 = crop.origin.0 as isize - halo;
+        let cy0 = crop.origin.1 as isize - halo;
+        let cx1 = (crop.origin.0 + crop.size.0) as isize + halo;
+        let cy1 = (crop.origin.1 + crop.size.1) as isize + halo;
+        gx0 < cx1 && gx1 > cx0 && gy0 < cy1 && gy1 > cy0
+    }
+
     pub fn needs_post_downsample(&self) -> bool {
         Self::needs_post_downsample_with(&self.header, &self.decoder_state)
     }

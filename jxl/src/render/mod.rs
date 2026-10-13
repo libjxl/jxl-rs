@@ -139,6 +139,9 @@ pub trait RenderPipeline: Sized {
     // Marks a group for being re-rendered later.
     fn mark_group_to_rerender(&mut self, g: usize);
 
+    // Marks a group as intentionally skipped so pipelines waiting for all groups know it is done.
+    fn mark_group_skipped(&mut self, _g: usize) {}
+
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,
     ) -> Box<dyn RunInOutStage<Self::Buffer>>;
