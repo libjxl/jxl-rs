@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::api::{Event, JxlDecoder, JxlDecoderOptions, ProfileLevel};
+use jxl::api::{Event, JxlDecoder, JxlDecoderOptions, ProfileLevel, Rect};
 use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
@@ -25,6 +25,61 @@ const VERSION_STRING: &str = concat!(
     env!("VERGEN_RUSTC_SEMVER"),
     ")"
 );
+
+fn parse_crop(s: &str) -> std::result::Result<Rect, String> {
+    let (x0, y0, w, h) = if let Some((wh, xy)) = s.split_once('+') {
+        let (w_str, h_str) = wh.split_once('x').ok_or_else(|| {
+            format!("Invalid crop rectangle '{s}': expected WxH+X0+Y0 or x0,y0,w,h")
+        })?;
+        let (x0_str, y0_str) = xy.split_once('+').ok_or_else(|| {
+            format!("Invalid crop rectangle '{s}': expected WxH+X0+Y0 or x0,y0,w,h")
+        })?;
+        (
+            x0_str
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+            y0_str
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+            w_str
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+            h_str
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+        )
+    } else {
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() != 4 {
+            return Err(format!(
+                "Crop rectangle '{s}' must have 4 numbers (x0,y0,w,h or WxH+X0+Y0)"
+            ));
+        }
+        (
+            parts[0]
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+            parts[1]
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+            parts[2]
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+            parts[3]
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid crop rectangle '{s}': {e}"))?,
+        )
+    };
+    if w == 0 || h == 0 {
+        return Err(format!(
+            "Crop rectangle '{s}' width and height must be non-zero"
+        ));
+    }
+    Ok(Rect {
+        origin: (x0, y0),
+        size: (w, h),
+    })
+}
 
 #[derive(Parser)]
 #[command(version = VERSION_STRING)]
@@ -94,6 +149,14 @@ struct Opt {
     /// Allow Level 10 limits instead of the default Level 5 limits.
     #[clap(long)]
     allow_level10: bool,
+
+    /// Crop rectangle in full-resolution oriented image coordinates (x0,y0,w,h or WxH+X0+Y0).
+    #[clap(long, value_parser = parse_crop)]
+    crop: Option<Rect>,
+
+    /// Downsampling factor (1, 2, 4, 8, 16, 32, or 64).
+    #[clap(long, default_value_t = 1)]
+    downsampling: usize,
 }
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
@@ -182,7 +245,7 @@ fn main() -> Result<()> {
             let linear_output = matches!(output_format, Some(OutputFormat::Exr));
             #[cfg(not(feature = "exr"))]
             let linear_output = false;
-            let (mut output, duration) = dec::decode_frames(
+            let (mut output, duration) = dec::decode_frames_with_crop_and_downsampling(
                 $input,
                 options(skip_preview),
                 opt.override_bitdepth,
@@ -195,6 +258,8 @@ fn main() -> Result<()> {
                 linear_output,
                 opt.render_interval,
                 opt.allow_partial_files,
+                opt.crop,
+                opt.downsampling,
             )?;
             if opt.preview {
                 output.frames.truncate(1);
