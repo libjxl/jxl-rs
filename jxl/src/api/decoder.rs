@@ -134,6 +134,56 @@ impl JxlDecoder {
         self.codestream_parser.output_color_profile.as_ref()
     }
 
+    /// Specifies the preferred color profile to be used for outputting data.
+    ///
+    /// Can only be called after [`Event::BasicInfo`](crate::api::Event::BasicInfo)
+    /// and before the first frame header is decoded. Without an external CMS,
+    /// non-XYB images only support outputting in their embedded color profile,
+    /// and XYB images only support outputting to a [`JxlColorProfile::Simple`]
+    /// encoding whose channel count (grayscale vs RGB) matches the image.
+    pub fn set_output_color_profile(&mut self, profile: JxlColorProfile) -> Result<()> {
+        if !self.codestream_parser.image_info.is_complete() {
+            return Err(Error::ApiUsageError(
+                "cannot set output color profile before BasicInfo",
+            ));
+        }
+        if self.codestream_parser.is_mid_frame_decode()
+            && self.codestream_parser.output_color_profile.as_ref() != Some(&profile)
+        {
+            return Err(Error::ApiUsageError(
+                "cannot change output color profile during frame decoding",
+            ));
+        }
+        let embedded = self.codestream_parser.image_info.embedded_color_profile();
+        if !self.codestream_parser.image_info.xyb_encoded() {
+            if &profile != embedded {
+                return Err(Error::ApiUsageError(
+                    "non-XYB image cannot convert to a different output color profile without CMS",
+                ));
+            }
+        } else {
+            if !profile.can_output_to() {
+                return Err(Error::ApiUsageError(
+                    "XYB image cannot output to ICC or XYB color profile without CMS",
+                ));
+            }
+            let expected_channels = if self.codestream_parser.image_info.is_gray() {
+                1
+            } else {
+                3
+            };
+            if profile.channels() != expected_channels {
+                return Err(Error::ApiUsageError(
+                    "output color profile channel count does not match image",
+                ));
+            }
+        }
+        self.codestream_parser.output_color_profile = Some(profile);
+        self.codestream_parser.output_color_profile_set_by_user = true;
+        self.codestream_parser.rebuild_current_frame_pipeline()?;
+        Ok(())
+    }
+
     /// Retrieves the current pixel format for output buffers, if available.
     pub fn current_pixel_format(&self) -> Option<&JxlPixelFormat> {
         self.codestream_parser.pixel_format.as_ref()
@@ -145,9 +195,8 @@ impl JxlDecoder {
     /// manually before.
     ///
     /// Frame render pipelines are built for the pixel format that is current
-    /// when the frame's TOC is parsed, so the format can only be changed after
-    /// [`Event::BasicInfo`](crate::api::Event::BasicInfo) and before the first
-    /// frame header is decoded.
+    /// when the frame's TOC is parsed, or rebuilt if updated before the frame's
+    /// sections are decoded.
     pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) -> Result<()> {
         // TODO(veluca): return an error if we are asking for both planar and
         // interleaved-in-color alpha.
@@ -156,21 +205,16 @@ impl JxlDecoder {
                 "cannot set pixel format before BasicInfo",
             ));
         }
-        let frame_header_was_decoded = self
-            .codestream_parser
-            .frame_info
-            .current_frame_header()
-            .is_some()
-            || !self.codestream_parser.scanned_frames().is_empty();
-        if frame_header_was_decoded
+        if self.codestream_parser.is_mid_frame_decode()
             && self.codestream_parser.pixel_format.as_ref() != Some(&pixel_format)
         {
             return Err(Error::ApiUsageError(
-                "cannot change pixel format after first frame header",
+                "cannot change pixel format during frame decoding",
             ));
         }
         self.codestream_parser.pixel_format = Some(pixel_format);
         self.codestream_parser.update_default_output_options();
+        self.codestream_parser.rebuild_current_frame_pipeline()?;
         Ok(())
     }
 

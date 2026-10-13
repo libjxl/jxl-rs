@@ -717,6 +717,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jxl_c"
+version = "0.8.0"
+dependencies = [
+ "jxl",
+]
+
+[[package]]
 name = "jxl_cli"
 version = "0.8.0"
 dependencies = [
