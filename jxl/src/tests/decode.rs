@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use crate::api::{
-    Event, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat, TestOptions,
-    VisibleFrameInfo,
+    AlphaMode, Event, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat,
+    TestOptions, VisibleFrameInfo,
 };
 use crate::error::{Error, Result};
 use crate::headers::FileHeader;
@@ -25,7 +25,7 @@ pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub disable_16bit_modular_buffers: bool,
     pub allow_partial: bool,
     pub pixel_format: Option<JxlPixelFormat>,
-    pub premultiply_output: bool,
+    pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
 }
 
@@ -40,7 +40,7 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
             disable_16bit_modular_buffers: false,
             allow_partial: false,
             pixel_format: None,
-            premultiply_output: false,
+            alpha_mode: AlphaMode::AsIs,
             adjust_orientation: true,
         }
     }
@@ -67,7 +67,7 @@ pub fn decode<'a, T: ImageDataType>(
     let mut parallel_runner = params.parallel_runner;
     let options = JxlDecoderOptions {
         adjust_orientation: params.adjust_orientation,
-        premultiply_output: params.premultiply_output,
+        alpha_mode: params.alpha_mode,
         test_options: TestOptions {
             use_simple_pipeline: params.use_simple_pipeline,
             disable_16bit_modular_buffers: params.disable_16bit_modular_buffers,

@@ -12,7 +12,7 @@ use modular::{FullModularImage, ModularStorage, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
-use crate::api::{JxlDecoderOptions, JxlParallelRunner};
+use crate::api::{AlphaMode, JxlDecoderOptions, JxlParallelRunner};
 use crate::entropy_coding::decode::Histograms;
 use crate::error::Result;
 use crate::features::epf::SigmaSource;
@@ -127,7 +127,7 @@ pub struct DecoderState {
     #[cfg(test)]
     pub allow_16bit_modular_buffers: bool,
     pub high_precision: bool,
-    pub premultiply_output: bool,
+    pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
     pub level5_limits: bool,
     pub sample_limit: Option<usize>,
@@ -170,7 +170,7 @@ impl DecoderState {
             #[cfg(test)]
             allow_16bit_modular_buffers: !options.test_options.disable_16bit_modular_buffers,
             high_precision: options.high_precision,
-            premultiply_output: options.premultiply_output,
+            alpha_mode: options.alpha_mode,
             adjust_orientation: options.adjust_orientation,
             level5_limits,
             sample_limit: options.sample_limit,
