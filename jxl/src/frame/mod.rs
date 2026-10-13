@@ -24,7 +24,7 @@ use crate::headers::extra_channels::ExtraChannelInfo;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::permutation::Permutation;
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, Image, Rect};
+use crate::image::{BufferRecycler, Image, OwnedRawImage, Rect};
 use crate::render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter};
 use crate::util::PerThreadStorage;
 use crate::util::sync::{Arc, Mutex, RwLock};
@@ -135,6 +135,8 @@ pub struct DecoderState {
     // If this is set to `true`, early flushing in the main frame
     // (before HF is available) will do nothing.
     pub lf_frame_was_rendered: bool,
+    pub crop: Option<Rect>,
+    pub downsampling: usize,
 }
 
 impl DecoderState {
@@ -175,6 +177,8 @@ impl DecoderState {
             level5_limits,
             sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,
+            crop: None,
+            downsampling: 1,
         }
     }
 
@@ -340,9 +344,163 @@ pub struct Frame {
     // LF groups that received data or have modified neighbors and need to be previewed.
     lf_preview_dirty_groups: BTreeSet<usize>,
     frame_counters: (usize, usize),
+    pub(super) post_downsample_buffers: Vec<OwnedRawImage>,
 }
 
 impl Frame {
+    pub fn is_leaf_frame(header: &FrameHeader) -> bool {
+        !header.can_be_referenced && header.lf_level == 0
+    }
+
+    pub fn effective_upsampling_div(header: &FrameHeader, decoder_state: &DecoderState) -> usize {
+        if !Self::is_leaf_frame(header)
+            || header.have_crop
+            || header.needs_blending()
+            || header.has_patches()
+            || header.has_splines()
+            || header.has_noise()
+            || header.upsampling <= 1
+            || decoder_state.downsampling < header.upsampling as usize
+            || !header.ec_upsampling.iter().all(|&x| x == header.upsampling)
+        {
+            return 1;
+        }
+        let u = header.upsampling as usize;
+        if let Some(c) = decoder_state.crop
+            && (!c.origin.0.is_multiple_of(u)
+                || !c.origin.1.is_multiple_of(u)
+                || !c.size.0.is_multiple_of(u)
+                || !c.size.1.is_multiple_of(u))
+        {
+            return 1;
+        }
+        u
+    }
+
+    pub fn max_needed_passes(&self) -> usize {
+        let num_passes = self.header.passes.num_passes as usize;
+        if !Self::is_leaf_frame(&self.header) || self.decoder_state.downsampling <= 1 {
+            return num_passes;
+        }
+        let eff_up = Self::effective_upsampling_div(&self.header, &self.decoder_state);
+        let rem_ds = self.decoder_state.downsampling / eff_up;
+        if rem_ds <= 1 {
+            return num_passes;
+        }
+        let modular_passes = (0..num_passes)
+            .rev()
+            .find(|&p| {
+                self.lf_global
+                    .as_ref()
+                    .is_none_or(|lfg| !lfg.modular_global.hf_pass_is_empty(p))
+            })
+            .map_or(0, |p| p + 1);
+        if self.header.encoding == Encoding::VarDCT {
+            let vardct_passes = if rem_ds >= 8 {
+                0
+            } else {
+                self.header.passes.num_passes_for_downsampling(rem_ds)
+            };
+            vardct_passes.max(modular_passes)
+        } else {
+            modular_passes
+        }
+    }
+
+    pub fn needed_hf_group(&self, group: usize) -> bool {
+        let has_cross_group_deps = self
+            .lf_global
+            .as_ref()
+            .is_some_and(|lfg| lfg.modular_global.has_cross_group_deps());
+        Self::needed_hf_group_with(
+            &self.header,
+            &self.decoder_state,
+            has_cross_group_deps,
+            group,
+        )
+    }
+
+    pub fn needed_hf_group_with(
+        header: &FrameHeader,
+        decoder_state: &DecoderState,
+        has_cross_group_deps: bool,
+        group: usize,
+    ) -> bool {
+        if !Self::is_leaf_frame(header) || header.have_crop || has_cross_group_deps {
+            return true;
+        }
+        let Some(crop) = decoder_state.crop else {
+            return true;
+        };
+        let u = header.upsampling as usize;
+        let group_px = header.group_dim() * u;
+        let halo = (group_px + 64 * u).max(2 * decoder_state.downsampling) as isize;
+        let r = header.group_rect(group);
+        let gx0 = (r.origin.0 * u) as isize;
+        let gy0 = (r.origin.1 * u) as isize;
+        let gx1 = gx0 + (r.size.0 * u) as isize;
+        let gy1 = gy0 + (r.size.1 * u) as isize;
+        let cx0 = crop.origin.0 as isize - halo;
+        let cy0 = crop.origin.1 as isize - halo;
+        let cx1 = (crop.origin.0 + crop.size.0) as isize + halo;
+        let cy1 = (crop.origin.1 + crop.size.1) as isize + halo;
+        gx0 < cx1 && gx1 > cx0 && gy0 < cy1 && gy1 > cy0
+    }
+
+    pub fn needed_lf_group(&self, lf_group: usize) -> bool {
+        if !Self::is_leaf_frame(&self.header) || self.header.have_crop {
+            return true;
+        }
+        let Some(crop) = self.decoder_state.crop else {
+            return true;
+        };
+        if self
+            .lf_global
+            .as_ref()
+            .is_some_and(|lfg| lfg.modular_global.has_cross_group_deps())
+        {
+            return true;
+        }
+        let u = self.header.upsampling as usize;
+        let group_px = self.header.group_dim() * u;
+        let halo = (group_px + 80 * u).max(2 * self.decoder_state.downsampling) as isize;
+        let r = self.header.lf_group_rect(lf_group);
+        let gx0 = (r.origin.0 * 8 * u) as isize;
+        let gy0 = (r.origin.1 * 8 * u) as isize;
+        let gx1 = gx0 + (r.size.0 * 8 * u) as isize;
+        let gy1 = gy0 + (r.size.1 * 8 * u) as isize;
+        let cx0 = crop.origin.0 as isize - halo;
+        let cy0 = crop.origin.1 as isize - halo;
+        let cx1 = (crop.origin.0 + crop.size.0) as isize + halo;
+        let cy1 = (crop.origin.1 + crop.size.1) as isize + halo;
+        gx0 < cx1 && gx1 > cx0 && gy0 < cy1 && gy1 > cy0
+    }
+
+    pub fn needs_post_downsample(&self) -> bool {
+        Self::needs_post_downsample_with(&self.header, &self.decoder_state)
+    }
+
+    pub fn needs_post_downsample_with(header: &FrameHeader, decoder_state: &DecoderState) -> bool {
+        if decoder_state.downsampling <= 1 || !header.is_visible() {
+            return false;
+        }
+        if header.have_crop {
+            return true;
+        }
+        decoder_state.crop.is_some_and(|c| {
+            let has_subsampling = header.upsampling > 1
+                || header.ec_upsampling.iter().any(|&u| u > 1)
+                || (0..3).any(|ch| header.hshift(ch) != 0 || header.vshift(ch) != 0);
+            has_subsampling && (!c.origin.0.is_multiple_of(16) || !c.origin.1.is_multiple_of(16))
+        })
+    }
+
+    pub fn has_skipped_hf_channels(&self) -> bool {
+        self.lf_global
+            .as_ref()
+            .is_some_and(|lfg| lfg.modular_global.has_skipped_hf_channels())
+    }
+
     pub fn toc(&self) -> &Toc {
         &self.toc
     }

@@ -159,6 +159,7 @@ impl Frame {
                 save_stage.save_lowmem(
                     &input_channels,
                     &mut scratch,
+                    None,
                     output_buffers,
                     upsampled_rect.size,
                     uy,
@@ -179,7 +180,10 @@ impl Frame {
         output_profile: &JxlColorProfile,
         parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<bool> {
-        if self.header.needs_blending() {
+        if self.header.needs_blending()
+            || self.decoder_state.crop.is_some()
+            || self.decoder_state.downsampling > 1
+        {
             return Ok(false);
         }
         if !((self.header.has_lf_frame() && self.header.frame_type == FrameType::RegularFrame)
@@ -240,6 +244,8 @@ impl Frame {
             orientation,
             byte_size: data_format.bytes_per_sample() * color_type.samples_per_pixel(),
             after_extend: false,
+            crop: None,
+            save_downsample: 0,
         };
         let info = [Some(info)];
         let mut bufs = [Some(JxlOutputBuffer::reborrow(&mut output_buffers[0]))];

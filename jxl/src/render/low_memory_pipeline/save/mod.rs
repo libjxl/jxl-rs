@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::headers::Orientation;
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::render::save::{SaveChannelType, SaveStage};
-use crate::util::ChannelVec;
+use crate::util::{ChannelVec, ShiftRightCeil};
 
 mod identity;
 
@@ -21,10 +21,11 @@ impl SaveStage {
         &self,
         data: &[&RowBuffer],
         scratch: &mut [RowBuffer; 4],
+        downsample_scratch: Option<&mut [RowBuffer; 4]>,
         buffers: &mut [Option<OutputChannelRef>],
         group_size: (usize, usize),
-        frame_y: usize,
-        group_origin: (usize, usize),
+        mut frame_y: usize,
+        mut group_origin: (usize, usize),
         full_image_size: (usize, usize),
         frame_origin: (isize, isize),
     ) -> Result<()> {
@@ -33,6 +34,18 @@ impl SaveStage {
         };
 
         let group_y = frame_y - group_origin.1;
+
+        let (full_image_size, frame_origin) = if let Some(crop) = self.crop {
+            (
+                crop.size,
+                (
+                    frame_origin.0 - crop.origin.0 as isize,
+                    frame_origin.1 - crop.origin.1 as isize,
+                ),
+            )
+        } else {
+            (full_image_size, frame_origin)
+        };
 
         let relative_full_image_start = (
             -frame_origin.0 - (group_origin.0 as isize),
@@ -44,12 +57,12 @@ impl SaveStage {
             relative_full_image_start.1 + full_image_size.1 as isize,
         );
 
-        let save_start = (
+        let mut save_start = (
             relative_full_image_start.0.max(0) as usize,
             relative_full_image_start.1.max(0) as usize,
         );
 
-        let save_end = (
+        let mut save_end = (
             relative_full_image_end.0.clamp(0, group_size.0 as isize) as usize,
             relative_full_image_end.1.clamp(0, group_size.1 as isize) as usize,
         );
@@ -63,8 +76,68 @@ impl SaveStage {
             return Ok(());
         }
 
-        let relative_y = group_y - save_start.1;
-        let save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
+        let mut relative_y = group_y - save_start.1;
+        let mut save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
+
+        let mut ds_refs: ChannelVec<&RowBuffer> = ChannelVec::new();
+        let data = if self.save_downsample > 0 {
+            let ds = self.save_downsample as usize;
+            let scale = 1usize << ds;
+            let in_block_y = relative_y & (scale - 1);
+            let out_rel_y = relative_y >> ds;
+            let out_save_size = (save_size.0.shrc(ds), save_size.1.shrc(ds));
+            let is_last_in_block = in_block_y + 1 == scale || relative_y + 1 == save_size.1;
+            let ds_scratch = downsample_scratch.unwrap();
+            let off = RowBuffer::x0_offset::<f32>();
+
+            for (i, &in_buf) in data.iter().enumerate() {
+                debug_assert_eq!(self.channel_types[i], SaveChannelType::F32);
+                let src_row = &in_buf.get_row::<f32>(frame_y)[off + save_start.0..off + save_end.0];
+                let ds_row = &mut ds_scratch[i].get_row_mut::<f32>(0)[off..off + out_save_size.0];
+                if in_block_y == 0 {
+                    ds_row.fill(0.0);
+                }
+                for (bx, dst_val) in ds_row.iter_mut().enumerate() {
+                    let x0 = bx * scale;
+                    let x1 = (x0 + scale).min(save_size.0);
+                    let mut row_sum = 0.0f32;
+                    for &v in &src_row[x0..x1] {
+                        row_sum += v;
+                    }
+                    *dst_val += row_sum;
+                }
+                if is_last_in_block {
+                    let block_h = in_block_y + 1;
+                    for (bx, dst_val) in ds_row.iter_mut().enumerate() {
+                        let x0 = bx * scale;
+                        let x1 = (x0 + scale).min(save_size.0);
+                        *dst_val *= 1.0 / ((x1 - x0) * block_h) as f32;
+                    }
+                }
+            }
+
+            if !is_last_in_block {
+                return Ok(());
+            }
+
+            let num_ch = data.len();
+            for s in &ds_scratch[..num_ch] {
+                ds_refs.push(s);
+            }
+            let crop_origin = self.crop.map_or((0, 0), |r| r.origin);
+            let dither_x0 = (group_origin.0 + save_start.0).saturating_sub(crop_origin.0) >> ds;
+            let dither_y =
+                ((group_origin.1 + save_start.1).saturating_sub(crop_origin.1) >> ds) + out_rel_y;
+            frame_y = dither_y;
+            group_origin.0 = dither_x0;
+            save_start = (0, 0);
+            save_end = out_save_size;
+            relative_y = out_rel_y;
+            save_size = out_save_size;
+            &ds_refs[..]
+        } else {
+            data
+        };
 
         let output_y = match self.orientation {
             Orientation::Identity => Some(relative_y),

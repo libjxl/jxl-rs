@@ -194,7 +194,11 @@ fn decode_fast_lossless(
 }
 
 // This function will decode a header and apply local transforms if a header is not given.
-// The intended use of passing a header is for the DcGlobal section.
+// The intended use of passing a header is for the DcGlobal section, or when the caller has
+// already read the group header to inspect local transforms.
+// When `full_substream_info` is `Some((full_num_samples, full_image_width))`, `buffers` contains
+// only a prefix of the substream's channels, so tree and symbol reader setup use the full
+// substream dimensions and final bitstream state checking is skipped.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::frame::modular) fn decode_modular_subbitstream(
     buffers: Vec<&mut ModularChannel>,
@@ -206,6 +210,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     partial_decoded_buffers: Option<&mut usize>,
     scratch_space: &mut ScratchSpace,
     level5_limits: bool,
+    full_substream_info: Option<(usize, usize)>,
 ) -> Result<()> {
     // Skip decoding if all grids are zero-sized.
     let is_empty = buffers
@@ -245,13 +250,15 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
         return Err(Error::NoGlobalTree);
     }
     let local_tree = if !header.use_global_tree {
-        let num_local_samples = buffers
-            .iter()
-            .map(|buf| {
-                let (width, height) = buf.channel_info(storage).size;
-                width * height
-            })
-            .sum::<usize>();
+        let num_local_samples = full_substream_info.map(|(s, _)| s).unwrap_or_else(|| {
+            buffers
+                .iter()
+                .map(|buf| {
+                    let (width, height) = buf.channel_info(storage).size;
+                    width * height
+                })
+                .sum::<usize>()
+        });
         let size_limit = (1024 + num_local_samples).min(1 << 20);
         Some(Tree::read(br, size_limit, level5_limits)?)
     } else {
@@ -263,11 +270,13 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
         local_tree.as_ref().unwrap()
     };
 
-    let image_width = buffers
-        .iter()
-        .map(|info| info.channel_info(storage).size.0)
-        .max()
-        .unwrap_or(0);
+    let image_width = full_substream_info.map(|(_, w)| w).unwrap_or_else(|| {
+        buffers
+            .iter()
+            .map(|info| info.channel_info(storage).size.0)
+            .max()
+            .unwrap_or(0)
+    });
 
     if can_decode_fast_lossless(tree) {
         decode_fast_lossless(buffers, tree, br, partial_decoded_buffers, storage)?
@@ -303,7 +312,9 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
             }
         }
 
-        reader.check_final_state(&tree.histograms, br)?;
+        if full_substream_info.is_none() {
+            reader.check_final_state(&tree.histograms, br)?;
+        }
 
         drop(buffers);
     }

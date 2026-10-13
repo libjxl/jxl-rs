@@ -27,6 +27,8 @@ pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub pixel_format: Option<JxlPixelFormat>,
     pub premultiply_output: bool,
     pub adjust_orientation: bool,
+    pub crop: Option<Rect>,
+    pub downsampling: usize,
 }
 
 impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
@@ -42,6 +44,8 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
             pixel_format: None,
             premultiply_output: false,
             adjust_orientation: true,
+            crop: None,
+            downsampling: 1,
         }
     }
 }
@@ -86,7 +90,7 @@ pub fn decode<'a, T: ImageDataType>(
 
     let init = T::from_f64(f64::NAN);
     let make_buffers = |decoder: &JxlDecoder| -> Result<Vec<Image<T>>, Error> {
-        let (w, h) = decoder.basic_info().unwrap().size;
+        let (w, h) = decoder.output_size().unwrap();
         let pixel_format = decoder.current_pixel_format().unwrap();
         let num_channels = pixel_format.color_type.samples_per_pixel();
         assert!(num_channels > 0);
@@ -128,9 +132,20 @@ pub fn decode<'a, T: ImageDataType>(
                 if let Some(ref fmt) = params.pixel_format {
                     decoder.set_pixel_format(fmt.clone())?;
                 }
+                if let Some(crop) = params.crop {
+                    decoder.set_crop(Some(crop))?;
+                }
+                if params.downsampling != 1 {
+                    decoder.set_downsampling(params.downsampling)?;
+                }
                 buffers = Some(make_buffers(&decoder)?);
             }
-            Event::FrameHeader => {}
+            Event::FrameHeader => {
+                assert_eq!(
+                    decoder.frame_header().unwrap().size,
+                    decoder.output_size().unwrap()
+                );
+            }
             Event::FrameComplete { has_more_frames } => {
                 let completed = buffers.take().unwrap();
                 if !allow_partial {

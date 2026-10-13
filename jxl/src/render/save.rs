@@ -6,7 +6,8 @@
 use crate::api::{JxlColorType, JxlDataFormat, JxlOutputBuffer};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
-use crate::image::DataTypeTag;
+use crate::image::{DataTypeTag, Rect};
+use crate::util::ShiftRightCeil;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveChannelType {
@@ -36,6 +37,8 @@ pub struct SaveStage {
     /// When true, fill alpha channel with opaque (1.0) values.
     /// Used when RGBA output is requested but image has no alpha channel.
     pub(super) fill_opaque_alpha: bool,
+    pub(super) crop: Option<Rect>,
+    pub(super) save_downsample: u8,
 }
 
 impl SaveStage {
@@ -65,7 +68,15 @@ impl SaveStage {
             color_type,
             data_format,
             fill_opaque_alpha,
+            crop: None,
+            save_downsample: 0,
         }
+    }
+
+    pub fn with_crop_and_downsample(mut self, crop: Option<Rect>, save_downsample: u8) -> Self {
+        self.crop = crop;
+        self.save_downsample = save_downsample;
+        self
     }
 
     pub fn set_channel_type(&mut self, c: usize, ty: SaveChannelType) {
@@ -98,7 +109,12 @@ impl SaveStage {
         let Some(buf) = buffer else {
             return Ok(());
         };
-        let osize = self.orientation.map_size(size);
+        let target_size = self.crop.map_or(size, |r| r.clip(size).size);
+        let ds_size = (
+            target_size.0.shrc(self.save_downsample),
+            target_size.1.shrc(self.save_downsample),
+        );
+        let osize = self.orientation.map_size(ds_size);
 
         let expected_w = self.output_channels() * self.data_format.bytes_per_sample() * osize.0;
 

@@ -143,6 +143,37 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     render_interval: Option<usize>,
     allow_partial_files: bool,
 ) -> Result<(DecodeOutput, Duration)> {
+    decode_frames_with_crop_and_downsampling(
+        input,
+        decoder_options,
+        requested_bit_depth,
+        requested_output_type,
+        accepted_output_types,
+        accepts_cmyk,
+        interleave_alpha,
+        linear_output,
+        render_interval,
+        allow_partial_files,
+        None,
+        1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn decode_frames_with_crop_and_downsampling<In: JxlBitstreamInputExt>(
+    input: &mut In,
+    decoder_options: JxlDecoderOptions,
+    requested_bit_depth: Option<usize>,
+    requested_output_type: Option<OutputDataType>,
+    accepted_output_types: &[OutputDataType],
+    accepts_cmyk: bool,
+    interleave_alpha: bool,
+    linear_output: bool,
+    render_interval: Option<usize>,
+    allow_partial_files: bool,
+    crop: Option<Rect>,
+    downsampling: usize,
+) -> Result<(DecodeOutput, Duration)> {
     let start = Instant::now();
     let total_bytes = input.available_bytes()?;
 
@@ -155,8 +186,16 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         }
     }
 
+    if let Some(crop) = crop {
+        decoder.set_crop(Some(crop))?;
+    }
+    if downsampling != 1 {
+        decoder.set_downsampling(downsampling)?;
+    }
+
     // Get info and clone what we need before mutating the decoder
     let info = decoder.basic_info().unwrap().clone();
+    let output_size = decoder.output_size().unwrap();
     let embedded_profile = decoder.embedded_color_profile().unwrap().clone();
 
     let output_type = if let Some(ot) = requested_output_type
@@ -233,7 +272,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         let (_out_chans, mut transformers) = cms
             .initialize_transforms(
                 1,
-                info.size.0,
+                output_size.0,
                 output_profile.clone(),
                 target_profile.clone(),
                 255.0,
@@ -245,7 +284,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     }
 
     let mut image_data = DecodeOutput {
-        size: info.size,
+        size: output_size,
         frames: Vec::new(),
         data_type: output_type,
         original_bit_depth: info.bit_depth.clone(),
@@ -263,7 +302,10 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     };
 
     let make_outputs = || -> Result<Vec<OwnedRawImage>> {
-        let byte_size = (info.size.0 * output_type.bits_per_sample() / 8, info.size.1);
+        let byte_size = (
+            output_size.0 * output_type.bits_per_sample() / 8,
+            output_size.1,
+        );
         let mut outputs = vec![OwnedRawImage::new((
             byte_size.0 * samples_per_pixel,
             byte_size.1,
@@ -373,8 +415,8 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                 color_channels,
                 output_type,
                 transformer.as_mut(),
-                info.size.0,
-                info.size.1,
+                output_size.0,
+                output_size.1,
             )?;
             for partial in &mut frame.partial_renders {
                 let black_image = black_channel.map(|x| partial.channels.remove(x));
@@ -385,8 +427,8 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     color_channels,
                     output_type,
                     transformer.as_mut(),
-                    info.size.0,
-                    info.size.1,
+                    output_size.0,
+                    output_size.1,
                 )?;
             }
         }

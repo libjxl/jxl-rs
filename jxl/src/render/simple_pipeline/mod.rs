@@ -202,6 +202,12 @@ impl RenderPipeline for SimpleRenderPipeline {
 
     fn mark_group_to_rerender(&mut self, _g: usize) {}
 
+    fn mark_group_skipped(&mut self, g: usize) {
+        for c in &self.shared.group_chan_complete[g] {
+            c.store(true, Ordering::Relaxed);
+        }
+    }
+
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,
     ) -> Box<dyn super::RunInOutStage<Self::Buffer>> {

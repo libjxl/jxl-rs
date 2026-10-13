@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use crate::api::{
-    JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
+    Endianness, JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
     JxlPixelFormat,
 };
 use crate::bit_reader::BitReader;
@@ -125,6 +125,65 @@ impl Frame {
         }
 
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
+        let needs_post_ds = self.needs_post_downsample();
+        let mut api_formats: Vec<(JxlDataFormat, JxlColorType, usize)> = Vec::new();
+        if let Some(df) = pixel_format.color_data_format {
+            api_formats.push((
+                df,
+                pixel_format.color_type,
+                pixel_format.color_type.samples_per_pixel(),
+            ));
+        }
+        for df in pixel_format.extra_channel_format.iter().flatten() {
+            api_formats.push((*df, JxlColorType::Grayscale, 1));
+        }
+
+        let output_orientation = if self.decoder_state.adjust_orientation {
+            self.decoder_state.file_header.image_metadata.orientation
+        } else {
+            Orientation::Identity
+        };
+        let image_size = (
+            self.decoder_state.file_header.size.xsize() as usize,
+            self.decoder_state.file_header.size.ysize() as usize,
+        );
+        let unoriented_crop_size = if let Some(crop) = self.decoder_state.crop {
+            crop.clip(image_size).size
+        } else {
+            image_size
+        };
+        let full_oriented_size = output_orientation.map_size(unoriented_crop_size);
+
+        let mut post_downsample_buffers = std::mem::take(&mut self.post_downsample_buffers);
+        if needs_post_ds && let Some(api_buffers) = api_buffers.as_ref() {
+            let ds = self.decoder_state.downsampling;
+            let expected_size = (
+                full_oriented_size.0.div_ceil(ds),
+                full_oriented_size.1.div_ceil(ds),
+            );
+            for (b, &(df, ct, chans)) in api_buffers.iter().zip(api_formats.iter()) {
+                let expected_w = expected_size.0 * chans * df.bytes_per_sample();
+                if b.byte_size() != (expected_w, expected_size.1) {
+                    self.post_downsample_buffers = post_downsample_buffers;
+                    return Err(Error::InvalidOutputBufferSize(
+                        b.byte_size().0,
+                        b.byte_size().1,
+                        expected_size.0,
+                        expected_size.1,
+                        ct,
+                        df,
+                    ));
+                }
+            }
+            if post_downsample_buffers.is_empty() {
+                for &(df, _, chans) in &api_formats {
+                    post_downsample_buffers.push(OwnedRawImage::new((
+                        full_oriented_size.0 * chans * df.bytes_per_sample(),
+                        full_oriented_size.1,
+                    ))?);
+                }
+            }
+        }
 
         macro_rules! buffers_from_api {
             ($get_next: expr) => {
@@ -140,7 +199,17 @@ impl Frame {
             };
         }
 
-        if let Some(api_buffers) = api_buffers {
+        if needs_post_ds && api_buffers.is_some() {
+            let mut post_iter = post_downsample_buffers.iter_mut();
+            buffers_from_api!({
+                let img = post_iter.next().unwrap();
+                let rect = Rect {
+                    origin: (0, 0),
+                    size: img.byte_size(),
+                };
+                Some(JxlOutputBuffer::from_image_rect_mut(img.get_rect_mut(rect)))
+            });
+        } else if let Some(api_buffers) = api_buffers {
             let mut api_buffers_iter = api_buffers.iter_mut();
             buffers_from_api!(Some(JxlOutputBuffer::reborrow(
                 api_buffers_iter.next().unwrap(),
@@ -186,20 +255,22 @@ impl Frame {
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
+        let max_passes = self.max_needed_passes();
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+        let has_skipped_hf = modular_global.has_skipped_hf_channels();
 
         modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
 
         // STEP 1: figure out what modular buffers will be finalized during this decode, and mark them
         // as such.
+        let mut finished_skipped_hf_groups = Vec::new();
         for (group, passes) in groups.iter() {
             self.group_status.need_vardct_flush.insert(*group);
             self.group_status.need_modular_flush.insert(*group);
+            let all_needed_done =
+                max_passes == 0 || passes.last().is_some_and(|x| x.0 + 1 >= max_passes);
             if self.header.encoding == Encoding::VarDCT {
-                let status = if passes
-                    .last()
-                    .is_some_and(|x| x.0 + 1 >= self.header.passes.num_passes as usize)
-                {
+                let status = if all_needed_done {
                     DataStatus::Final
                 } else {
                     DataStatus::Partial
@@ -210,6 +281,9 @@ impl Frame {
             }
             for (pass, _) in passes.iter() {
                 modular_global.mark_final(2 + *pass, *group);
+            }
+            if has_skipped_hf && all_needed_done && !should_render_non_final {
+                finished_skipped_hf_groups.push(*group);
             }
         }
 
@@ -243,16 +317,43 @@ impl Frame {
         }
 
         let has_decoded_data = match self.header.encoding {
-            Encoding::VarDCT => self.hf_global.is_some() || self.header.has_lf_frame(),
+            Encoding::VarDCT => {
+                self.hf_global.is_some() || self.header.has_lf_frame() || max_passes == 0
+            }
             Encoding::Modular => modular_global.has_decoded_data(),
         };
+
+        if self.decoder_state.crop.is_some() {
+            let has_cross_group_deps = modular_global.has_cross_group_deps();
+            for g in 0..self.header.num_groups() {
+                if !Self::needed_hf_group_with(
+                    &self.header,
+                    &self.decoder_state,
+                    has_cross_group_deps,
+                    g,
+                ) {
+                    for c in 0..self.group_status.channel_status[g].len() {
+                        self.group_status.update_status(g, c, DataStatus::Final);
+                    }
+                    pipeline_mut!(self, p, p.mark_group_skipped(g));
+                }
+            }
+        }
 
         // If section0 data is dirty, re-render everything.
         if !self.section0_render_up_to_date && has_decoded_data {
             self.section0_render_up_to_date = true;
+            let has_cross_group_deps = modular_global.has_cross_group_deps();
             for g in 0..self.header.num_groups() {
-                self.group_status.need_vardct_flush.insert(g);
-                self.group_status.need_modular_flush.insert(g);
+                if Self::needed_hf_group_with(
+                    &self.header,
+                    &self.decoder_state,
+                    has_cross_group_deps,
+                    g,
+                ) {
+                    self.group_status.need_vardct_flush.insert(g);
+                    self.group_status.need_modular_flush.insert(g);
+                }
             }
         }
 
@@ -285,6 +386,11 @@ impl Frame {
                     modular_global.request_rerender(&self.header, group);
                 }
             }
+        } else {
+            for group in finished_skipped_hf_groups {
+                self.group_status.need_modular_flush.remove(&group);
+                modular_global.request_rerender(&self.header, group);
+            }
         }
 
         let largest_group_area = self.header.group_dim().min(self.header.size().0)
@@ -310,6 +416,7 @@ impl Frame {
         // STEP 3: Make sure modular_global is ready to run, and prepare the list of
         // all the decoding/rendering steps that we want to run.
         modular_global.prepare_render(&self.header, |g, c, is_final| {
+            let is_final = is_final || (has_skipped_hf && !should_render_non_final);
             let sz = self.header.group_rect(g).size;
             let area = sz.0 * sz.1;
             if area >= largest_group_area {
@@ -395,6 +502,7 @@ impl Frame {
         let storage = self.lf_global.as_ref().unwrap().modular_global.storage();
 
         let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
+            let complete = complete || (has_skipped_hf && !should_render_non_final);
             match storage {
                 ModularStorage::I16 => {
                     let image = Image::<i16>::from_raw(raw_image);
@@ -465,6 +573,21 @@ impl Frame {
 
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;
+
+        if needs_post_ds
+            && rendered
+            && let Some(api_buffers) = api_buffers.as_mut()
+        {
+            let ds = self.decoder_state.downsampling;
+            for ((src, dst), &(df, _, chans)) in post_downsample_buffers
+                .iter()
+                .zip(api_buffers.iter_mut())
+                .zip(api_formats.iter())
+            {
+                downsample_raw_to_output_buffer(src, dst, full_oriented_size, ds, chans, df);
+            }
+        }
+        self.post_downsample_buffers = post_downsample_buffers;
 
         if self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1 {
             let (gsx, gsy) = self.header.size_groups();
@@ -560,10 +683,25 @@ impl Frame {
             channel_types.push((DataTypeTag::U16, None));
         }
 
+        let is_leaf = Self::is_leaf_frame(frame_header);
+        let eff_up = Self::effective_upsampling_div(frame_header, decoder_state);
+        let rem_ds = decoder_state.downsampling / eff_up;
+        let skip_filters = is_leaf && rem_ds >= 2;
+        let pipeline_size = if eff_up > 1 {
+            frame_header.size()
+        } else {
+            frame_header.size_upsampled()
+        };
+        let downsampling_shift = if eff_up > 1 {
+            0
+        } else {
+            frame_header.upsampling.ilog2() as usize
+        };
+
         let mut pipeline = RenderPipelineBuilder::<T>::new(
             &channel_types,
-            frame_header.size_upsampled(),
-            frame_header.upsampling.ilog2() as usize,
+            pipeline_size,
+            downsampling_shift,
             frame_header.log_group_dim(),
             buffer_recycler,
         );
@@ -589,7 +727,7 @@ impl Frame {
         }
 
         let filters = &frame_header.restoration_filter;
-        if filters.gab {
+        if filters.gab && !skip_filters {
             pipeline = pipeline.add_inout_stage(GaborishStage::new(
                 [
                     filters.gab_x_weight1,
@@ -605,29 +743,31 @@ impl Frame {
         }
 
         let rf = &frame_header.restoration_filter;
-        if rf.epf_iters >= 3 {
-            pipeline = pipeline.add_inout_stage(Epf0Stage::new(
-                rf.epf_pass0_sigma_scale,
-                rf.epf_border_sad_mul,
-                rf.epf_channel_scale,
-                epf_sigma.clone(),
-            ))
-        }
-        if rf.epf_iters >= 1 {
-            pipeline = pipeline.add_inout_stage(Epf1Stage::new(
-                1.0,
-                rf.epf_border_sad_mul,
-                rf.epf_channel_scale,
-                epf_sigma.clone(),
-            ))
-        }
-        if rf.epf_iters >= 2 {
-            pipeline = pipeline.add_inout_stage(Epf2Stage::new(
-                rf.epf_pass2_sigma_scale,
-                rf.epf_border_sad_mul,
-                rf.epf_channel_scale,
-                epf_sigma.clone(),
-            ))
+        if !skip_filters {
+            if rf.epf_iters >= 3 {
+                pipeline = pipeline.add_inout_stage(Epf0Stage::new(
+                    rf.epf_pass0_sigma_scale,
+                    rf.epf_border_sad_mul,
+                    rf.epf_channel_scale,
+                    epf_sigma.clone(),
+                ))
+            }
+            if rf.epf_iters >= 1 {
+                pipeline = pipeline.add_inout_stage(Epf1Stage::new(
+                    1.0,
+                    rf.epf_border_sad_mul,
+                    rf.epf_channel_scale,
+                    epf_sigma.clone(),
+                ))
+            }
+            if rf.epf_iters >= 2 {
+                pipeline = pipeline.add_inout_stage(Epf2Stage::new(
+                    rf.epf_pass2_sigma_scale,
+                    rf.epf_border_sad_mul,
+                    rf.epf_channel_scale,
+                    epf_sigma.clone(),
+                ))
+            }
         }
 
         let late_ec_upsample = frame_header.upsampling > 1
@@ -662,7 +802,7 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(SplinesStage::new(splines))
         }
 
-        if frame_header.upsampling > 1 {
+        if frame_header.upsampling > 1 && eff_up == 1 {
             let transform_data = &decoder_state.file_header.transform_data;
             let nb_channels = if late_ec_upsample {
                 3 + frame_header.ec_upsampling.len()
@@ -869,6 +1009,16 @@ impl Frame {
                     (false, Some(c)) => &[0, 1, 2, c],
                 }
             };
+            let needs_post_ds = Self::needs_post_downsample_with(frame_header, decoder_state);
+            let api_crop = decoder_state.crop.map(|c| Rect {
+                origin: (c.origin.0 / eff_up, c.origin.1 / eff_up),
+                size: (c.size.0 / eff_up, c.size.1 / eff_up),
+            });
+            let api_save_downsample = if needs_post_ds {
+                0
+            } else {
+                rem_ds.ilog2() as u8
+            };
             if let Some(df) = &pixel_format.color_data_format {
                 // Add premultiply stage if needed (before conversion to output format)
                 if should_premultiply && let Some(alpha_channel) = alpha_in_color {
@@ -883,13 +1033,15 @@ impl Frame {
                         alpha_channel,
                     ));
                 }
-                pipeline = pipeline.add_save_stage(
+                pipeline = pipeline.add_save_stage_with_crop_downsample(
                     color_source_channels,
                     output_orientation,
                     0,
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
+                    api_crop,
+                    api_save_downsample,
                 );
             }
             let mut save_idx = if pixel_format.color_data_format.is_some() {
@@ -899,13 +1051,15 @@ impl Frame {
             };
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
-                    pipeline = pipeline.add_save_stage(
+                    pipeline = pipeline.add_save_stage_with_crop_downsample(
                         &[3 + i],
                         output_orientation,
                         save_idx,
                         JxlColorType::Grayscale,
                         *df,
                         false,
+                        api_crop,
+                        api_save_downsample,
                     );
                     save_idx += 1;
                 }
@@ -966,5 +1120,120 @@ impl Frame {
         self.render_pipeline = Some(render_pipeline);
         self.section0_render_up_to_date = false;
         Ok(())
+    }
+}
+
+fn downsample_raw_to_output_buffer(
+    src: &OwnedRawImage,
+    dst: &mut JxlOutputBuffer<'_>,
+    src_size: (usize, usize),
+    ds: usize,
+    chans: usize,
+    df: JxlDataFormat,
+) {
+    use crate::image::f16;
+    use byteorder::{BigEndian, ByteOrder, LittleEndian};
+
+    let (src_w, src_h) = src_size;
+    let dst_w = src_w.div_ceil(ds);
+    let dst_h = src_h.div_ceil(ds);
+    let bps = df.bytes_per_sample();
+    let pixel_bytes = chans * bps;
+
+    let read_sample = |bytes: &[u8]| -> f32 {
+        match df {
+            JxlDataFormat::U8 { .. } => bytes[0] as f32,
+            JxlDataFormat::U16 {
+                endianness: Endianness::LittleEndian,
+                ..
+            } => LittleEndian::read_u16(bytes) as f32,
+            JxlDataFormat::U16 {
+                endianness: Endianness::BigEndian,
+                ..
+            } => BigEndian::read_u16(bytes) as f32,
+            JxlDataFormat::F16 {
+                endianness: Endianness::LittleEndian,
+                ..
+            } => f16::from_bits(LittleEndian::read_u16(bytes)).to_f32(),
+            JxlDataFormat::F16 {
+                endianness: Endianness::BigEndian,
+                ..
+            } => f16::from_bits(BigEndian::read_u16(bytes)).to_f32(),
+            JxlDataFormat::F32 {
+                endianness: Endianness::LittleEndian,
+                ..
+            } => LittleEndian::read_f32(bytes),
+            JxlDataFormat::F32 {
+                endianness: Endianness::BigEndian,
+                ..
+            } => BigEndian::read_f32(bytes),
+        }
+    };
+
+    let write_sample = |bytes: &mut [u8], val: f32| match df {
+        JxlDataFormat::U8 { .. } => {
+            bytes[0] = val.round().clamp(0.0, u8::MAX as f32) as u8;
+        }
+        JxlDataFormat::U16 {
+            endianness: Endianness::LittleEndian,
+            ..
+        } => {
+            LittleEndian::write_u16(bytes, val.round().clamp(0.0, u16::MAX as f32) as u16);
+        }
+        JxlDataFormat::U16 {
+            endianness: Endianness::BigEndian,
+            ..
+        } => {
+            BigEndian::write_u16(bytes, val.round().clamp(0.0, u16::MAX as f32) as u16);
+        }
+        JxlDataFormat::F16 {
+            endianness: Endianness::LittleEndian,
+            ..
+        } => {
+            LittleEndian::write_u16(bytes, f16::from_f32(val).to_bits());
+        }
+        JxlDataFormat::F16 {
+            endianness: Endianness::BigEndian,
+            ..
+        } => {
+            BigEndian::write_u16(bytes, f16::from_f32(val).to_bits());
+        }
+        JxlDataFormat::F32 {
+            endianness: Endianness::LittleEndian,
+            ..
+        } => {
+            LittleEndian::write_f32(bytes, val);
+        }
+        JxlDataFormat::F32 {
+            endianness: Endianness::BigEndian,
+            ..
+        } => {
+            BigEndian::write_f32(bytes, val);
+        }
+    };
+
+    let mut row_buf = vec![0u8; dst_w * pixel_bytes];
+    for oy in 0..dst_h {
+        let sy0 = oy * ds;
+        let sy1 = (sy0 + ds).min(src_h);
+        for ox in 0..dst_w {
+            let sx0 = ox * ds;
+            let sx1 = (sx0 + ds).min(src_w);
+            let count = ((sy1 - sy0) * (sx1 - sx0)) as f32;
+            let inv_count = 1.0 / count;
+            for c in 0..chans {
+                let mut sum = 0.0f32;
+                for sy in sy0..sy1 {
+                    let src_row = src.row(sy);
+                    for sx in sx0..sx1 {
+                        let offset = sx * pixel_bytes + c * bps;
+                        sum += read_sample(&src_row[offset..offset + bps]);
+                    }
+                }
+                let dst_offset = ox * pixel_bytes + c * bps;
+                write_sample(&mut row_buf[dst_offset..dst_offset + bps], sum * inv_count);
+            }
+        }
+        dst.row_mut(oy)[..row_buf.len()].copy_from_slice(&row_buf);
     }
 }

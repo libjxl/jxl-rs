@@ -8,7 +8,7 @@ use super::codestream_parser::{CodestreamParser, FrameStartInfo};
 use super::{
     Event, JxlAuxBox, JxlAuxBoxType, JxlBasicInfo, JxlBitstreamInput, JxlColorProfile,
     JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner, JxlParallelRunnerFun,
-    JxlPixelFormat,
+    JxlPixelFormat, Rect,
 };
 use crate::error::{Error, Result};
 
@@ -160,6 +160,103 @@ impl JxlDecoder {
         Ok(())
     }
 
+    /// Returns the currently configured crop rectangle (in full-resolution oriented image
+    /// coordinates), if any.
+    pub fn crop(&self) -> Option<Rect> {
+        self.codestream_parser.crop
+    }
+
+    /// Configures a crop region in full-resolution oriented image coordinates (matching
+    /// [`JxlBasicInfo::size`]).
+    ///
+    /// When combined with [`Self::set_downsampling`], the image is cropped to `crop` first and
+    /// then downsampled, resulting in an output frame size of
+    /// `(crop.size.0.div_ceil(downsampling), crop.size.1.div_ceil(downsampling))`.
+    ///
+    /// Must be called after [`Event::BasicInfo`] and before the first frame header is decoded.
+    pub fn set_crop(&mut self, crop: Option<Rect>) -> Result<()> {
+        if !self.codestream_parser.image_info.is_complete() {
+            return Err(Error::ApiUsageError("cannot set crop before BasicInfo"));
+        }
+        let frame_header_was_decoded = self
+            .codestream_parser
+            .frame_info
+            .current_frame_header()
+            .is_some()
+            || !self.codestream_parser.scanned_frames().is_empty();
+        if frame_header_was_decoded && self.codestream_parser.crop != crop {
+            return Err(Error::ApiUsageError(
+                "cannot change crop after first frame header",
+            ));
+        }
+        if let Some(rect) = crop {
+            let image_size = self.codestream_parser.image_info.basic_info().size;
+            if rect.size.0 == 0
+                || rect.size.1 == 0
+                || rect
+                    .origin
+                    .0
+                    .checked_add(rect.size.0)
+                    .is_none_or(|x| x > image_size.0)
+                || rect
+                    .origin
+                    .1
+                    .checked_add(rect.size.1)
+                    .is_none_or(|y| y > image_size.1)
+            {
+                return Err(Error::ApiUsageError("crop rectangle is out of bounds"));
+            }
+        }
+        self.codestream_parser.crop = crop;
+        Ok(())
+    }
+
+    /// Returns the currently configured downsampling factor (default `1`).
+    pub fn downsampling(&self) -> usize {
+        self.codestream_parser.downsampling
+    }
+
+    /// Configures power-of-two downsampled decoding (`1, 2, 4, 8, 16, 32, 64`).
+    ///
+    /// Must be called after [`Event::BasicInfo`] and before the first frame header is decoded.
+    pub fn set_downsampling(&mut self, factor: usize) -> Result<()> {
+        if !self.codestream_parser.image_info.is_complete() {
+            return Err(Error::ApiUsageError(
+                "cannot set downsampling before BasicInfo",
+            ));
+        }
+        let frame_header_was_decoded = self
+            .codestream_parser
+            .frame_info
+            .current_frame_header()
+            .is_some()
+            || !self.codestream_parser.scanned_frames().is_empty();
+        if frame_header_was_decoded && self.codestream_parser.downsampling != factor {
+            return Err(Error::ApiUsageError(
+                "cannot change downsampling after first frame header",
+            ));
+        }
+        if factor == 0 || !factor.is_power_of_two() || factor > 64 {
+            return Err(Error::ApiUsageError(
+                "downsampling factor must be a power of two between 1 and 64",
+            ));
+        }
+        self.codestream_parser.downsampling = factor;
+        Ok(())
+    }
+
+    /// Returns the output frame resolution after applying [`Self::crop`] and
+    /// [`Self::downsampling`], or `None` if [`Event::BasicInfo`] has not been reached yet.
+    pub fn output_size(&self) -> Option<(usize, usize)> {
+        let basic_info = self.basic_info()?;
+        let base_size = self
+            .codestream_parser
+            .crop
+            .map_or(basic_info.size, |r| r.size);
+        let ds = self.codestream_parser.downsampling;
+        Some((base_size.0.div_ceil(ds), base_size.1.div_ceil(ds)))
+    }
+
     /// Retrieves the current frame's header, if between
     /// [`Event::FrameHeader`](crate::api::Event::FrameHeader) and
     /// [`Event::FrameComplete`](crate::api::Event::FrameComplete).
@@ -168,10 +265,7 @@ impl JxlDecoder {
             return None;
         }
         let frame_header = self.codestream_parser.frame_info.current_frame_header()?;
-        // The render pipeline always adds ExtendToImageDimensionsStage which extends
-        // frames to the full image size. So the output size is always the image size,
-        // not the frame's upsampled size.
-        let size = self.codestream_parser.image_info.basic_info().size;
+        let size = self.output_size()?;
         Some(JxlFrameHeader {
             name: frame_header.name.clone(),
             duration: self

@@ -255,6 +255,12 @@ pub struct FullModularImage {
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
     section_buffer_indices: Vec<Vec<usize>>,
+    // Number of leading buffers in each section that actually need to be decoded (may be smaller
+    // than `section_buffer_indices[s].len()` for HF sections when downsampling skips fine
+    // squeeze residuals).
+    section_read_counts: Vec<usize>,
+    has_skipped_hf_channels: bool,
+    has_cross_group_deps: bool,
     can_do_partial_render: bool,
     can_do_early_partial_render: bool,
     needed_section0_channels_for_early_render: usize,
@@ -296,6 +302,18 @@ impl FullModularImage {
         self.can_do_early_partial_render
     }
 
+    pub fn hf_pass_is_empty(&self, pass: usize) -> bool {
+        self.section_read_counts.get(2 + pass).copied().unwrap_or(0) == 0
+    }
+
+    pub fn has_skipped_hf_channels(&self) -> bool {
+        self.has_skipped_hf_channels
+    }
+
+    pub fn has_cross_group_deps(&self) -> bool {
+        self.has_cross_group_deps
+    }
+
     pub fn set_pipeline_used_channels(&mut self, used: &[bool]) {
         self.pipeline_used_channels = used.to_vec();
     }
@@ -311,6 +329,7 @@ impl FullModularImage {
         sample_limit: Option<usize>,
         storage: ModularStorage,
         level5_limits: bool,
+        ds_shift: usize,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
@@ -354,11 +373,15 @@ impl FullModularImage {
         }
 
         if channels.is_empty() {
+            let num_sections = 2 + frame_header.passes.num_passes as usize;
             return Ok(Self {
                 scratch_space: PerThreadStorage::new(ScratchSpace::new),
                 buffer_info: vec![],
                 transform_steps: vec![],
-                section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
+                section_buffer_indices: vec![vec![]; num_sections],
+                section_read_counts: vec![0; num_sections],
+                has_skipped_hf_channels: false,
+                has_cross_group_deps: false,
                 can_do_partial_render: true,
                 can_do_early_partial_render: false,
                 needed_section0_channels_for_early_render: 0,
@@ -555,11 +578,68 @@ impl FullModularImage {
 
         let can_do_partial_render = !has_problematic_palette_transform && !has_small_group_tiles;
 
+        let has_cross_group_deps = transform_steps.iter().any(|ts| match &ts.step {
+            transforms::step::TransformStep::Output { .. } => false,
+            transforms::step::TransformStep::Rct {
+                buf_in, buf_out, ..
+            } => {
+                !matches!(
+                    buffer_info[buf_in[0]].grid_kind,
+                    ModularGridKind::Hf | ModularGridKind::None
+                ) || !matches!(
+                    buffer_info[buf_out[0]].grid_kind,
+                    ModularGridKind::Hf | ModularGridKind::None
+                )
+            }
+            _ => true,
+        });
+
+        let mut section_read_counts: Vec<usize> =
+            section_buffer_indices.iter().map(|s| s.len()).collect();
+        let mut has_skipped_hf_channels = false;
+        if can_do_partial_render && ds_shift > 0 {
+            let mut skippable_residual = vec![false; buffer_info.len()];
+            for ts in &transform_steps {
+                if let transforms::step::TransformStep::HSqueeze {
+                    buf_in, buf_out, ..
+                }
+                | transforms::step::TransformStep::VSqueeze {
+                    buf_in, buf_out, ..
+                } = ts.step
+                {
+                    let res = buf_in[1];
+                    if buffer_info[res].coded_channel_id >= 0
+                        && !buffer_info[buf_out].info.followed_by_palette
+                        && buffer_info[res]
+                            .info
+                            .shift
+                            .is_some_and(|(sx, sy)| sx <= ds_shift && sy <= ds_shift)
+                    {
+                        skippable_residual[res] = true;
+                    }
+                }
+            }
+            for s in 2..section_buffer_indices.len() {
+                let indices = &section_buffer_indices[s];
+                let mut keep_len = indices.len();
+                while keep_len > 0 && skippable_residual[indices[keep_len - 1]] {
+                    keep_len -= 1;
+                }
+                if keep_len < indices.len() {
+                    section_read_counts[s] = keep_len;
+                    has_skipped_hf_channels = true;
+                }
+            }
+        }
+
         Ok(FullModularImage {
             scratch_space: PerThreadStorage::new(ScratchSpace::new),
             buffer_info,
             transform_steps,
             section_buffer_indices,
+            section_read_counts,
+            has_skipped_hf_channels,
+            has_cross_group_deps,
             can_do_partial_render,
             can_do_early_partial_render: can_do_partial_render && has_squeeze_transform,
             needed_section0_channels_for_early_render: num_channels + num_meta_channels,
@@ -605,6 +685,7 @@ impl FullModularImage {
                     Some(&mut decoded_if_partial),
                     &mut scratch,
                     self.level5_limits,
+                    None,
                 )
             },
         );
@@ -681,38 +762,122 @@ impl FullModularImage {
             }
         };
 
+        let all_indices = &self.section_buffer_indices[section_id];
+        let read_count = self.section_read_counts[section_id];
+        if read_count == 0 {
+            if let Some(pass_to_pipeline) = pass_to_pipeline {
+                return self.run_transforms(frame_header, pass_to_pipeline);
+            }
+            return Ok(());
+        }
+
         let mut scratch = self.scratch_space.get();
-        with_buffers(
-            &self.buffer_info,
-            &self.section_buffer_indices[section_id],
-            grid,
-            &self.recycler,
-            |bufs| {
-                decode_modular_subbitstream(
-                    bufs,
-                    self.storage,
-                    stream.get_id(frame_header),
-                    None,
-                    global_tree,
-                    br,
-                    None,
-                    &mut scratch,
-                    self.level5_limits,
-                )?;
-                Ok(())
-            },
-        )?;
+        if read_count < all_indices.len() {
+            let is_all_empty = all_indices.iter().all(|&b| {
+                let sz = self.buffer_info[b].buffer_grid[grid].size;
+                sz.0 == 0 || sz.1 == 0
+            });
+            if !is_all_empty {
+                let mut peek_br = br.clone();
+                let h = GroupHeader::read(&mut peek_br)?;
+                if h.transforms.is_empty() {
+                    *br = peek_br;
+                    let mut full_num_samples = 0usize;
+                    let mut full_image_width = 0usize;
+                    for &b in all_indices {
+                        let sz = self.buffer_info[b].buffer_grid[grid].size;
+                        if sz != (0, 0) {
+                            full_num_samples += sz.0 * sz.1;
+                            full_image_width = full_image_width.max(sz.0);
+                        }
+                    }
+                    with_buffers(
+                        &self.buffer_info,
+                        &all_indices[..read_count],
+                        grid,
+                        &self.recycler,
+                        |bufs| {
+                            decode_modular_subbitstream(
+                                bufs,
+                                self.storage,
+                                stream.get_id(frame_header),
+                                Some(h),
+                                global_tree,
+                                br,
+                                None,
+                                &mut scratch,
+                                self.level5_limits,
+                                Some((full_num_samples, full_image_width)),
+                            )?;
+                            Ok(())
+                        },
+                    )?;
+                } else {
+                    with_buffers(
+                        &self.buffer_info,
+                        all_indices,
+                        grid,
+                        &self.recycler,
+                        |bufs| {
+                            decode_modular_subbitstream(
+                                bufs,
+                                self.storage,
+                                stream.get_id(frame_header),
+                                None,
+                                global_tree,
+                                br,
+                                None,
+                                &mut scratch,
+                                self.level5_limits,
+                                None,
+                            )?;
+                            Ok(())
+                        },
+                    )?;
+                    for &b in &all_indices[read_count..] {
+                        if let Some(chan) = self.buffer_info[b].buffer_grid[grid]
+                            .data
+                            .try_write()
+                            .unwrap()
+                            .take()
+                        {
+                            self.recycler.recycle_raw_buffer(chan.data);
+                        }
+                    }
+                }
+            }
+        } else {
+            with_buffers(
+                &self.buffer_info,
+                all_indices,
+                grid,
+                &self.recycler,
+                |bufs| {
+                    decode_modular_subbitstream(
+                        bufs,
+                        self.storage,
+                        stream.get_id(frame_header),
+                        None,
+                        global_tree,
+                        br,
+                        None,
+                        &mut scratch,
+                        self.level5_limits,
+                        None,
+                    )?;
+                    Ok(())
+                },
+            )?;
+        }
         drop(scratch);
 
-        for b in self.section_buffer_indices[section_id].iter().copied() {
+        for b in all_indices[..read_count].iter().copied() {
             self.buffer_info[b].buffer_grid[grid]
                 .extract_needed_borders(self.storage, &self.recycler)?;
         }
 
-        self.has_decoded_data.fetch_or(
-            !self.section_buffer_indices[section_id].is_empty(),
-            Ordering::Relaxed,
-        );
+        self.has_decoded_data
+            .fetch_or(read_count > 0, Ordering::Relaxed);
 
         if section_id == 1 {
             self.delayed_ready_sections
@@ -744,7 +909,11 @@ impl FullModularImage {
     }
 
     fn mark_section_ready(&self, section_id: usize, grid: usize) {
-        for buf in self.section_buffer_indices[section_id].iter().copied() {
+        let read_count = self.section_read_counts[section_id];
+        for buf in self.section_buffer_indices[section_id][..read_count]
+            .iter()
+            .copied()
+        {
             self.update_deps(buf, grid);
         }
     }
@@ -752,7 +921,8 @@ impl FullModularImage {
     pub fn mark_final(&mut self, section_id: usize, grid: usize) {
         let mut buffer_stack = vec![];
         let mut stack = vec![];
-        for b in self.section_buffer_indices[section_id].iter() {
+        let read_count = self.section_read_counts[section_id];
+        for b in self.section_buffer_indices[section_id][..read_count].iter() {
             buffer_stack.push((*b, grid));
         }
         loop {
@@ -1127,6 +1297,7 @@ pub(super) fn decode_vardct_lf(
         None,
         scratch_space,
         level5_limits,
+        None,
     )?;
     dequant_lf(
         r,
@@ -1187,6 +1358,7 @@ pub(super) fn decode_hf_metadata(
         None,
         scratch_space,
         level5_limits,
+        None,
     )?;
     if storage == ModularStorage::I16 {
         decode_hf_metadata_finish::<i16>(&buffers, hf_meta, cr, r, count, frame_header)
@@ -1305,6 +1477,7 @@ pub(super) fn decode_quant_table(
         None,
         scratch_space,
         level5_limits,
+        None,
     )?;
     let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
     for channel in image.iter_mut() {

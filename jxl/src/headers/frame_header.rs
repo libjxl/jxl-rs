@@ -100,6 +100,19 @@ impl Passes {
             (1, 0)
         }
     }
+
+    pub fn num_passes_for_downsampling(&self, target_ds: usize) -> usize {
+        if target_ds <= 1 {
+            return self.num_passes as usize;
+        }
+        self.downsample
+            .iter()
+            .zip(self.last_pass.iter())
+            .filter(|&(&ds, _)| (ds as usize) <= target_ds)
+            .map(|(_, &lp)| (lp as usize + 1).min(self.num_passes as usize))
+            .min()
+            .unwrap_or(self.num_passes as usize)
+    }
 }
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
@@ -349,7 +362,7 @@ pub struct FrameHeader {
 
     #[default(false)]
     #[condition(frame_type != FrameType::LFFrame)]
-    have_crop: bool,
+    pub have_crop: bool,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]

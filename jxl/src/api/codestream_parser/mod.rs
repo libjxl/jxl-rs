@@ -10,7 +10,7 @@ pub(crate) use crate::api::codestream_parser::frame_scan_info::FrameStartInfo;
 use crate::api::codestream_parser::image_info::ImageInfo;
 use crate::api::{
     BoxParserCheckpoint, Event, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer,
-    JxlParallelRunner, JxlPixelFormat, ProfileLevel, SmallBuffer, VisibleFrameSeekTarget,
+    JxlParallelRunner, JxlPixelFormat, ProfileLevel, Rect, SmallBuffer, VisibleFrameSeekTarget,
 };
 use crate::error::{Error, Result};
 use crate::headers::frame_header::FrameHeader;
@@ -111,6 +111,8 @@ pub(super) struct CodestreamParser {
     // Output information
     pub output_color_profile: Option<JxlColorProfile>,
     pub pixel_format: Option<JxlPixelFormat>,
+    pub crop: Option<Rect>,
+    pub downsampling: usize,
 
     /// While seeking: the number of visible frames still to skip before the target.
     visible_frames_to_skip: Option<usize>,
@@ -141,6 +143,8 @@ impl CodestreamParser {
             state: ParserState::FileHeader,
             output_color_profile: None,
             pixel_format: None,
+            crop: None,
+            downsampling: 1,
             local_buffer: SmallBuffer::new(4096),
             header_needed_bytes: None,
             frame_info: FrameInfo::new(),
@@ -327,7 +331,11 @@ impl CodestreamParser {
                     // Decide how much to decode this frame.
                     let mut process_mode = ProcessMode::Process;
 
-                    if is_preview && decode_options.skip_preview {
+                    if is_preview
+                        && (decode_options.skip_preview
+                            || self.crop.is_some()
+                            || self.downsampling > 1)
+                    {
                         process_mode = ProcessMode::Skip(false);
                     }
 
@@ -384,6 +392,8 @@ impl CodestreamParser {
                         self.output_color_profile.as_ref().unwrap(),
                         process_mode,
                         level5_limits,
+                        self.crop,
+                        self.downsampling,
                     )?;
 
                     if !matches!(process_mode, ProcessMode::Skip(..)) {
