@@ -5,10 +5,10 @@
 
 use crate::api::{Endianness, JxlDataFormat, JxlOutputBuffer};
 use crate::error::Result;
-use crate::image::Image;
+use crate::image::{Image, Rect};
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::render::save::{SaveChannelType, SaveStage};
-use crate::util::{DITHER_TABLE, f16};
+use crate::util::{DITHER_TABLE, ShiftRightCeil, f16};
 
 impl SaveStage {
     pub(super) fn save_simple(
@@ -22,9 +22,17 @@ impl SaveStage {
         let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
             return Ok(());
         };
-        let size = data[0].size();
+        let full_size = data[0].size();
 
-        self.check_buffer_size(size, Some(buf))?;
+        self.check_buffer_size(full_size, Some(buf))?;
+
+        let crop = self.crop.unwrap_or(Rect {
+            origin: (0, 0),
+            size: full_size,
+        });
+        let ds = self.save_downsample as usize;
+        let scale = 1usize << ds;
+        let size = (crop.size.0.shrc(ds), crop.size.1.shrc(ds));
 
         let output_channels = self.output_channels();
 
@@ -35,9 +43,27 @@ impl SaveStage {
             .enumerate()
         {
             for y in 0..size.1 {
-                let src_row = data[chan].row(y);
+                let y0 = crop.origin.1 + y * scale;
+                let y1 = (y0 + scale).min(crop.origin.1 + crop.size.1);
 
-                for (x, &px) in src_row.iter().enumerate() {
+                for x in 0..size.0 {
+                    let x0 = crop.origin.0 + x * scale;
+                    let x1 = (x0 + scale).min(crop.origin.0 + crop.size.0);
+                    let px = if ds == 0 {
+                        data[chan].row(y0)[x0]
+                    } else {
+                        let mut sum = 0.0f32;
+                        for sy in y0..y1 {
+                            let row = data[chan].row(sy);
+                            let mut row_sum = 0.0f32;
+                            for &v in &row[x0..x1] {
+                                row_sum += v as f32;
+                            }
+                            sum += row_sum;
+                        }
+                        (sum * (1.0 / ((x1 - x0) * (y1 - y0)) as f32)) as f64
+                    };
+                    let (dither_x, dither_y) = if ds == 0 { (x0, y0) } else { (x, y) };
                     let (dx, dy) = self.orientation.display_pixel((x, y), size);
                     let dx = dx * output_channels + c;
                     let bps = self.data_format.bytes_per_sample();
@@ -58,7 +84,8 @@ impl SaveStage {
                     match (ch_ty, self.data_format) {
                         (SaveChannelType::F32, JxlDataFormat::U8 { bit_depth }) => {
                             let max = ((1u32 << bit_depth) - 1) as f32;
-                            let dither = DITHER_TABLE[(y + chan * 13) % 32][(x + chan * 23) % 32];
+                            let dither = DITHER_TABLE[(dither_y + chan * 13) % 32]
+                                [(dither_x + chan * 23) % 32];
                             let v = ((px as f32) * max + dither).clamp(0.0, max).round() as u8;
                             write_pixel!(v, Endianness::LittleEndian);
                         }

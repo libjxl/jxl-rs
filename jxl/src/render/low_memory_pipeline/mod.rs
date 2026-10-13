@@ -62,6 +62,7 @@ impl RowBufferConfig {
 struct LowMemoryRenderPipelinePerThread {
     row_buffers: Vec<Vec<RowBuffer>>,
     save_scratch: Option<[RowBuffer; 4]>,
+    downsample_scratch: Vec<Option<[RowBuffer; 4]>>,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<ErasedLocalState>>>,
 }
@@ -82,12 +83,33 @@ impl LowMemoryRenderPipelinePerThread {
             .iter()
             .map(|stage_cfgs| stage_cfgs.iter().map(RowBufferConfig::allocate).collect())
             .collect::<Result<_>>()?;
+        let max_tile_width = p.shared.chunk_size + 2 * (p.base_border_size.0 + p.save_align.0);
         self.save_scratch = Some([
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, max_tile_width)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, max_tile_width)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, max_tile_width)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, max_tile_width)?,
         ]);
+        self.downsample_scratch = p
+            .shared
+            .stages
+            .iter()
+            .map(|stage| {
+                if let Stage::Save(s) = stage
+                    && s.save_downsample > 0
+                {
+                    let ds_len = max_tile_width.shrc(s.save_downsample);
+                    Ok(Some([
+                        RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ds_len)?,
+                        RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ds_len)?,
+                        RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ds_len)?,
+                        RowBuffer::new(DataTypeTag::F32, 0, 0, 0, ds_len)?,
+                    ]))
+                } else {
+                    Ok(None)
+                }
+            })
+            .collect::<Result<_>>()?;
         self.local_states = p
             .shared
             .stages
@@ -116,8 +138,13 @@ pub struct LowMemoryRenderPipeline {
     // The amount of pixels that we need to read (for every channel) in non-edge groups to run all
     // stages correctly.
     input_border_pixels: Vec<(usize, usize)>,
+    // Size of the border due to stages, in image (i.e. non-downsampled) pixels.
+    base_border_size: (usize, usize),
     // Size of the border, in image (i.e. non-downsampled) pixels.
     border_size: (usize, usize),
+    save_downsample: u8,
+    save_align: (usize, usize),
+    save_crop_origin: (usize, usize),
     // For every stage, the downsampling level of *any* channel that the stage uses at that point.
     // Note that this must be equal across all the used channels.
     downsampling_for_stage: Vec<(usize, usize)>,
@@ -161,6 +188,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         // Compute information to be used to compute sub-rects for "save" stages to operate on
         // rects.
         let mut save_buffer_info = vec![];
+        let mut save_downsample = 0u8;
+        let mut save_crop_origin = (0usize, 0usize);
         'stage: for (i, (s, ci)) in shared
             .stages
             .iter()
@@ -170,6 +199,12 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             let Stage::Save(s) = s else {
                 continue;
             };
+            if s.save_downsample > 0 {
+                save_downsample = save_downsample.max(s.save_downsample);
+                if let Some(crop) = s.crop {
+                    save_crop_origin = crop.origin;
+                }
+            }
             for (c, ci) in ci.iter().enumerate() {
                 if s.uses_channel(c) {
                     let info = SaveStageBufferInfo {
@@ -177,6 +212,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                         orientation: s.orientation,
                         byte_size: s.data_format.bytes_per_sample() * s.output_channels(),
                         after_extend: shared.extend_stage_index.is_some_and(|e| i > e),
+                        crop: s.crop,
+                        save_downsample: s.save_downsample,
                     };
                     while save_buffer_info.len() <= s.output_buffer_index {
                         save_buffer_info.push(None);
@@ -276,6 +313,37 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 .max(border_pixels_per_stage[s].1 << downsampling_for_stage[s].1);
         }
 
+        let base_border_size = border_size;
+        let scale = 1usize << save_downsample;
+        let max_dx = (0..nc)
+            .map(|c| shared.channel_info[0][c].downsample.0 as usize)
+            .max()
+            .unwrap_or(0);
+        let max_dy = (0..nc)
+            .map(|c| shared.channel_info[0][c].downsample.1 as usize)
+            .max()
+            .unwrap_or(0);
+        let save_align = if save_downsample > 0 {
+            (scale.max(1usize << max_dx), scale.max(1usize << max_dy))
+        } else {
+            (1, 1)
+        };
+        let extra_border_x = if save_downsample > 0 {
+            (save_align.0 / 2).next_multiple_of(1usize << max_dx)
+        } else {
+            0
+        };
+        let extra_border_y = if save_downsample > 0 {
+            (save_align.1 / 2).next_multiple_of(1usize << max_dy)
+        } else {
+            0
+        };
+        let border_size = (
+            base_border_size.0 + extra_border_x,
+            base_border_size.1 + extra_border_y,
+        );
+        let max_tile_width = shared.chunk_size + 2 * (base_border_size.0 + save_align.0);
+
         let mut row_buffer_configs = vec![];
         let mut initial_configs = vec![];
         for chan in 0..nc {
@@ -285,7 +353,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 next_y_border: next_border_and_cur_downsample[0][chan].0 as usize,
                 y_shift: 0,
                 x_shift: 0,
-                row_len: (shared.chunk_size + 2 * border_size.0) >> dsx,
+                row_len: max_tile_width >> dsx,
             });
         }
         row_buffer_configs.push(initial_configs);
@@ -298,7 +366,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                     next_y_border: next_y_border as usize,
                     y_shift: stage.shift().1 as usize,
                     x_shift: stage.shift().0 as usize,
-                    row_len: (shared.chunk_size + 2 * border_size.0) >> dsx,
+                    row_len: max_tile_width >> dsx,
                 });
             }
             row_buffer_configs.push(stage_configs);
@@ -348,12 +416,17 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             per_thread_data: PerThreadStorage::new(|| LowMemoryRenderPipelinePerThread {
                 row_buffers: vec![],
                 save_scratch: None,
+                downsample_scratch: vec![],
                 local_states: vec![],
             }),
             padding_was_rendered: false,
             save_buffer_info,
             stage_output_border_pixels: border_pixels_per_stage,
+            base_border_size,
             border_size,
+            save_downsample,
+            save_align,
+            save_crop_origin,
             input_border_pixels: border_pixels,
             shared,
             downsampling_for_stage,

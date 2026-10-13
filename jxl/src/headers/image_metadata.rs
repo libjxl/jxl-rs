@@ -54,6 +54,14 @@ impl Orientation {
         )
     }
 
+    pub fn inverse(&self) -> Orientation {
+        match self {
+            Orientation::Rotate90Cw => Orientation::Rotate90Ccw,
+            Orientation::Rotate90Ccw => Orientation::Rotate90Cw,
+            other => *other,
+        }
+    }
+
     pub fn map_size(&self, size: (usize, usize)) -> (usize, usize) {
         if self.is_transposing() {
             (size.1, size.0)

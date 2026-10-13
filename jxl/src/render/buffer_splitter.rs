@@ -118,6 +118,8 @@ pub struct SaveStageBufferInfo {
     pub orientation: Orientation,
     pub byte_size: usize,
     pub after_extend: bool,
+    pub crop: Option<Rect>,
+    pub save_downsample: u8,
 }
 
 /// Data structure responsible for handing out access to portions of the output buffers.
@@ -203,11 +205,41 @@ impl<'a> BufferSplitter<'a> {
                         };
                     }
                 }
+                let mut target_size = full_image_size;
+                if let Some(crop) = bi.crop {
+                    let x0 = channel_rect.origin.0.max(crop.origin.0);
+                    let y0 = channel_rect.origin.1.max(crop.origin.1);
+                    let x1 = channel_rect.end().0.min(crop.end().0);
+                    let y1 = channel_rect.end().1.min(crop.end().1);
+                    if x0 >= x1 || y0 >= y1 {
+                        return None;
+                    }
+                    channel_rect = Rect {
+                        origin: (x0 - crop.origin.0, y0 - crop.origin.1),
+                        size: (x1 - x0, y1 - y0),
+                    };
+                    target_size = crop.size;
+                }
+                if bi.save_downsample > 0 {
+                    let ds = bi.save_downsample;
+                    let x0 = channel_rect.origin.0 >> ds;
+                    let y0 = channel_rect.origin.1 >> ds;
+                    let x1 = channel_rect.end().0.shrc(ds);
+                    let y1 = channel_rect.end().1.shrc(ds);
+                    if x0 >= x1 || y0 >= y1 {
+                        return None;
+                    }
+                    channel_rect = Rect {
+                        origin: (x0, y0),
+                        size: (x1 - x0, y1 - y0),
+                    };
+                    target_size = (target_size.0.shrc(ds), target_size.1.shrc(ds));
+                }
                 if channel_rect.size.0 == 0 || channel_rect.size.1 == 0 {
                     // Buffer would be empty anyway.
                     return None;
                 }
-                let channel_rect = bi.orientation.display_rect(channel_rect, full_image_size);
+                let channel_rect = bi.orientation.display_rect(channel_rect, target_size);
                 let channel_rect = channel_rect.to_byte_rect_sz(bi.byte_size);
                 Some(buf.borrow_rect(channel_rect))
             })
@@ -220,6 +252,12 @@ impl<'a> BufferSplitter<'a> {
 
     #[cfg(test)]
     pub fn get_full_buffers(&self) -> ChannelVec<Option<OutputChannelRef<'a, '_>>> {
+        if let Some(Some(b)) = self.buffers.first() {
+            self.requested_rects.lock().unwrap().push(Rect {
+                origin: (0, 0),
+                size: b.buffer.byte_size(),
+            });
+        }
         self.buffers
             .iter()
             .map(|x| {
@@ -282,6 +320,8 @@ mod tests {
             orientation: Orientation::Identity,
             byte_size: 1,
             after_extend: false,
+            crop: None,
+            save_downsample: 0,
         })];
 
         let _local1 = splitter.get_local_buffers(
@@ -331,6 +371,8 @@ mod tests {
                             orientation,
                             byte_size,
                             after_extend: false,
+                            crop: None,
+                            save_downsample: 0,
                         })
                     } else {
                         None

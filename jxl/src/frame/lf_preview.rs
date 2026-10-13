@@ -159,6 +159,7 @@ impl Frame {
                 save_stage.save_lowmem(
                     &input_channels,
                     &mut scratch,
+                    None,
                     output_buffers,
                     upsampled_rect.size,
                     uy,
@@ -240,6 +241,8 @@ impl Frame {
             orientation,
             byte_size: data_format.bytes_per_sample() * color_type.samples_per_pixel(),
             after_extend: false,
+            crop: None,
+            save_downsample: 0,
         };
         let info = [Some(info)];
         let mut bufs = [Some(JxlOutputBuffer::reborrow(&mut output_buffers[0]))];

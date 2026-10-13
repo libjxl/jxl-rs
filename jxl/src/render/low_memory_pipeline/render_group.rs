@@ -304,7 +304,7 @@ impl LowMemoryRenderPipeline {
         } = image_area;
 
         let num_channels = self.shared.num_channels();
-        let num_extra_rows = self.border_size.1;
+        let num_extra_rows = self.base_border_size.1;
 
         // This follows the same implementation strategy as the C++ code in libjxl.
         // We pretend that every stage has a vertical shift of 0, i.e. it is as tall
@@ -430,6 +430,7 @@ impl LowMemoryRenderPipeline {
                         s.save_lowmem(
                             &input_data,
                             data.save_scratch.as_mut().unwrap(),
+                            data.downsample_scratch[i].as_mut(),
                             &mut *buffers,
                             (xsize >> dx, num_rows >> dy),
                             y,
@@ -528,8 +529,13 @@ impl LowMemoryRenderPipeline {
             std::iter::repeat_n(false, self.shared.stages.len()).collect();
 
         // Significantly simplified version of render_group.
+        let extend_idx = self.shared.extend_stage_index.unwrap();
+        let Stage::Extend(extend_stage) = &self.shared.stages[extend_idx] else {
+            unreachable!("extend stage is not an extend stage");
+        };
+        let full_image_size = extend_stage.image_size;
         for y in yrange.clone() {
-            let extend = self.shared.extend_stage_index.unwrap();
+            let extend = extend_idx;
             // Step 1: get padding from extend stage.
             for c in 0..num_channels {
                 let (si, ci) = self.stage_input_buffer_index[extend][c];
@@ -576,11 +582,12 @@ impl LowMemoryRenderPipeline {
                         s.save_lowmem(
                             &input_data,
                             data.save_scratch.as_mut().unwrap(),
+                            data.downsample_scratch[i].as_mut(),
                             &mut *buffers,
                             (xsize, ysize),
                             y,
                             (x0, y0),
-                            (xrange.end, yrange.end), // this is not true, but works out correctly.
+                            full_image_size,
                             (0, 0),
                         )?;
                     }

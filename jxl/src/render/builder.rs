@@ -12,7 +12,7 @@ use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
 use crate::headers::bit_depth::BitDepth;
-use crate::image::{BufferRecycler, DataTypeTag};
+use crate::image::{BufferRecycler, DataTypeTag, Rect};
 use crate::render::internal::ChannelInfo;
 use crate::render::save::{SaveChannelType, SaveStage};
 use crate::render::stages::{ConvertModular16ToF32Stage, ConvertModularToF32Stage};
@@ -81,6 +81,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             {
                 if let Stage::Save(s) = &mut stage
                     && !in_bd.floating_point_sample()
+                    && s.save_downsample == 0
                 {
                     let in_bits = in_bd.bits_per_sample() as u8;
                     let can_convert_inline = match s.data_format {
@@ -143,6 +144,30 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         data_format: JxlDataFormat,
         fill_opaque_alpha: bool,
     ) -> Self {
+        self.add_save_stage_with_crop_downsample(
+            channels,
+            orientation,
+            output_buffer_index,
+            color_type,
+            data_format,
+            fill_opaque_alpha,
+            None,
+            0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_save_stage_with_crop_downsample(
+        self,
+        channels: &[usize],
+        orientation: Orientation,
+        output_buffer_index: usize,
+        color_type: JxlColorType,
+        data_format: JxlDataFormat,
+        fill_opaque_alpha: bool,
+        crop: Option<Rect>,
+        save_downsample: u8,
+    ) -> Self {
         let stage = SaveStage::new(
             channels,
             orientation,
@@ -150,7 +175,8 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             color_type,
             data_format,
             fill_opaque_alpha,
-        );
+        )
+        .with_crop_and_downsample(crop, save_downsample);
         self.add_stage_internal(Stage::Save(stage))
     }
 

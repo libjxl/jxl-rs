@@ -70,6 +70,25 @@ fn foreach_ready_rect(
     Ok(())
 }
 
+fn align_down(p: usize, scale: usize, crop_origin: usize) -> usize {
+    if scale <= 1 || p <= crop_origin {
+        p
+    } else {
+        let rel = p - crop_origin;
+        crop_origin + (rel / scale) * scale
+    }
+}
+
+fn align_up(p: usize, scale: usize, crop_origin: usize) -> usize {
+    if scale <= 1 || p <= crop_origin {
+        p
+    } else {
+        let rel = p - crop_origin;
+        crop_origin + rel.div_ceil(scale) * scale
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn boundary_points(
     origin: usize,
     end: usize,
@@ -77,28 +96,33 @@ fn boundary_points(
     is_last: bool,
     border: usize,
     input_size: usize,
+    scale: usize,
+    crop_origin: usize,
 ) -> [usize; 4] {
     let p0 = if is_first {
         origin
     } else {
-        origin.saturating_sub(border)
+        align_down(origin.saturating_sub(border), scale, crop_origin)
     };
-    let p1 = (origin + border).min(end);
-    let p2 = end.saturating_sub(border).max(p1);
+    let p1 = align_up(origin + border, scale, crop_origin).min(end);
+    let p2 = align_down(end.saturating_sub(border), scale, crop_origin).max(p1);
     let p3 = if is_last {
         end
     } else {
-        (end + border).min(input_size)
+        align_up(end + border, scale, crop_origin).min(input_size)
     };
     [p0, p1, p2, p3]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ready_image_area(
     group_rect: Rect,
     group_position: (usize, usize),
     group_count: (usize, usize),
     input_size: (usize, usize),
     border_size: (usize, usize),
+    scale: (usize, usize),
+    crop_origin: (usize, usize),
     xrange: Range<u8>,
     yrange: Range<u8>,
 ) -> Option<Rect> {
@@ -110,6 +134,8 @@ fn ready_image_area(
         gx + 1 == group_count.0,
         border_size.0,
         input_size.0,
+        scale.0,
+        crop_origin.0,
     );
     let ys = boundary_points(
         group_rect.origin.1,
@@ -118,6 +144,8 @@ fn ready_image_area(
         gy + 1 == group_count.1,
         border_size.1,
         input_size.1,
+        scale.1,
+        crop_origin.1,
     );
 
     let x0 = xs[xrange.start as usize];
@@ -224,7 +252,9 @@ impl LowMemoryRenderPipeline {
                 (gx, gy),
                 self.shared.group_count,
                 self.shared.input_size,
-                self.border_size,
+                self.base_border_size,
+                self.save_align,
+                self.save_crop_origin,
                 xrange,
                 yrange,
             ) else {
@@ -314,6 +344,8 @@ mod tests {
             (2, 2),
             (520, 520),
             (18, 18),
+            (1, 1),
+            (0, 0),
             0..1,
             0..1,
         );
@@ -339,6 +371,8 @@ mod tests {
             (3, 2),
             (513, 321),
             (3, 3),
+            (1, 1),
+            (0, 0),
             1..3,
             0..2,
         );
