@@ -144,6 +144,46 @@ enum CoeffsMut<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn decode_channel_coeffs_ans_no_lz77<T: CoeffStorage, const LOG_NUM_BLOCKS: usize>(
+    current_coeffs: &mut [T],
+    permutation: &Permutation,
+    histo_offset: usize,
+    shift: u32,
+    mut prev: usize,
+    nonzeros: &mut usize,
+    reader: &mut SymbolReader,
+    histograms: &Histograms,
+    ans: &crate::entropy_coding::ans::AnsCodes,
+    br: &mut BitReader,
+) {
+    let num_blocks = 1usize << LOG_NUM_BLOCKS;
+    let num_coeffs = 64usize << LOG_NUM_BLOCKS;
+    assert!(permutation.len() >= num_coeffs);
+    assert!(*nonzeros > 0 && *nonzeros <= 63usize << LOG_NUM_BLOCKS);
+    let mut nz = *nonzeros;
+    let mut nz_ctx = histo_offset + COEFF_NUM_NONZERO_CONTEXT[((nz - 1) >> LOG_NUM_BLOCKS) + 1];
+    for k in num_blocks..num_coeffs {
+        let ctx = nz_ctx + COEFF_FREQ_CONTEXT[k >> LOG_NUM_BLOCKS] + prev;
+        let cluster = histograms.map_context_to_cluster(ctx);
+        let token = reader.read_token_ans_no_lz77(ans, br, cluster);
+        if token == 0 {
+            prev = 0;
+            continue;
+        }
+        let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
+        let coeff_index = permutation[k] as usize;
+        current_coeffs[coeff_index].add_coeff(coeff);
+        nz -= 1;
+        if nz == 0 {
+            break;
+        }
+        prev = 1;
+        nz_ctx = histo_offset + COEFF_NUM_NONZERO_CONTEXT[((nz - 1) >> LOG_NUM_BLOCKS) + 1];
+    }
+    *nonzeros = nz;
+}
+
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn decode_channel_coeffs<T: CoeffStorage>(
     current_coeffs: &mut [T],
@@ -158,6 +198,9 @@ fn decode_channel_coeffs<T: CoeffStorage>(
     histograms: &Histograms,
     br: &mut BitReader,
 ) -> Result<(), Error> {
+    if nonzeros == 0 {
+        return Ok(());
+    }
     // Asserting once lets the compiler elide the bounds check on
     // `permutation[k]` inside the loop given `k < num_coeffs`.
     assert!(permutation.len() >= num_coeffs);
@@ -165,32 +208,34 @@ fn decode_channel_coeffs<T: CoeffStorage>(
     if !reader.has_lz77() {
         match histograms.codes() {
             Codes::Ans(ans) => {
-                for k in num_blocks..num_coeffs {
-                    if nonzeros == 0 {
-                        break;
-                    }
-                    let ctx =
-                        histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                    let cluster = histograms.map_context_to_cluster(ctx);
-                    let token = reader.read_token_ans_no_lz77(ans, br, cluster);
-                    if token == 0 {
-                        prev = 0;
-                        continue;
-                    }
-                    let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
-                    prev = 1;
-                    nonzeros -= 1;
-                    let coeff_index = permutation[k] as usize;
-                    current_coeffs[coeff_index].add_coeff(coeff);
+                macro_rules! dispatch_ans {
+                    ($($l:literal),*) => {
+                        match log_num_blocks {
+                            $(
+                                $l => decode_channel_coeffs_ans_no_lz77::<T, $l>(
+                                    current_coeffs,
+                                    permutation,
+                                    histo_offset,
+                                    shift,
+                                    prev,
+                                    &mut nonzeros,
+                                    reader,
+                                    histograms,
+                                    ans,
+                                    br,
+                                ),
+                            )*
+                            _ => unreachable!(),
+                        }
+                    };
                 }
+                dispatch_ans!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
             }
             Codes::Huffman(hc) => {
+                let mut nz_ctx =
+                    histo_offset + COEFF_NUM_NONZERO_CONTEXT[nonzeros.shrc(log_num_blocks) & 63];
                 for k in num_blocks..num_coeffs {
-                    if nonzeros == 0 {
-                        break;
-                    }
-                    let ctx =
-                        histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                    let ctx = nz_ctx + COEFF_FREQ_CONTEXT[(k >> log_num_blocks) & 63] + prev;
                     let cluster = histograms.map_context_to_cluster(ctx);
                     let token = reader.read_token_huffman_no_lz77(hc, br, cluster);
                     if token == 0 {
@@ -198,28 +243,36 @@ fn decode_channel_coeffs<T: CoeffStorage>(
                         continue;
                     }
                     let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
-                    prev = 1;
-                    nonzeros -= 1;
                     let coeff_index = permutation[k] as usize;
                     current_coeffs[coeff_index].add_coeff(coeff);
+                    nonzeros -= 1;
+                    if nonzeros == 0 {
+                        break;
+                    }
+                    prev = 1;
+                    nz_ctx = histo_offset
+                        + COEFF_NUM_NONZERO_CONTEXT[nonzeros.shrc(log_num_blocks) & 63];
                 }
             }
         }
     } else {
+        let mut nz_ctx =
+            histo_offset + COEFF_NUM_NONZERO_CONTEXT[nonzeros.shrc(log_num_blocks) & 63];
         for k in num_blocks..num_coeffs {
-            if nonzeros == 0 {
-                break;
-            }
-            let ctx = histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+            let ctx = nz_ctx + COEFF_FREQ_CONTEXT[(k >> log_num_blocks) & 63] + prev;
             let coeff = reader.read_signed_inline(histograms, br, ctx) << shift;
             if coeff == 0 {
                 prev = 0;
                 continue;
             }
-            prev = 1;
-            nonzeros -= 1;
             let coeff_index = permutation[k] as usize;
             current_coeffs[coeff_index].add_coeff(coeff);
+            nonzeros -= 1;
+            if nonzeros == 0 {
+                break;
+            }
+            prev = 1;
+            nz_ctx = histo_offset + COEFF_NUM_NONZERO_CONTEXT[nonzeros.shrc(log_num_blocks) & 63];
         }
     }
     if nonzeros != 0 {
@@ -412,9 +465,15 @@ fn dequant_block<D: SimdDescriptor>(
 }
 
 #[inline(always)]
-fn copy_lf_rows<const XS: usize>(lf: &mut [f32], rect: &ImageRect<f32>, ys: usize) {
+fn copy_lf_rows<const XS: usize>(
+    lf: &mut [f32],
+    rect: &ImageRect<f32>,
+    x0: usize,
+    y0: usize,
+    ys: usize,
+) {
     for (y, dst) in lf.chunks_exact_mut(XS).take(ys).enumerate() {
-        dst.copy_from_slice(&rect.row(y)[..XS]);
+        dst.copy_from_slice(&rect.row(y0 + y)[x0..x0 + XS]);
     }
 }
 
@@ -488,14 +547,16 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         }
         let lf = &mut scratch[..];
         let rect = &lf_rects[c];
+        let x0 = sbx[c];
+        let y0 = sby[c];
         match (xs, ys) {
-            (1, 1) => lf[0] = rect.row(0)[0],
-            (1, _) => copy_lf_rows::<1>(lf, rect, ys),
-            (2, _) => copy_lf_rows::<2>(lf, rect, ys),
-            (4, _) => copy_lf_rows::<4>(lf, rect, ys),
-            (8, _) => copy_lf_rows::<8>(lf, rect, ys),
-            (16, _) => copy_lf_rows::<16>(lf, rect, ys),
-            (32, _) => copy_lf_rows::<32>(lf, rect, ys),
+            (1, 1) => lf[0] = rect.row(y0)[x0],
+            (1, _) => copy_lf_rows::<1>(lf, rect, x0, y0, ys),
+            (2, _) => copy_lf_rows::<2>(lf, rect, x0, y0, ys),
+            (4, _) => copy_lf_rows::<4>(lf, rect, x0, y0, ys),
+            (8, _) => copy_lf_rows::<8>(lf, rect, x0, y0, ys),
+            (16, _) => copy_lf_rows::<16>(lf, rect, x0, y0, ys),
+            (32, _) => copy_lf_rows::<32>(lf, rect, x0, y0, ys),
             _ => unreachable!(),
         }
         transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
@@ -716,6 +777,30 @@ pub fn decode_vardct_group(
         frame_header.vshift(2),
     ];
 
+    let lf_rects = {
+        // Subsampled LF image is at the top-left corner of each LF group.
+        let lfgx = block_group_rect.origin.0 >> log_group_dim;
+        let lfgy = block_group_rect.origin.1 >> log_group_dim;
+        let lfbx = lfgx << log_group_dim;
+        let lfby = lfgy << log_group_dim;
+
+        let lf_area: [Rect; 3] = core::array::from_fn(|i| Rect {
+            origin: (
+                lfbx + ((block_group_rect.origin.0 - lfbx) >> hshift[i]),
+                lfby + ((block_group_rect.origin.1 - lfby) >> vshift[i]),
+            ),
+            size: (
+                block_group_rect.size.0 >> hshift[i],
+                block_group_rect.size.1 >> vshift[i],
+            ),
+        });
+        [
+            lf_image[0].get_rect(lf_area[0]),
+            lf_image[1].get_rect(lf_area[1]),
+            lf_image[2].get_rect(lf_area[2]),
+        ]
+    };
+
     for by in 0..block_group_rect.size.1 {
         let sby = [by >> vshift[0], by >> vshift[1], by >> vshift[2]];
         let ty = by / COLOR_TILE_DIM_IN_BLOCKS;
@@ -745,27 +830,6 @@ pub fn decode_vardct_group(
             let block_rect = Rect {
                 origin: (bx * BLOCK_DIM, by * BLOCK_DIM),
                 size: block_size,
-            };
-
-            let lf_rects = {
-                // Subsampled LF image is at the top-left corner of each LF group.
-                let lfgx = block_group_rect.origin.0 >> log_group_dim;
-                let lfgy = block_group_rect.origin.1 >> log_group_dim;
-                let lfbx = lfgx << log_group_dim;
-                let lfby = lfgy << log_group_dim;
-
-                let lf_area: [Rect; 3] = core::array::from_fn(|i| Rect {
-                    origin: (
-                        lfbx + ((block_group_rect.origin.0 - lfbx + bx) >> hshift[i]),
-                        lfby + ((block_group_rect.origin.1 - lfby + by) >> vshift[i]),
-                    ),
-                    size: (cx, cy),
-                });
-                [
-                    lf_image[0].get_rect(lf_area[0]),
-                    lf_image[1].get_rect(lf_area[1]),
-                    lf_image[2].get_rect(lf_area[2]),
-                ]
             };
 
             let num_blocks = cx * cy;
