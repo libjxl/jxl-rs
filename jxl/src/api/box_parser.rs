@@ -201,8 +201,24 @@ impl BoxParser {
         }
     }
 
+    pub(super) fn reset(&mut self) {
+        self.local_buffer.reset();
+        self.version = None;
+        self.ooo_jxlp_buffer.clear();
+        self.state = ParseState::SignatureNeeded;
+        self.latest_codestream_box = CodestreamBoxType::None;
+        self.codestream_pos_to_box.clear();
+        self.allow_checkpoint = true;
+        self.container_level = None;
+        self.aux.boxes.clear();
+        self.aux.box_buffer = None;
+        self.aux.next_box_idx = 0;
+        self.aux.seen_box_count = 0;
+        self.input_closed = false;
+    }
+
     pub(super) fn reset_to_checkpoint(&mut self, box_checkpoint: BoxParserCheckpoint) {
-        self.local_buffer = SmallBuffer::new(128);
+        self.local_buffer.reset();
         self.ooo_jxlp_buffer.clear();
         self.latest_codestream_box = box_checkpoint.box_type;
         self.state = ParseState::Codestream(box_checkpoint.codestream_left);

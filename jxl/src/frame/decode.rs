@@ -46,7 +46,7 @@ use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
 use crate::util::sync::{Arc, Mutex, RwLock};
 use crate::util::tracing_wrappers::*;
-use crate::util::{CeilLog2, PerThreadStorage, ShiftRightCeil, Xorshift128Plus, mirror};
+use crate::util::{CeilLog2, ShiftRightCeil, Xorshift128Plus, mirror};
 
 fn upsample_lf_group(
     group: usize,
@@ -205,6 +205,7 @@ impl Frame {
         toc: Toc,
         mut decoder_state: DecoderState,
         frame_counters: (usize, usize),
+        buffer_recycler: Arc<BufferRecycler>,
     ) -> Result<Box<Self>> {
         if frame_header.frame_type == FrameType::LFFrame && frame_header.lf_level == 1 {
             decoder_state.lf_frame_was_rendered = false;
@@ -282,8 +283,6 @@ impl Frame {
 
         let num_extra_channels = image_metadata.extra_channel_info.len();
 
-        let group_dim = frame_header.group_dim();
-
         Ok(Box::new(Self {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
@@ -301,7 +300,6 @@ impl Frame {
             reference_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
-            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
             patches: Arc::new(RwLock::new(PatchesDictionary::new(num_extra_channels))),
             splines: Arc::new(RwLock::new(Splines::default())),
             noise: Arc::new(RwLock::new(Noise::default())),
@@ -309,7 +307,7 @@ impl Frame {
             color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
             epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
-            buffer_recycler: Arc::new(BufferRecycler::new(group_dim)),
+            buffer_recycler,
             lf_preview_dirty_groups: BTreeSet::new(),
         }))
     }
@@ -770,7 +768,7 @@ impl Frame {
             self.lf_image.as_ref().unwrap()
         };
 
-        let mut vardct_buffers = self.vardct_buffers.get();
+        let mut vardct_buffers = self.buffer_recycler.vardct_buffers.get();
         if self.group_status.channel_status[group][0] == DataStatus::Zero && render_vardct {
             info!("Upsampling LF for group {group}");
             upsample_lf_group(

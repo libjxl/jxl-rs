@@ -1688,3 +1688,117 @@ fn test_fuzzer_icc_lz77_restore_empty_rewind() {
         );
     }
 }
+
+#[test]
+fn test_decoder_reset() {
+    let paths = [
+        "resources/test/basic.jxl",
+        "resources/test/with_preview.jxl",
+        "resources/test/3x3_srgb_lossless.jxl",
+        "resources/test/has_permutation_with_container.jxl",
+        "resources/test/lossy_with_icc.jxl",
+        "resources/test/conformance_test_images/animation_spline.jxl",
+        "resources/test/conformance_test_images/bicycles.jxl",
+    ];
+    let files: Vec<_> = paths
+        .into_iter()
+        .map(|path| {
+            let data = std::fs::read(path).unwrap();
+            let expected = decode::<f32>(&data, Default::default()).unwrap();
+            (path, data, expected)
+        })
+        .collect();
+
+    arbtest::arbtest(|u| {
+        let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+
+        let num_aborts = u.int_in_range(0..=3)?;
+        for _ in 0..num_aborts {
+            let (_, data, _) = u.choose(&files)?;
+            let prefix_len = u.int_in_range(0..=data.len())?;
+            let chunk_size = u.int_in_range(1..=data.len().max(1))?;
+            let do_flush: bool = u.arbitrary()?;
+
+            decoder.reset();
+            let mut remaining = &data[..prefix_len];
+            let mut size = (0, 0);
+            let mut bufs: Option<Vec<Image<f32>>> = None;
+
+            loop {
+                let take = remaining.len().min(chunk_size);
+                let mut chunk = &remaining[..take];
+                let prev_len = chunk.len();
+                let mut out_bufs = bufs.as_mut().map(|b| as_output_buffers(b));
+                let event = decoder.process(&mut chunk, out_bufs.as_deref_mut(), None);
+                let consumed = prev_len - chunk.len();
+                remaining = &remaining[consumed..];
+
+                match event {
+                    Ok(Event::BasicInfo) => {
+                        size = decoder.basic_info().unwrap().size;
+                    }
+                    Ok(Event::FrameHeader) => {
+                        bufs = Some(vec![Image::<f32>::new((size.0 * 3, size.1)).unwrap()]);
+                    }
+                    Ok(Event::FrameComplete { .. }) => {
+                        bufs = None;
+                    }
+                    Ok(Event::NeedMoreInput { .. }) => {
+                        if do_flush && let Some(ref mut b) = bufs {
+                            let _ = decoder.flush_pixels(&mut as_output_buffers(b), None);
+                        }
+                        if remaining.is_empty() {
+                            break;
+                        }
+                    }
+                    Ok(Event::Complete) | Err(_) => break,
+                }
+            }
+        }
+
+        let num_full = u.int_in_range(1..=2)?;
+        for _ in 0..num_full {
+            let (path, data, expected) = u.choose(&files)?;
+            let chunk_size = u.int_in_range(1..=data.len())?;
+
+            decoder.reset();
+            let mut remaining = data.as_slice();
+            let mut current = &remaining[..0];
+            let mut size = (0, 0);
+            let mut bufs: Option<Vec<Image<f32>>> = None;
+            let mut frames = Vec::new();
+
+            loop {
+                let mut out_bufs = bufs.as_mut().map(|b| as_output_buffers(b));
+                match decoder
+                    .process(&mut current, out_bufs.as_deref_mut(), None)
+                    .unwrap()
+                {
+                    Event::BasicInfo => {
+                        size = decoder.basic_info().unwrap().size;
+                    }
+                    Event::FrameHeader => {
+                        bufs = Some(vec![Image::<f32>::new((size.0 * 3, size.1)).unwrap()]);
+                    }
+                    Event::FrameComplete { .. } => {
+                        frames.push(bufs.take().unwrap());
+                    }
+                    Event::NeedMoreInput { .. } => {
+                        assert!(!remaining.is_empty(), "Unexpected NeedMoreInput at EOF");
+                        let take = remaining.len().min(chunk_size);
+                        let (next, rest) = remaining.split_at(take);
+                        current = next;
+                        remaining = rest;
+                    }
+                    Event::Complete => break,
+                }
+            }
+
+            assert_eq!(expected.len(), frames.len());
+            for (fc, (f, sf)) in expected.iter().zip(frames.iter()).enumerate() {
+                compare_frames(Path::new(path), fc, f, sf);
+            }
+        }
+        Ok(())
+    });
+}

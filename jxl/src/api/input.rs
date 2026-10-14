@@ -87,6 +87,7 @@ impl<R: Read + Seek> JxlBitstreamInput for BufReader<R> {
 /// when the start of the populated range goes past half of its length.
 pub(super) struct SmallBuffer {
     buf: Vec<u8>,
+    initial_size: usize,
     range: Range<usize>,
     consumed: u64,
     bit_offset: u8,
@@ -157,10 +158,18 @@ impl SmallBuffer {
     pub(super) fn new(initial_size: usize) -> Self {
         Self {
             buf: vec![0; initial_size],
+            initial_size,
             range: 0..0,
             consumed: 0,
             bit_offset: 0,
         }
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.buf.truncate(self.initial_size);
+        self.range = 0..0;
+        self.consumed = 0;
+        self.bit_offset = 0;
     }
 
     pub(super) fn range(&self) -> Range<usize> {

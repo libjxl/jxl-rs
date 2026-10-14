@@ -6,19 +6,31 @@
 use std::collections::HashMap;
 
 use crate::error::Result;
+use crate::frame::VarDctBuffers;
+use crate::frame::modular::ScratchSpace;
 use crate::image::{Image, ImageDataType, OwnedRawImage};
+use crate::util::PerThreadStorage;
 use crate::util::sync::Mutex;
 
 struct BufferBucket {
     images: Mutex<Vec<OwnedRawImage>>,
 }
 
-pub struct BufferRecycler {
+pub(crate) struct BufferRecycler {
     buckets: HashMap<(usize, usize), BufferBucket>,
+    pub(crate) vardct_buffers: PerThreadStorage<VarDctBuffers>,
+    pub(crate) modular_scratch: PerThreadStorage<ScratchSpace>,
+}
+
+impl Default for BufferRecycler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BufferRecycler {
-    pub fn new(group_dim: usize) -> Self {
+    pub(crate) fn new() -> Self {
+        let group_dims = [128, 256, 512, 1024];
         let ty_sizes = [2, 4];
         let group_shifts = [0, 1, 2, 3];
         let modular_small_buffer_side = 4;
@@ -30,29 +42,35 @@ impl BufferRecycler {
                 images: Mutex::new(vec![]),
             });
         };
-        for ts in ty_sizes {
-            for gs in group_shifts {
-                let gsz = group_dim >> gs;
-                for ogs in group_shifts {
-                    add(gsz * ts, group_dim >> ogs);
-                }
-                add(gsz * ts, modular_small_buffer_side);
-                add(modular_small_buffer_side * ts, gsz);
-                for s in small_pipeline_buffer_sides {
-                    add(gsz * ts, s * 4);
-                    add(s * 4 * ts, gsz);
+        for group_dim in group_dims {
+            for ts in ty_sizes {
+                for gs in group_shifts {
+                    let gsz = group_dim >> gs;
+                    for ogs in group_shifts {
+                        add(gsz * ts, group_dim >> ogs);
+                    }
+                    add(gsz * ts, modular_small_buffer_side);
+                    add(modular_small_buffer_side * ts, gsz);
+                    for s in small_pipeline_buffer_sides {
+                        add(gsz * ts, s * 4);
+                        add(s * 4 * ts, gsz);
+                    }
                 }
             }
         }
-        Self { buckets }
+        Self {
+            buckets,
+            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
+            modular_scratch: PerThreadStorage::new(ScratchSpace::new),
+        }
     }
 
-    pub fn get_buffer<T: ImageDataType>(&self, size: (usize, usize)) -> Result<Image<T>> {
+    pub(crate) fn get_buffer<T: ImageDataType>(&self, size: (usize, usize)) -> Result<Image<T>> {
         self.get_raw_buffer((std::mem::size_of::<T>() * size.0, size.1), false)
             .map(Image::from_raw)
     }
 
-    pub fn get_raw_buffer(
+    pub(crate) fn get_raw_buffer(
         &self,
         byte_size: (usize, usize),
         zero_if_recycled: bool,
@@ -69,12 +87,13 @@ impl BufferRecycler {
             .unwrap_or_else(|| OwnedRawImage::new(byte_size))
     }
 
-    pub fn recycle_buffer<T: ImageDataType>(&self, buffer: Image<T>) {
+    #[allow(dead_code)]
+    pub(crate) fn recycle_buffer<T: ImageDataType>(&self, buffer: Image<T>) {
         let buffer = buffer.into_raw();
         self.recycle_raw_buffer(buffer);
     }
 
-    pub fn recycle_raw_buffer(&self, buffer: OwnedRawImage) {
+    pub(crate) fn recycle_raw_buffer(&self, buffer: OwnedRawImage) {
         let byte_size = buffer.byte_size();
         if let Some(b) = self.buckets.get(&byte_size) {
             b.images.lock().unwrap().push(buffer);
