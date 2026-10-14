@@ -344,7 +344,14 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     continue;
                 } else if allow_partial_files {
                     if let Some(ref mut output_bufs) = output_bufs {
-                        decoder.flush_pixels(output_bufs, Some(&mut RayonParallelRunner))?;
+                        let changed =
+                            decoder.flush_pixels(output_bufs, Some(&mut RayonParallelRunner))?;
+                        // Saving the first frame now would write an image with nothing in it.
+                        if image_data.frames.is_empty() && !changed && partial_renders.is_empty() {
+                            return Err(eyre!(
+                                "Source file truncated before anything was rendered"
+                            ));
+                        }
                         image_data.frames.push(ImageFrame {
                             partial_renders,
                             duration: frame_duration,
