@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use crate::api::{
-    JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
+    AlphaMode, JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
     JxlPixelFormat,
 };
 use crate::bit_reader::BitReader;
@@ -808,37 +808,32 @@ impl Frame {
             } else {
                 3
             };
-            // Find the alpha channel info (index and metadata) if the color type requires alpha
-            let alpha_channel_info = if pixel_format.color_type.has_alpha() {
-                decoder_state
-                    .file_header
-                    .image_metadata
-                    .extra_channel_info
-                    .iter()
-                    .enumerate()
-                    .find(|x| x.1.ec_type == ExtraChannel::Alpha)
+            let alpha_channel_info = decoder_state
+                .file_header
+                .image_metadata
+                .extra_channel_info
+                .iter()
+                .enumerate()
+                .find(|x| x.1.ec_type == ExtraChannel::Alpha);
+            let alpha_extra_channel = alpha_channel_info.map(|x| x.0 + 3);
+            let alpha_in_color = if pixel_format.color_type.has_alpha() {
+                alpha_extra_channel
             } else {
                 None
             };
-            let alpha_in_color = alpha_channel_info.map(|x| x.0 + 3);
-            // Check if the source alpha is already premultiplied (alpha_associated)
             let source_alpha_associated =
                 alpha_channel_info.is_some_and(|(_, info)| info.alpha_associated());
             if pixel_format.color_type.is_grayscale() && num_color_channels == 3 {
                 return Err(Error::NotGrayscale);
             }
-            // Determine if we need to fill opaque alpha:
-            // - color_type requests alpha (has_alpha() is true)
-            // - but no actual alpha channel exists in the image (alpha_in_color is None)
             let fill_opaque_alpha = pixel_format.color_type.has_alpha() && alpha_in_color.is_none();
 
-            // Determine if we should premultiply:
-            // - premultiply_output is requested
-            // - there is an alpha channel in the output
-            // - source is not already premultiplied (to avoid double-premultiplication)
-            let should_premultiply = decoder_state.premultiply_output
-                && alpha_in_color.is_some()
+            let should_premultiply = decoder_state.alpha_mode == AlphaMode::Premultiplied
+                && alpha_extra_channel.is_some()
                 && !source_alpha_associated;
+            let should_unpremultiply = decoder_state.alpha_mode == AlphaMode::Unpremultiplied
+                && alpha_extra_channel.is_some()
+                && source_alpha_associated;
 
             // For CMYK output, interleave the Black extra channel as the
             // fourth channel. This requires a color image with a Black extra
@@ -870,8 +865,9 @@ impl Frame {
                 }
             };
             if let Some(df) = &pixel_format.color_data_format {
-                // Add premultiply stage if needed (before conversion to output format)
-                if should_premultiply && let Some(alpha_channel) = alpha_in_color {
+                if (should_premultiply || should_unpremultiply)
+                    && let Some(alpha_channel) = alpha_extra_channel
+                {
                     let num_output_color_channels = if pixel_format.color_type.is_grayscale() {
                         1
                     } else {
@@ -881,6 +877,7 @@ impl Frame {
                         0,
                         num_output_color_channels,
                         alpha_channel,
+                        should_unpremultiply,
                     ));
                 }
                 pipeline = pipeline.add_save_stage(

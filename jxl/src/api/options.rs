@@ -35,10 +35,9 @@ pub struct JxlDecoderOptions {
     /// This affects multiple decoder decisions including spline rendering precision
     /// and potentially intermediate buffer storage (e.g., using f32 vs f16).
     pub high_precision: bool,
-    /// If true, multiply RGB by alpha before writing to output buffer.
-    /// This produces premultiplied alpha output, which is useful for compositing.
-    /// Default: false (output straight alpha)
-    pub premultiply_output: bool,
+    /// Controls how alpha premultiplication is handled for output color channels.
+    /// Default: [`AlphaMode::AsIs`].
+    pub alpha_mode: AlphaMode,
     /// If true, only parse frame headers/TOC and skip section decoding.
     ///
     /// This is useful for collecting [`VisibleFrameInfo`](crate::api::VisibleFrameInfo)
@@ -56,6 +55,20 @@ pub struct JxlDecoderOptions {
     pub max_profile_level: ProfileLevel,
     #[cfg(test)]
     pub test_options: TestOptions,
+}
+
+/// Controls how alpha premultiplication is handled for output color channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AlphaMode {
+    /// Output color channels as encoded in the codestream (no conversion).
+    #[default]
+    AsIs,
+    /// Ensure output color channels are premultiplied by alpha
+    /// (multiplies RGB by alpha if the codestream alpha is unassociated).
+    Premultiplied,
+    /// Ensure output color channels are unpremultiplied (straight)
+    /// (divides RGB by alpha if the codestream alpha is associated).
+    Unpremultiplied,
 }
 
 /// Profile and level for JPEG XL complexity constraints (ISO/IEC 18181-1).
@@ -78,7 +91,7 @@ impl Default for JxlDecoderOptions {
             desired_intensity_target: None,
             sample_limit: None,
             high_precision: false,
-            premultiply_output: false,
+            alpha_mode: AlphaMode::AsIs,
             scan_frames_only: false,
             request_aux_boxes: Vec::new(),
             max_profile_level: ProfileLevel::Main5,

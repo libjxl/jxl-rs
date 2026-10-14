@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::api::{
-    Event, JxlAuxBoxType, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
+    AlphaMode, Event, JxlAuxBoxType, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
     JxlPixelFormat, JxlTransferFunction, VisibleFrameInfo,
 };
 use crate::error::Error;
@@ -159,95 +159,68 @@ fn test_fill_opaque_alpha_both_pipelines() {
     }
 }
 
-/// Test that premultiply_output=true produces premultiplied alpha output
-/// from a source with straight (non-premultiplied) alpha.
-#[test]
-fn test_premultiply_output_straight_alpha() {
-    let file =
-        std::fs::read("resources/test/conformance_test_images/alpha_nonpremultiplied.jxl").unwrap();
+fn assert_alpha_mode_conversion(
+    path: &str,
+    target_mode: AlphaMode,
+    factor_fn: impl Fn(f32) -> f32,
+    tol: f32,
+) {
+    let file = std::fs::read(path).unwrap();
 
     for use_simple in [true, false] {
-        let straight_frames = decode::<f32>(
+        let as_is_frames = decode::<f32>(
             &file,
             DecodeParams {
                 pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
                 use_simple_pipeline: use_simple,
+                alpha_mode: AlphaMode::AsIs,
                 ..Default::default()
             },
         )
         .unwrap();
-        let straight_buffer = &straight_frames[0][0];
-        let premul_frames = decode::<f32>(
+        let as_is_buffer = &as_is_frames[0][0];
+        let converted_frames = decode::<f32>(
             &file,
             DecodeParams {
                 pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
                 use_simple_pipeline: use_simple,
-                premultiply_output: true,
+                alpha_mode: target_mode,
                 ..Default::default()
             },
         )
         .unwrap();
-        let premul_buffer = &premul_frames[0][0];
-        let (xs, height) = straight_buffer.size();
+        let converted_buffer = &converted_frames[0][0];
+        let (xs, height) = as_is_buffer.size();
         let width = xs / 4;
 
         let mut found_semitransparent = false;
         for y in 0..height {
-            let straight_row = straight_buffer.row(y);
-            let premul_row = premul_buffer.row(y);
+            let as_is_row = as_is_buffer.row(y);
+            let converted_row = converted_buffer.row(y);
             for x in 0..width {
-                let sr = straight_row[x * 4];
-                let sg = straight_row[x * 4 + 1];
-                let sb = straight_row[x * 4 + 2];
-                let sa = straight_row[x * 4 + 3];
-
-                let pr = premul_row[x * 4];
-                let pg = premul_row[x * 4 + 1];
-                let pb = premul_row[x * 4 + 2];
-                let pa = premul_row[x * 4 + 3];
+                let [sr, sg, sb, sa] = as_is_row[x * 4..x * 4 + 4] else {
+                    unreachable!()
+                };
+                let [cr, cg, cb, ca] = converted_row[x * 4..x * 4 + 4] else {
+                    unreachable!()
+                };
 
                 assert!(
-                    (sa - pa).abs() < 1e-5,
-                    "Alpha mismatch at ({},{}): straight={}, premul={} (use_simple={})",
-                    x,
-                    y,
-                    sa,
-                    pa,
-                    use_simple
+                    (sa - ca).abs() < 1e-5,
+                    "Alpha mismatch at ({x},{y}): as_is={sa}, converted={ca} (use_simple={use_simple})"
                 );
 
-                let expected_r = sr * sa;
-                let expected_g = sg * sa;
-                let expected_b = sb * sa;
-
-                let tol = 0.01;
-                assert!(
-                    (expected_r - pr).abs() < tol,
-                    "R mismatch at ({},{}): expected={}, got={} (use_simple={})",
-                    x,
-                    y,
-                    expected_r,
-                    pr,
-                    use_simple
-                );
-                assert!(
-                    (expected_g - pg).abs() < tol,
-                    "G mismatch at ({},{}): expected={}, got={} (use_simple={})",
-                    x,
-                    y,
-                    expected_g,
-                    pg,
-                    use_simple
-                );
-                assert!(
-                    (expected_b - pb).abs() < tol,
-                    "B mismatch at ({},{}): expected={}, got={} (use_simple={})",
-                    x,
-                    y,
-                    expected_b,
-                    pb,
-                    use_simple
-                );
+                let mul = factor_fn(sa);
+                for (ch, expected, got) in [
+                    ('R', sr * mul, cr),
+                    ('G', sg * mul, cg),
+                    ('B', sb * mul, cb),
+                ] {
+                    assert!(
+                        (expected - got).abs() < tol,
+                        "{ch} mismatch at ({x},{y}): expected={expected}, got={got} (use_simple={use_simple})"
+                    );
+                }
 
                 if sa > 0.01 && sa < 0.99 {
                     found_semitransparent = true;
@@ -257,13 +230,101 @@ fn test_premultiply_output_straight_alpha() {
 
         assert!(
             found_semitransparent,
-            "Test image should have semi-transparent pixels (use_simple={})",
-            use_simple
+            "Test image should have semi-transparent pixels (use_simple={use_simple})"
         );
     }
 }
 
-/// Test that premultiplied RGBA output from a grayscale image remains gray.
+fn assert_alpha_mode_noop(path: &str, mode: AlphaMode) {
+    let file = std::fs::read(path).unwrap();
+
+    for use_simple in [true, false] {
+        let as_is = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+                use_simple_pipeline: use_simple,
+                alpha_mode: AlphaMode::AsIs,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let with_mode = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+                use_simple_pipeline: use_simple,
+                alpha_mode: mode,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (xs, height) = as_is[0][0].size();
+        for y in 0..height {
+            let as_is_row = as_is[0][0].row(y);
+            let with_mode_row = with_mode[0][0].row(y);
+            for x in 0..xs {
+                assert!(
+                    (as_is_row[x] - with_mode_row[x]).abs() < 1e-5,
+                    "Mismatch at ({x},{y}): as_is={}, with_mode={} (use_simple={use_simple})",
+                    as_is_row[x],
+                    with_mode_row[x],
+                );
+            }
+        }
+    }
+}
+
+fn assert_planar_matches_rgba(path: &str, alpha_mode: AlphaMode) {
+    let file = std::fs::read(path).unwrap();
+    let planar_format = JxlPixelFormat {
+        color_type: JxlColorType::Rgb,
+        color_data_format: Some(JxlDataFormat::f32()),
+        extra_channel_format: vec![Some(JxlDataFormat::f32())],
+    };
+    let planar = decode::<f32>(
+        &file,
+        DecodeParams {
+            pixel_format: Some(planar_format),
+            alpha_mode,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let rgba = decode::<f32>(
+        &file,
+        DecodeParams {
+            pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+            alpha_mode,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (rgb_xs, rgb_h) = planar[0][0].size();
+    let rgb_w = rgb_xs / 3;
+    for y in 0..rgb_h {
+        let rgb_row = planar[0][0].row(y);
+        let alpha_row = planar[0][1].row(y);
+        let rgba_row = rgba[0][0].row(y);
+        for x in 0..rgb_w {
+            assert!((rgb_row[x * 3] - rgba_row[x * 4]).abs() < 1e-5);
+            assert!((rgb_row[x * 3 + 1] - rgba_row[x * 4 + 1]).abs() < 1e-5);
+            assert!((rgb_row[x * 3 + 2] - rgba_row[x * 4 + 2]).abs() < 1e-5);
+            assert!((alpha_row[x] - rgba_row[x * 4 + 3]).abs() < 1e-5);
+        }
+    }
+}
+
+#[test]
+fn test_premultiply_output_straight_alpha() {
+    assert_alpha_mode_conversion(
+        "resources/test/conformance_test_images/alpha_nonpremultiplied.jxl",
+        AlphaMode::Premultiplied,
+        |a| a,
+        0.01,
+    );
+}
+
 #[test]
 fn test_premultiply_output_grayscale_as_rgba() {
     let file = std::fs::read("resources/test/gray_alpha_lossless.jxl").unwrap();
@@ -271,7 +332,7 @@ fn test_premultiply_output_grayscale_as_rgba() {
         &file,
         DecodeParams {
             pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
-            premultiply_output: true,
+            alpha_mode: AlphaMode::Premultiplied,
             ..Default::default()
         },
     )
@@ -289,59 +350,28 @@ fn test_premultiply_output_grayscale_as_rgba() {
     }
 }
 
-/// Test that premultiply_output=true doesn't double-premultiply
-/// when the source already has premultiplied alpha (alpha_associated=true).
 #[test]
 fn test_premultiply_output_already_premultiplied() {
-    let file =
-        std::fs::read("resources/test/conformance_test_images/alpha_premultiplied.jxl").unwrap();
+    assert_alpha_mode_noop(
+        "resources/test/conformance_test_images/alpha_premultiplied.jxl",
+        AlphaMode::Premultiplied,
+    );
+}
 
-    for use_simple in [true, false] {
-        let without_flag_frames = decode::<f32>(
-            &file,
-            DecodeParams {
-                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
-                use_simple_pipeline: use_simple,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let without_flag_buffer = &without_flag_frames[0][0];
-        let with_flag_frames = decode::<f32>(
-            &file,
-            DecodeParams {
-                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
-                use_simple_pipeline: use_simple,
-                premultiply_output: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let with_flag_buffer = &with_flag_frames[0][0];
-        let (xs, height) = without_flag_buffer.size();
-        let width = xs / 4;
+#[test]
+fn test_unpremultiply_output_associated_alpha() {
+    let premul_path = "resources/test/conformance_test_images/alpha_premultiplied.jxl";
+    let straight_path = "resources/test/conformance_test_images/alpha_nonpremultiplied.jxl";
 
-        for y in 0..height {
-            let without_row = without_flag_buffer.row(y);
-            let with_row = with_flag_buffer.row(y);
-            for x in 0..width {
-                for c in 0..4 {
-                    let without_val = without_row[x * 4 + c];
-                    let with_val = with_row[x * 4 + c];
-                    assert!(
-                        (without_val - with_val).abs() < 1e-5,
-                        "Mismatch at ({},{}) channel {}: without_flag={}, with_flag={} (use_simple={})",
-                        x,
-                        y,
-                        c,
-                        without_val,
-                        with_val,
-                        use_simple
-                    );
-                }
-            }
-        }
-    }
+    assert_alpha_mode_conversion(
+        premul_path,
+        AlphaMode::Unpremultiplied,
+        |a| 1.0 / a.max(1.0 / ((1u32 << 26) as f32)),
+        1e-4,
+    );
+    assert_alpha_mode_noop(straight_path, AlphaMode::Unpremultiplied);
+    assert_planar_matches_rgba(premul_path, AlphaMode::Unpremultiplied);
+    assert_planar_matches_rgba(straight_path, AlphaMode::Premultiplied);
 }
 
 #[test]
