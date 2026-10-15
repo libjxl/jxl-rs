@@ -12,7 +12,6 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
-use crate::util::NewWithCapacity;
 use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
@@ -151,8 +150,13 @@ impl Lz77State {
             0
         };
         let end = start + count;
-        self.window.truncate(start);
-        self.window.resize(end.min(WINDOW_SIZE), token);
+        let clamped_end = end.min(WINDOW_SIZE);
+        if self.window.len() < clamped_end {
+            self.window[start..].fill(token);
+            self.window.resize(clamped_end, token);
+        } else {
+            self.window[start..clamped_end].fill(token);
+        }
         if end > WINDOW_SIZE && count < WINDOW_SIZE {
             self.window[..end - WINDOW_SIZE].fill(token);
         }
@@ -214,6 +218,7 @@ impl SymbolReader {
         histograms: &Histograms,
         br: &mut BitReader,
         image_width: Option<usize>,
+        lz77_scratch: &mut Vec<u32>,
     ) -> Result<Self> {
         let ans_reader = if matches!(histograms.codes, Codes::Ans(_)) {
             AnsReader::init(br)?
@@ -231,12 +236,14 @@ impl SymbolReader {
             let min_symbol = min_symbol.unwrap();
             let min_length = min_length.unwrap();
             let dist_multiplier = image_width.unwrap_or(0) as u32;
+            let mut window = std::mem::take(lz77_scratch);
+            window.clear();
 
             SymbolReaderState::Lz77(Lz77State {
                 min_symbol,
                 min_length,
                 dist_multiplier,
-                window: Vec::new_with_capacity(1 << Lz77State::LOG_WINDOW_SIZE)?,
+                window,
                 num_to_copy: 0,
                 copy_pos: 0,
                 num_decoded: 0,
@@ -250,6 +257,13 @@ impl SymbolReader {
             ans_reader,
             errors: ErrorState::new(),
         })
+    }
+
+    pub fn reclaim_lz77_scratch(&mut self, lz77_scratch: &mut Vec<u32>) {
+        if let SymbolReaderState::Lz77(lz77_state) = &mut self.state {
+            lz77_state.window.clear();
+            *lz77_scratch = std::mem::take(&mut lz77_state.window);
+        }
     }
 }
 
@@ -615,7 +629,12 @@ impl SymbolReader {
 }
 
 impl Histograms {
-    pub fn decode(num_contexts: usize, br: &mut BitReader, allow_lz77: bool) -> Result<Histograms> {
+    pub fn decode(
+        num_contexts: usize,
+        br: &mut BitReader,
+        allow_lz77: bool,
+        lz77_scratch: &mut Vec<u32>,
+    ) -> Result<Histograms> {
         let lz77_params = Lz77Params::read_unconditional(&(), br, &Empty {})?;
         if !allow_lz77 && lz77_params.enabled {
             return Err(Error::Lz77Disallowed);
@@ -630,7 +649,7 @@ impl Histograms {
         };
 
         let context_map = if num_contexts > 1 {
-            decode_context_map(num_contexts, br)?
+            decode_context_map(num_contexts, br, lz77_scratch)?
         } else {
             vec![0]
         };

@@ -346,13 +346,18 @@ impl Frame {
                     self.decoder_state.extra_channel_info().len(),
                     &self.decoder_state.reference_frames[..],
                     self.decoder_state.level5_limits,
+                    &mut self.buffer_recycler.modular_scratch.get().lz77_window,
                 )?;
                 *self.patches.try_write().unwrap() = p;
             }
 
             if self.header.has_splines() {
                 info!("decoding splines");
-                let s = Splines::read(br, self.header.width * self.header.height)?;
+                let s = Splines::read(
+                    br,
+                    self.header.width * self.header.height,
+                    &mut self.buffer_recycler.modular_scratch.get().lz77_window,
+                )?;
                 *self.splines.try_write().unwrap() = s;
             }
 
@@ -376,7 +381,10 @@ impl Frame {
 
             let block_context_map = if self.header.encoding == Encoding::VarDCT {
                 info!("decoding block context map");
-                Some(BlockContextMap::read(br)?)
+                Some(BlockContextMap::read(
+                    br,
+                    &mut self.buffer_recycler.modular_scratch.get().lz77_window,
+                )?)
             } else {
                 None
             };
@@ -415,6 +423,7 @@ impl Frame {
                     br,
                     size_limit,
                     self.decoder_state.level5_limits,
+                    &mut self.buffer_recycler.modular_scratch.get().lz77_window,
                 )?)
             } else {
                 None
@@ -568,14 +577,23 @@ impl Frame {
                     _ => br.read(coeff_order::NUM_ORDERS)?,
                 } as u32;
                 debug!(used_orders);
-                let coeff_orders = decode_coeff_orders(used_orders, br)?;
+                let coeff_orders = decode_coeff_orders(
+                    used_orders,
+                    br,
+                    &mut self.buffer_recycler.modular_scratch.get().lz77_window,
+                )?;
                 assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
                 let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
                 info!(
                     "Decoding histograms for pass {} with {} contexts",
                     i, num_contexts
                 );
-                let mut histograms = Histograms::decode(num_contexts, br, true)?;
+                let mut histograms = Histograms::decode(
+                    num_contexts,
+                    br,
+                    true,
+                    &mut self.buffer_recycler.modular_scratch.get().lz77_window,
+                )?;
                 // Pad the context map to avoid index out of bounds in decode_vardct_group (group.rs#L514@752e6a4).
                 let padding = ZERO_DENSITY_CONTEXT_LIMIT - ZERO_DENSITY_CONTEXT_COUNT;
                 histograms.resize(num_contexts + padding);

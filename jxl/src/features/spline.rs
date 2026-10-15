@@ -833,11 +833,15 @@ impl Splines {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(br), ret, err)]
-    pub fn read(br: &mut BitReader, num_pixels: u32) -> Result<Splines> {
+    #[instrument(level = "debug", skip(br, lz77_scratch), ret, err)]
+    pub fn read(
+        br: &mut BitReader,
+        num_pixels: u32,
+        lz77_scratch: &mut Vec<u32>,
+    ) -> Result<Splines> {
         trace!(pos = br.total_bits_read());
-        let splines_histograms = Histograms::decode(NUM_SPLINE_CONTEXTS, br, true)?;
-        let mut splines_reader = SymbolReader::new(&splines_histograms, br, None)?;
+        let splines_histograms = Histograms::decode(NUM_SPLINE_CONTEXTS, br, true, lz77_scratch)?;
+        let mut splines_reader = SymbolReader::new(&splines_histograms, br, None, lz77_scratch)?;
         let num_splines = splines_reader
             .read_unsigned(&splines_histograms, br, NUM_SPLINES_CONTEXT)
             .saturating_add(1);
@@ -896,6 +900,7 @@ impl Splines {
                 &mut num_control_points,
             )?);
         }
+        splines_reader.reclaim_lz77_scratch(lz77_scratch);
         splines_reader.check_final_state(&splines_histograms, br)?;
         Ok(Splines {
             quantization_adjustment,

@@ -133,8 +133,9 @@ impl IncrementalIccReader {
 
         let len = len as usize;
 
-        let histograms = Histograms::decode(ICC_CONTEXTS, br, true)?;
-        let reader = SymbolReader::new(&histograms, br, None)?;
+        let mut lz77_scratch = Vec::new();
+        let histograms = Histograms::decode(ICC_CONTEXTS, br, true, &mut lz77_scratch)?;
+        let reader = SymbolReader::new(&histograms, br, None, &mut lz77_scratch)?;
         let initial_alloc = len.min(64 * 1024);
         let out_buf = Vec::new_with_capacity(initial_alloc)?;
         Ok(Self {

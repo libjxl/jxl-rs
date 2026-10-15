@@ -278,12 +278,17 @@ pub(super) fn predict(
 }
 
 impl Tree {
-    #[instrument(level = "debug", skip(br), err)]
-    pub fn read(br: &mut BitReader, size_limit: usize, level5_limits: bool) -> Result<Tree> {
+    #[instrument(level = "debug", skip(br, lz77_scratch), err)]
+    pub fn read(
+        br: &mut BitReader,
+        size_limit: usize,
+        level5_limits: bool,
+        lz77_scratch: &mut Vec<u32>,
+    ) -> Result<Tree> {
         assert!(size_limit <= u32::MAX as usize);
         trace!(pos = br.total_bits_read());
-        let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true)?;
-        let mut tree_reader = SymbolReader::new(&tree_histograms, br, None)?;
+        let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true, lz77_scratch)?;
+        let mut tree_reader = SymbolReader::new(&tree_histograms, br, None, lz77_scratch)?;
         // TODO(veluca): consider early-exiting for trees known to be infinite.
         let mut tree: Vec<TreeNode> = vec![];
         let mut to_decode = 1;
@@ -345,13 +350,14 @@ impl Tree {
                 tree.push(node);
             }
         }
+        tree_reader.reclaim_lz77_scratch(lz77_scratch);
         tree_reader.check_final_state(&tree_histograms, br)?;
 
         let num_properties = max_property as usize + 1;
         let max_depth = if level5_limits { 64 } else { 2048 };
         validate_tree(&tree, num_properties, max_depth)?;
 
-        let histograms = Histograms::decode(tree.len().div_ceil(2), br, true)?;
+        let histograms = Histograms::decode(tree.len().div_ceil(2), br, true, lz77_scratch)?;
 
         Ok(Tree {
             nodes: tree,

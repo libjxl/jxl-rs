@@ -219,6 +219,7 @@ pub(crate) struct ScratchSpace {
     decode_row_scratch: [Vec<i32>; 3],
     tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
     hsqueeze_i16_scratch: Box<[i16; 2048]>,
+    pub(crate) lz77_window: Vec<u32>,
 }
 
 impl Debug for ScratchSpace {
@@ -235,6 +236,7 @@ impl ScratchSpace {
             decode_row_scratch: [vec![], vec![], vec![]],
             tree_lut_scratch: crate::util::box_array(0u8),
             hsqueeze_i16_scratch: crate::util::box_array(0i16),
+            lz77_window: Vec::new(),
         }
     }
 }

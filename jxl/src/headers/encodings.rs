@@ -185,8 +185,14 @@ impl UnconditionalCoder<()> for Permutation {
         let ret = if nonserialized.permuted {
             let size = nonserialized.num_entries;
             let num_contexts = 8;
-            let histograms = Histograms::decode(num_contexts, br, /*allow_lz77=*/ true)?;
-            let mut reader = SymbolReader::new(&histograms, br, None)?;
+            let mut lz77_scratch = Vec::new();
+            let histograms = Histograms::decode(
+                num_contexts,
+                br,
+                /*allow_lz77=*/ true,
+                &mut lz77_scratch,
+            )?;
+            let mut reader = SymbolReader::new(&histograms, br, None, &mut lz77_scratch)?;
             Permutation::decode(size, 0, &histograms, br, &mut reader)
         } else {
             Ok(Permutation::default())
