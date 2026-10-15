@@ -895,7 +895,10 @@ impl TransformStepChunk {
                                 && buffers[*buf_in].buffer_grid[out_grid].data_status
                                     == DataStatus::Partial,
                         }
-                        .run(&mut scratch_space.palette_row_scratch)?;
+                        .run(
+                            &mut scratch_space.palette_row_scratch,
+                            &mut scratch_space.tree_scratch.wp_scratch,
+                        )?;
                     }
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];

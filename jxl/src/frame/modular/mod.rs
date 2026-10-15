@@ -210,8 +210,25 @@ impl ModularBufferInfo {
     }
 }
 
-use crate::frame::modular::decode::specialized_trees::LUT_TABLE_SIZE;
+use std::collections::VecDeque;
+
+use crate::frame::modular::decode::specialized_trees::{LUT_TABLE_SIZE, RangeAndNode};
+use crate::frame::modular::flat_tree::FlatTreeNode;
+use crate::frame::modular::predict::WeightedPredictorScratch;
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
+use crate::frame::modular::tree::TreeNode;
+
+#[derive(Default)]
+struct TreeScratch {
+    pruned_tree: Vec<TreeNode>,
+    pruned_tree_queue: VecDeque<u32>,
+    flat_tree: Vec<FlatTreeNode>,
+    flat_tree_bfs_queue: VecDeque<usize>,
+    lut_stack: Vec<RangeAndNode>,
+    wp_scratch: WeightedPredictorScratch,
+    property_buffer: Vec<i32>,
+    references: Vec<i32>,
+}
 
 pub(crate) struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
@@ -220,6 +237,7 @@ pub(crate) struct ScratchSpace {
     tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
     hsqueeze_i16_scratch: Box<[i16; 2048]>,
     pub(crate) lz77_window: Vec<u32>,
+    tree_scratch: TreeScratch,
 }
 
 impl Debug for ScratchSpace {
@@ -237,6 +255,7 @@ impl ScratchSpace {
             tree_lut_scratch: crate::util::box_array(0u8),
             hsqueeze_i16_scratch: crate::util::box_array(0i16),
             lz77_window: Vec::new(),
+            tree_scratch: TreeScratch::default(),
         }
     }
 }

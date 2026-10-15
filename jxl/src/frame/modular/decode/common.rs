@@ -4,10 +4,50 @@
 // license that can be found in the LICENSE file.
 
 use crate::frame::modular::predict::clamped_gradient;
+use crate::frame::modular::tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN};
 use crate::frame::modular::{ModularChannel, ModularStorage};
 use crate::frame::quantizer::NUM_QUANT_TABLES;
 use crate::headers::frame_header::FrameHeader;
-use crate::image::{Image, ImageRect};
+use crate::image::ImageRect;
+
+#[derive(Debug)]
+pub(crate) struct References<'a> {
+    pub(crate) data: &'a mut [i32],
+    pub(crate) num_ref_props: usize,
+}
+
+impl<'a> References<'a> {
+    pub(crate) fn new(scratch: &'a mut Vec<i32>, num_ref_props: usize, xsize: usize) -> Self {
+        let len = num_ref_props * xsize;
+        scratch.clear();
+        scratch.resize(len, 0);
+        Self {
+            data: &mut scratch[..len],
+            num_ref_props,
+        }
+    }
+}
+
+pub(crate) fn init_properties_and_references<'a>(
+    references: &'a mut Vec<i32>,
+    property_buffer: &'a mut Vec<i32>,
+    channel: usize,
+    stream: usize,
+    xsize: usize,
+    max_property_count: usize,
+) -> (References<'a>, &'a mut [i32; 256]) {
+    let num_ref_props = max_property_count
+        .saturating_sub(NUM_NONREF_PROPERTIES)
+        .next_multiple_of(PROPERTIES_PER_PREVCHAN)
+        .min(channel * PROPERTIES_PER_PREVCHAN);
+    let references = References::new(references, num_ref_props, xsize);
+    property_buffer.clear();
+    property_buffer.resize(256, 0);
+    let property_buffer: &mut [i32; 256] = (&mut property_buffer[..256]).try_into().unwrap();
+    property_buffer[0] = channel as i32;
+    property_buffer[1] = stream as i32;
+    (references, property_buffer)
+}
 
 #[derive(Debug)]
 pub enum ModularStreamId {
@@ -41,15 +81,15 @@ pub(super) fn precompute_references(
     buffers: &mut [&mut ModularChannel],
     chan: usize,
     y: usize,
-    references: &mut Image<i32>,
+    references: &mut References,
     storage: ModularStorage,
 ) {
-    if references.size().0 == 0 {
+    let num_extra_props = references.num_ref_props;
+    if num_extra_props == 0 {
         return;
     }
-    references.fill(0);
+    references.data.fill(0);
     let mut offset = 0;
-    let num_extra_props = references.size().0;
     for i in 0..chan {
         if offset >= num_extra_props {
             break;
@@ -65,7 +105,7 @@ pub(super) fn precompute_references(
             let ref_chan_row = ref_rect.row(y);
             let ref_chan_prev = ref_rect.row(y.saturating_sub(1));
             for x in 0..buffers[chan].size(storage).0 {
-                let ref_row = references.row_mut(x);
+                let ref_row = &mut references.data[x * num_extra_props..(x + 1) * num_extra_props];
                 let v = ref_chan_row[x] as i32;
                 ref_row[offset] = v.wrapping_abs();
                 ref_row[offset + 1] = v;
@@ -89,7 +129,7 @@ pub(super) fn precompute_references(
             let ref_chan_row = ref_rect.row(y);
             let ref_chan_prev = ref_rect.row(y.saturating_sub(1));
             for x in 0..buffers[chan].size(storage).0 {
-                let ref_row = references.row_mut(x);
+                let ref_row = &mut references.data[x * num_extra_props..(x + 1) * num_extra_props];
                 let v = ref_chan_row[x];
                 ref_row[offset] = v.wrapping_abs();
                 ref_row[offset + 1] = v;

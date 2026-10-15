@@ -321,7 +321,10 @@ impl TransformStep {
                         storage,
                         is_partial: false,
                     }
-                    .run(&mut scratch_space.palette_row_scratch)?;
+                    .run(
+                        &mut scratch_space.palette_row_scratch,
+                        &mut scratch_space.tree_scratch.wp_scratch,
+                    )?;
                 }
                 for (pos, buf) in buf_out.iter().zip(out_bufs) {
                     buffers[*pos] = buf;
