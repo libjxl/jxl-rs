@@ -8,7 +8,6 @@ use crate::entropy_coding::context_map::*;
 use crate::entropy_coding::decode::unpack_signed;
 use crate::error::{Error, Result};
 use crate::frame::coeff_order::NUM_ORDERS;
-use crate::util::ShiftRightCeil;
 
 pub const NON_ZERO_BUCKETS: usize = 37;
 
@@ -17,33 +16,20 @@ pub const ZERO_DENSITY_CONTEXT_COUNT: usize = 458;
 // Supremum of zero_density_context(x, y) + 1.
 pub const ZERO_DENSITY_CONTEXT_LIMIT: usize = 474;
 
+// Both tables below have their entries pre-multiplied by 2 so that the zero-density
+// context can be computed directly as `COEFF_NUM_NONZERO_CONTEXT[nonzeros] + COEFF_FREQ_CONTEXT[k] + prev`.
 pub const COEFF_FREQ_CONTEXT: [usize; 64] = [
-    0xBAD, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19,
-    19, 20, 20, 21, 21, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 25, 25, 25, 25, 26, 26, 26, 26, 27,
-    27, 27, 27, 28, 28, 28, 28, 29, 29, 29, 29, 30, 30, 30, 30,
+    0xBAD, 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 30, 32, 32, 34, 34, 36, 36,
+    38, 38, 40, 40, 42, 42, 44, 44, 46, 46, 46, 46, 48, 48, 48, 48, 50, 50, 50, 50, 52, 52, 52, 52,
+    54, 54, 54, 54, 56, 56, 56, 56, 58, 58, 58, 58, 60, 60, 60, 60,
 ];
 
 pub const COEFF_NUM_NONZERO_CONTEXT: [usize; 64] = [
-    0xBAD, 0, 31, 62, 62, 93, 93, 93, 93, 123, 123, 123, 123, 152, 152, 152, 152, 152, 152, 152,
-    152, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 206, 206, 206, 206, 206, 206,
-    206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206,
-    206, 206, 206, 206, 206, 206,
+    0xBAD, 0, 62, 124, 124, 186, 186, 186, 186, 246, 246, 246, 246, 304, 304, 304, 304, 304, 304,
+    304, 304, 360, 360, 360, 360, 360, 360, 360, 360, 360, 360, 360, 360, 412, 412, 412, 412, 412,
+    412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412, 412,
+    412, 412, 412, 412, 412, 412, 412,
 ];
-
-#[inline(always)]
-pub fn zero_density_context(
-    nonzeros_left: usize,
-    k: usize,
-    log_num_blocks: usize,
-    prev: usize,
-) -> usize {
-    let nonzeros_left_norm = nonzeros_left.shrc(log_num_blocks);
-    let k_norm = k >> log_num_blocks;
-    debug_assert!((1..64).contains(&k_norm));
-    debug_assert!((1..64).contains(&nonzeros_left_norm));
-    (COEFF_NUM_NONZERO_CONTEXT[nonzeros_left_norm & 63] + COEFF_FREQ_CONTEXT[k_norm & 63]) * 2
-        + prev
-}
 
 #[derive(Debug)]
 pub struct BlockContextMap {

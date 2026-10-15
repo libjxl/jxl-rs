@@ -673,6 +673,7 @@ impl Histograms {
         })
     }
 
+    #[inline(always)]
     pub fn map_context_to_cluster(&self, context: usize) -> usize {
         self.context_map[context] as usize
     }
@@ -741,8 +742,9 @@ impl Histograms {
     pub fn lz77_length_uint(&self) -> HybridUint {
         self.lz77_length_uint.unwrap()
     }
-    pub fn uint(&self, cluster: usize) -> HybridUint {
-        self.uint_configs[cluster]
+    #[inline(always)]
+    pub fn uint(&self, cluster: usize) -> &HybridUint {
+        &self.uint_configs[cluster]
     }
 }
 
