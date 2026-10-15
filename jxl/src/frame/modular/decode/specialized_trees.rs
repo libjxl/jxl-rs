@@ -11,7 +11,7 @@ use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::Result;
 use crate::frame::modular::decode::channel::{ModularChannelDecoder, sync_scratch};
 use crate::frame::modular::decode::common::{make_pixel, precompute_references};
-use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
+use crate::frame::modular::flat_tree::{FlatTreeNode, MddScratch, MddTree, TreeMeta, predict_flat};
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, clamped_gradient};
 use crate::frame::modular::tree::{
     NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, PredictionResult, TreeNode,
@@ -21,28 +21,43 @@ use crate::headers::modular::GroupHeader;
 use crate::image::{Image, ImageRectMut};
 
 trait MaybeWeightedPredictor: Sized {
+    const NEEDS_TOPTOP: bool = true;
     fn predict(
         &mut self,
         nodes: &[FlatTreeNode],
+        mdd: Option<&MddTree>,
         prediction_data: PredictionData,
         pos: (usize, usize),
         references: &Image<i32>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult;
+    fn as_wp_mut(&mut self) -> Option<&mut WeightedPredictorState> {
+        None
+    }
     fn update_errors(&mut self, _val: i32, _pos: (usize, usize)) {}
 }
 
 impl MaybeWeightedPredictor for () {
+    const NEEDS_TOPTOP: bool = false;
     #[inline(always)]
     fn predict(
         &mut self,
         nodes: &[FlatTreeNode],
+        mdd: Option<&MddTree>,
         prediction_data: PredictionData,
         pos: (usize, usize),
         references: &Image<i32>,
         prop_buffer: &mut [i32; 256],
     ) -> PredictionResult {
-        predict_flat(nodes, prediction_data, None, pos, references, prop_buffer)
+        predict_flat(
+            nodes,
+            mdd,
+            prediction_data,
+            None,
+            pos,
+            references,
+            prop_buffer,
+        )
     }
 }
 
@@ -51,6 +66,7 @@ impl MaybeWeightedPredictor for WeightedPredictorState {
     fn predict(
         &mut self,
         nodes: &[FlatTreeNode],
+        mdd: Option<&MddTree>,
         prediction_data: PredictionData,
         pos: (usize, usize),
         references: &Image<i32>,
@@ -58,6 +74,7 @@ impl MaybeWeightedPredictor for WeightedPredictorState {
     ) -> PredictionResult {
         predict_flat(
             nodes,
+            mdd,
             prediction_data,
             Some(self),
             pos,
@@ -66,12 +83,17 @@ impl MaybeWeightedPredictor for WeightedPredictorState {
         )
     }
     #[inline(always)]
+    fn as_wp_mut(&mut self) -> Option<&mut WeightedPredictorState> {
+        Some(self)
+    }
+    #[inline(always)]
     fn update_errors(&mut self, val: i32, pos: (usize, usize)) {
         self.update_errors(val, pos);
     }
 }
 
 trait Reader: Sized {
+    const IS_SINGLE_SYMBOL: bool = false;
     fn read(
         &self,
         reader: &mut SymbolReader,
@@ -82,6 +104,7 @@ trait Reader: Sized {
 }
 
 impl Reader for i32 {
+    const IS_SINGLE_SYMBOL: bool = true;
     #[inline(always)]
     fn read(&self, _: &mut SymbolReader, _: &Histograms, _: &mut BitReader, _: usize) -> i32 {
         *self
@@ -116,16 +139,48 @@ impl Reader for ReaderGeneric {
     }
 }
 
-struct FlatTreeInner {
+struct LocalMddDecoder<'a, WP> {
+    mdd: MddTree<'a>,
+    wp_state: WP,
+}
+
+impl<'a, WP: MaybeWeightedPredictor> ModularChannelDecoder for LocalMddDecoder<'a, WP> {
+    #[inline(always)]
+    fn needs_toptop(&self) -> bool {
+        WP::NEEDS_TOPTOP
+    }
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        pos: (usize, usize),
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let (guess, cluster) = self
+            .mdd
+            .eval_local(prediction_data, self.wp_state.as_wp_mut(), pos);
+        let dec = reader.read_signed_clustered_config_420(histograms, br, cluster);
+        let val = dec.wrapping_add(guess as i32);
+        self.wp_state.update_errors(val, pos);
+        val
+    }
+}
+
+struct FlatTreeInner<'a> {
     nodes: Vec<FlatTreeNode>,
+    mdd: Option<MddTree<'a>>,
     references: Image<i32>,
     property_buffer: Box<[i32; 256]>,
     storage: ModularStorage,
 }
 
-impl FlatTreeInner {
+impl<'a> FlatTreeInner<'a> {
     fn new(
         nodes: Vec<TreeNode>,
+        mdd: Option<MddTree<'a>>,
         max_property_count: usize,
         channel: usize,
         stream: usize,
@@ -141,8 +196,15 @@ impl FlatTreeInner {
         property_buffer[0] = channel as i32;
         property_buffer[1] = stream as i32;
 
+        let flat_nodes = if mdd.is_some() {
+            Vec::new()
+        } else {
+            Tree::build_flat_tree(&nodes)?
+        };
+
         Ok(Self {
-            nodes: Tree::build_flat_tree(&nodes)?,
+            nodes: flat_nodes,
+            mdd,
             references,
             property_buffer,
             storage,
@@ -150,14 +212,14 @@ impl FlatTreeInner {
     }
 }
 
-struct FlatTree<WP, R> {
-    inner: FlatTreeInner,
+struct FlatTree<'a, WP, R> {
+    inner: FlatTreeInner<'a>,
     reader: R,
     wp_state: WP,
 }
 
-impl<WP: MaybeWeightedPredictor, R: Reader> FlatTree<WP, R> {
-    fn new(inner: FlatTreeInner, reader: R, wp_state: WP) -> Self {
+impl<'a, WP: MaybeWeightedPredictor, R: Reader> FlatTree<'a, WP, R> {
+    fn new(inner: FlatTreeInner<'a>, reader: R, wp_state: WP) -> Self {
         Self {
             inner,
             reader,
@@ -166,15 +228,17 @@ impl<WP: MaybeWeightedPredictor, R: Reader> FlatTree<WP, R> {
     }
 }
 
-impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<WP, R> {
+impl<'a, WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<'a, WP, R> {
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
-        precompute_references(
-            buffers,
-            chan,
-            y,
-            &mut self.inner.references,
-            self.inner.storage,
-        );
+        if self.inner.references.size().0 != 0 {
+            precompute_references(
+                buffers,
+                chan,
+                y,
+                &mut self.inner.references,
+                self.inner.storage,
+            );
+        }
         self.inner.property_buffer[GRADIENT_PROPERTY as usize] = 0;
     }
 
@@ -187,8 +251,14 @@ impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<W
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
+        let mdd = if R::IS_SINGLE_SYMBOL {
+            None
+        } else {
+            self.inner.mdd.as_ref()
+        };
         let prediction_result = self.wp_state.predict(
             &self.inner.nodes,
+            mdd,
             prediction_data,
             pos,
             &self.inner.references,
@@ -462,9 +532,11 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
     channel: usize,
     stream: usize,
     xsize: usize,
+    ysize: usize,
     header: &GroupHeader,
     storage: ModularStorage,
     lut_scratch: &mut [u8; LUT_TABLE_SIZE],
+    mdd_scratch: &mut MddScratch,
     run: F,
 ) -> Result<()> {
     // TODO(veluca): consider skipping the pruning if header.uses_global_tree is true.
@@ -607,8 +679,32 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
 
     let single_symbol = single_symbol.map(unpack_signed);
 
+    let mut mdd_opt = None;
+    if single_symbol.is_none() && !tree.histograms.lz77_params().enabled {
+        let meta = TreeMeta::analyze(&pruned_tree, max_property_count);
+        let local_layout = meta.only_local_and_wp && !uses_non420;
+        if let Some(mdd) = MddTree::try_new(
+            &pruned_tree,
+            &meta,
+            local_layout,
+            xsize.saturating_mul(ysize),
+            mdd_scratch,
+        ) {
+            if local_layout {
+                if !uses_wp {
+                    return run(&mut LocalMddDecoder { mdd, wp_state: () });
+                } else {
+                    let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
+                    return run(&mut LocalMddDecoder { mdd, wp_state });
+                }
+            }
+            mdd_opt = Some(mdd);
+        }
+    }
+
     let inner = FlatTreeInner::new(
         pruned_tree,
+        mdd_opt,
         max_property_count,
         channel,
         stream,
