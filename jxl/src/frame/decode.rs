@@ -496,7 +496,6 @@ impl Frame {
                 splitter_lf.borrow_rect(2, r),
             ];
             let mut quant_lf_view = splitter_hf.quant_lf.borrow_typed_rect::<u8>(r);
-            let mut scratch = lf_global.modular_global.get_scratch_space();
             decode_vardct_lf(
                 group,
                 header,
@@ -510,7 +509,7 @@ impl Frame {
                 &mut quant_lf_view,
                 br,
                 decoder_state.modular_storage(),
-                &mut scratch,
+                lf_global.modular_global.recycler(),
                 decoder_state.level5_limits,
             )?;
         }
@@ -532,7 +531,6 @@ impl Frame {
                 transform_map: splitter_hf.transform_map.borrow_typed_rect::<u8>(r),
                 epf_map: splitter_hf.epf_map.borrow_typed_rect::<u8>(r),
             };
-            let mut scratch = lf_global.modular_global.get_scratch_space();
             decode_hf_metadata(
                 group,
                 header,
@@ -541,7 +539,7 @@ impl Frame {
                 &mut hf_views,
                 br,
                 decoder_state.modular_storage(),
-                &mut scratch,
+                lf_global.modular_global.recycler(),
                 decoder_state.level5_limits,
             )?;
         }

@@ -13,7 +13,7 @@ use crate::frame::modular::tree::TreeNode;
 use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, ScratchSpace, Tree};
 use crate::headers::JxlHeader;
 use crate::headers::modular::GroupHeader;
-use crate::image::ImageRectMut;
+use crate::image::{BufferRecycler, ImageRectMut};
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.
@@ -205,6 +205,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
     scratch_space: &mut ScratchSpace,
+    recycler: &BufferRecycler,
     level5_limits: bool,
 ) -> Result<()> {
     // Skip decoding if all grids are zero-sized.
@@ -232,6 +233,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
                     &mut buffer_storage,
                     &h,
                     storage,
+                    recycler,
                     level5_limits,
                 )?;
                 (h, new_bufs)
@@ -321,7 +323,11 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     }
 
     for step in transform_steps.iter().rev() {
-        step.local_apply(&mut buffer_storage, scratch_space, storage)?;
+        step.local_apply(&mut buffer_storage, scratch_space, storage, recycler)?;
+    }
+
+    for buf in buffer_storage {
+        buf.recycle(recycler);
     }
 
     Ok(())
