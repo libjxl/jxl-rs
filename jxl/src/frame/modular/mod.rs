@@ -913,6 +913,7 @@ impl FullModularImage {
             &self.buffer_info,
             scratch_space,
             &self.recycler,
+            &self.pipeline_used_channels,
             pass_to_pipeline,
         )?;
 

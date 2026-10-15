@@ -692,6 +692,7 @@ impl TransformStepChunk {
         buffers: &[ModularBufferInfo],
         scratch_space: &mut ScratchSpace,
         recycler: &BufferRecycler,
+        pipeline_used_channels: &[bool],
         pass_to_pipeline: &dyn Fn(usize, usize, bool, OwnedRawImage) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
@@ -1017,7 +1018,15 @@ impl TransformStepChunk {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
                 let buf = &buffers[*buf_in].buffer_grid[out_grid];
                 let storage = buffers[*buf_in].storage;
-                if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
+                if !pipeline_used_channels
+                    .get(*channel)
+                    .copied()
+                    .unwrap_or(true)
+                {
+                    if buf.data_status != DataStatus::Zero || buf.has_buffer() {
+                        buf.mark_used(buf.can_consume(is_final), recycler);
+                    }
+                } else if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
                     let sz = rect.map(|x| x.size).unwrap_or(buf.size);
                     let sample_size = storage.sample_size();
                     let raw = recycler.get_raw_buffer((sz.0 * sample_size, sz.1), true)?;
