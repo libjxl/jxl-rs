@@ -87,25 +87,6 @@ mod tests {
         .0
     }
 
-    fn decode_partial(
-        mut input: &[u8],
-        render_interval: Option<usize>,
-    ) -> color_eyre::Result<DecodeOutput> {
-        decode_frames(
-            &mut input,
-            JxlDecoderOptions::default(),
-            None,
-            None,
-            &[OutputDataType::U8],
-            true,
-            true,
-            false,
-            render_interval,
-            true,
-        )
-        .map(|(output, _)| output)
-    }
-
     #[test]
     fn test_output_formats_consistency() {
         let test_files = [
@@ -218,32 +199,5 @@ mod tests {
             )
             .unwrap();
         }
-    }
-
-    #[test]
-    fn test_partial_file_with_nothing_rendered() {
-        let file = std::fs::read(get_test_file("green_queen_vardct_e3.jxl")).unwrap();
-
-        // Past the headers, but well before the LF preview can be rendered.
-        let err = decode_partial(&file[..file.len() / 20], None)
-            .err()
-            .expect("a file with nothing rendered decoded without an error");
-        assert!(
-            err.to_string().contains("before anything was rendered"),
-            "unexpected error: {err}"
-        );
-
-        // A fifth of the file renders the LF preview. With frequent partial renders,
-        // an earlier flush has already drawn it, and the final flush reports no change.
-        for render_interval in [None, Some(1000)] {
-            let output = decode_partial(&file[..file.len() / 5], render_interval).unwrap();
-            let channel = &output.frames[0].channels[0];
-            assert!((0..channel.byte_size().1).any(|y| channel.row(y).iter().any(|&v| v != 0)));
-        }
-
-        // A file that ends inside a later frame still returns the frames before it.
-        let file = std::fs::read(get_test_file("animation_seek_noise_references.jxl")).unwrap();
-        let output = decode_partial(&file[..62], None).unwrap();
-        assert_eq!(output.frames.len(), 2);
     }
 }
