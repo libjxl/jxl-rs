@@ -77,6 +77,65 @@ impl ModularStreamId {
     }
 }
 
+fn precompute_channel_refs<T: crate::image::ImageDataType + Into<i32> + Copy>(
+    ref_rect: &ImageRect<T>,
+    w: usize,
+    y: usize,
+    offset: usize,
+    num_extra_props: usize,
+    data: &mut [i32],
+) {
+    if w == 0 {
+        return;
+    }
+    let ref_chan_row = &ref_rect.row(y)[..w];
+    if y == 0 {
+        let mut vleft: i64 = 0;
+        for (&sample, ref_row) in ref_chan_row
+            .iter()
+            .zip(data.chunks_exact_mut(num_extra_props))
+        {
+            let v: i32 = sample.into();
+            let diff = (v as i64 - vleft) as i32;
+            let dst = &mut ref_row[offset..offset + 4];
+            dst[0] = v.wrapping_abs();
+            dst[1] = v;
+            dst[2] = diff.wrapping_abs();
+            dst[3] = diff;
+            vleft = v as i64;
+        }
+    } else {
+        let ref_chan_prev = &ref_rect.row(y - 1)[..w];
+        let v0: i32 = ref_chan_row[0].into();
+        let vtop0: i32 = ref_chan_prev[0].into();
+        let diff0 = (v0 as i64 - vtop0 as i64) as i32;
+        let dst0 = &mut data[offset..offset + 4];
+        dst0[0] = v0.wrapping_abs();
+        dst0[1] = v0;
+        dst0[2] = diff0.wrapping_abs();
+        dst0[3] = diff0;
+        let mut vleft = v0 as i64;
+        let mut vtopleft = vtop0 as i64;
+        for ((&sample, &top_sample), ref_row) in ref_chan_row[1..]
+            .iter()
+            .zip(&ref_chan_prev[1..])
+            .zip(data[num_extra_props..].chunks_exact_mut(num_extra_props))
+        {
+            let v: i32 = sample.into();
+            let vtop: i32 = top_sample.into();
+            let vpredicted = clamped_gradient(vleft, vtop as i64, vtopleft);
+            let diff = (v as i64 - vpredicted) as i32;
+            let dst = &mut ref_row[offset..offset + 4];
+            dst[0] = v.wrapping_abs();
+            dst[1] = v;
+            dst[2] = diff.wrapping_abs();
+            dst[3] = diff;
+            vleft = v as i64;
+            vtopleft = vtop as i64;
+        }
+    }
+}
+
 pub(super) fn precompute_references(
     buffers: &mut [&mut ModularChannel],
     chan: usize,
@@ -88,62 +147,24 @@ pub(super) fn precompute_references(
     if num_extra_props == 0 {
         return;
     }
-    references.data.fill(0);
+    let chan_size = buffers[chan].size(storage);
+    let chan_shift = buffers[chan].shift;
+    let w = chan_size.0;
     let mut offset = 0;
     for i in 0..chan {
         if offset >= num_extra_props {
             break;
         }
         let j = chan - i - 1;
-        if buffers[j].size(storage) != buffers[chan].size(storage)
-            || buffers[j].shift != buffers[chan].shift
-        {
+        if buffers[j].size(storage) != chan_size || buffers[j].shift != chan_shift {
             continue;
         }
         if storage == ModularStorage::I16 {
             let ref_rect = ImageRect::<i16>::from_raw(buffers[j].data.as_rect());
-            let ref_chan_row = ref_rect.row(y);
-            let ref_chan_prev = ref_rect.row(y.saturating_sub(1));
-            for x in 0..buffers[chan].size(storage).0 {
-                let ref_row = &mut references.data[x * num_extra_props..(x + 1) * num_extra_props];
-                let v = ref_chan_row[x] as i32;
-                ref_row[offset] = v.wrapping_abs();
-                ref_row[offset + 1] = v;
-                let vleft = if x > 0 { ref_chan_row[x - 1] as i32 } else { 0 };
-                let vtop = if y > 0 {
-                    ref_chan_prev[x] as i32
-                } else {
-                    vleft
-                };
-                let vtopleft = if x > 0 && y > 0 {
-                    ref_chan_prev[x - 1] as i32
-                } else {
-                    vleft
-                };
-                let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
-                ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
-                ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
-            }
+            precompute_channel_refs(&ref_rect, w, y, offset, num_extra_props, references.data);
         } else {
             let ref_rect = ImageRect::<i32>::from_raw(buffers[j].data.as_rect());
-            let ref_chan_row = ref_rect.row(y);
-            let ref_chan_prev = ref_rect.row(y.saturating_sub(1));
-            for x in 0..buffers[chan].size(storage).0 {
-                let ref_row = &mut references.data[x * num_extra_props..(x + 1) * num_extra_props];
-                let v = ref_chan_row[x];
-                ref_row[offset] = v.wrapping_abs();
-                ref_row[offset + 1] = v;
-                let vleft = if x > 0 { ref_chan_row[x - 1] } else { 0 };
-                let vtop = if y > 0 { ref_chan_prev[x] } else { vleft };
-                let vtopleft = if x > 0 && y > 0 {
-                    ref_chan_prev[x - 1]
-                } else {
-                    vleft
-                };
-                let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
-                ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
-                ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
-            }
+            precompute_channel_refs(&ref_rect, w, y, offset, num_extra_props, references.data);
         }
         offset += 4;
     }
