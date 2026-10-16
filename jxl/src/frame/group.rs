@@ -649,7 +649,11 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             (32, _) => copy_lf_rows::<32>(lf, rect, x0, y0, ys),
             _ => unreachable!(),
         }
-        transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
+        let tb = &mut transform_buffer[c][..];
+        d.call(
+            #[inline(always)]
+            |d| transform_to_pixels_impl(d, transform_type, lf, tb),
+        );
         let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
         let h = downsampled_rect.size.1;
         let src = &transform_buffer[c];
