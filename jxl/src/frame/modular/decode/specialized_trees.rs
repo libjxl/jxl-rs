@@ -586,27 +586,44 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
 
     let uses_non420 = !tree.histograms.can_use_config_420_fast_path();
 
-    if !uses_non_wp
-        && !uses_non420
-        && let Some(mut wp) = WpOnly::new(
+    if !uses_non_wp {
+        if !uses_non420 {
+            if let Some(mut wp) = WpOnly::new(
+                pruned_tree,
+                header,
+                xsize,
+                Reader420NoLz,
+                lut_scratch,
+                lut_stack,
+                wp_scratch,
+            ) {
+                return run(&mut wp);
+            }
+        } else if let Some(mut wp) = WpOnly::new(
             pruned_tree,
             header,
             xsize,
-            Reader420NoLz,
+            ReaderGeneric,
             lut_scratch,
             lut_stack,
             wp_scratch,
-        )
-    {
-        return run(&mut wp);
+        ) {
+            return run(&mut wp);
+        }
     }
 
-    if !uses_non_gradient
-        && !uses_non420
-        && let Some(mut grad) =
-            GradientOnly::new(pruned_tree, Reader420NoLz, lut_scratch, lut_stack)
-    {
-        return run(&mut grad);
+    if !uses_non_gradient {
+        if !uses_non420 {
+            if let Some(mut grad) =
+                GradientOnly::new(pruned_tree, Reader420NoLz, lut_scratch, lut_stack)
+            {
+                return run(&mut grad);
+            }
+        } else if let Some(mut grad) =
+            GradientOnly::new(pruned_tree, ReaderGeneric, lut_scratch, lut_stack)
+        {
+            return run(&mut grad);
+        }
     }
 
     let single_symbol = single_symbol.map(unpack_signed);
