@@ -8,7 +8,7 @@ use std::ops::Range;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::Result;
-use crate::frame::modular::decode::channel::{ModularChannelDecoder, sync_scratch};
+use crate::frame::modular::decode::channel::ModularChannelDecoder;
 use crate::frame::modular::decode::common::{
     References, init_properties_and_references, make_pixel, precompute_references,
 };
@@ -397,46 +397,45 @@ impl ModularChannelDecoder for NoTreeZero {
         br: &mut BitReader,
         y: usize,
         xsize: usize,
-        mut scratch: Option<&mut [Vec<i32>; 3]>,
+        scratch: Option<&mut [Vec<i32>; 3]>,
     ) {
         let storage = if scratch.is_some() {
             ModularStorage::I16
         } else {
             ModularStorage::I32
         };
-        if let Some(sym) = self.single_value {
-            match storage {
-                ModularStorage::I16 => {
-                    let mut rect = ImageRectMut::<i16>::from_raw(buffers[chan].data.as_rect_mut());
-                    rect.row(y)
-                        .fill(make_pixel(sym, self.multiplier, self.offset) as i16);
-                }
-                ModularStorage::I32 => {
-                    let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-                    rect.row(y)
-                        .fill(make_pixel(sym, self.multiplier, self.offset));
+        match storage {
+            ModularStorage::I16 => {
+                let mut rect = ImageRectMut::<i16>::from_raw(buffers[chan].data.as_rect_mut());
+                let row = &mut rect.row(y)[..xsize];
+                if let Some(sym) = self.single_value {
+                    row.fill(make_pixel(sym, self.multiplier, self.offset) as i16);
+                } else if self.multiplier == 1 && self.offset == 0 {
+                    reader.read_signed_clustered_row(histograms, br, self.clustered_ctx, row);
+                } else {
+                    for r in row.iter_mut() {
+                        let residual =
+                            reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+                        *r = make_pixel(residual, self.multiplier, self.offset) as i16;
+                    }
                 }
             }
-            return;
-        }
-        let mut rect;
-        let row: &mut [i32] = if let Some(scratch) = scratch.as_deref_mut() {
-            &mut scratch[0][..xsize]
-        } else {
-            rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-            rect.row(y)
-        };
-        debug_assert_eq!(row.len(), xsize);
-        if self.multiplier == 1 && self.offset == 0 {
-            reader.read_signed_clustered_row(histograms, br, self.clustered_ctx, row);
-        } else {
-            for r in row.iter_mut() {
-                let residual =
-                    reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
-                *r = make_pixel(residual, self.multiplier, self.offset);
+            ModularStorage::I32 => {
+                let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
+                let row = &mut rect.row(y)[..xsize];
+                if let Some(sym) = self.single_value {
+                    row.fill(make_pixel(sym, self.multiplier, self.offset));
+                } else if self.multiplier == 1 && self.offset == 0 {
+                    reader.read_signed_clustered_row(histograms, br, self.clustered_ctx, row);
+                } else {
+                    for r in row.iter_mut() {
+                        let residual =
+                            reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+                        *r = make_pixel(residual, self.multiplier, self.offset);
+                    }
+                }
             }
         }
-        sync_scratch(buffers[chan], y, scratch);
     }
 }
 
@@ -586,27 +585,44 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
 
     let uses_non420 = !tree.histograms.can_use_config_420_fast_path();
 
-    if !uses_non_wp
-        && !uses_non420
-        && let Some(mut wp) = WpOnly::new(
+    if !uses_non_wp {
+        if !uses_non420 {
+            if let Some(mut wp) = WpOnly::new(
+                pruned_tree,
+                header,
+                xsize,
+                Reader420NoLz,
+                lut_scratch,
+                lut_stack,
+                wp_scratch,
+            ) {
+                return run(&mut wp);
+            }
+        } else if let Some(mut wp) = WpOnly::new(
             pruned_tree,
             header,
             xsize,
-            Reader420NoLz,
+            ReaderGeneric,
             lut_scratch,
             lut_stack,
             wp_scratch,
-        )
-    {
-        return run(&mut wp);
+        ) {
+            return run(&mut wp);
+        }
     }
 
-    if !uses_non_gradient
-        && !uses_non420
-        && let Some(mut grad) =
-            GradientOnly::new(pruned_tree, Reader420NoLz, lut_scratch, lut_stack)
-    {
-        return run(&mut grad);
+    if !uses_non_gradient {
+        if !uses_non420 {
+            if let Some(mut grad) =
+                GradientOnly::new(pruned_tree, Reader420NoLz, lut_scratch, lut_stack)
+            {
+                return run(&mut grad);
+            }
+        } else if let Some(mut grad) =
+            GradientOnly::new(pruned_tree, ReaderGeneric, lut_scratch, lut_stack)
+        {
+            return run(&mut grad);
+        }
     }
 
     let single_symbol = single_symbol.map(unpack_signed);

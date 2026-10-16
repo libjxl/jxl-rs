@@ -29,7 +29,11 @@ macro_rules! rows {
             (
                 &mut row[..$xsize],
                 &row_top[..$xsize],
-                &row_toptop[..$xsize],
+                if $y == 1 {
+                    &row_top[..$xsize]
+                } else {
+                    &row_toptop[..$xsize]
+                },
             )
         } else {
             rect = ImageRectMut::<i32>::from_raw($buffers.data.as_rect_mut());
@@ -37,7 +41,7 @@ macro_rules! rows {
                 0 => (&mut rect.row(0)[..$xsize], &[], &[]),
                 1 => {
                     let [row, row_top] = rect.distinct_rows_mut([1, 0]);
-                    (&mut row[..$xsize], &row_top[..$xsize], &[])
+                    (&mut row[..$xsize], &row_top[..$xsize], &row_top[..$xsize])
                 }
                 _ => {
                     let [row, row_top, row_toptop] = rect.distinct_rows_mut([$y, $y - 1, $y - 2]);
@@ -113,25 +117,33 @@ pub(super) trait ModularChannelDecoder {
              row: &mut [i32],
              row_top: &[i32],
              row_toptop: &[i32],
-             pos: (usize, usize),
+             x_range: std::ops::Range<usize>,
+             y: usize,
              reader: &mut SymbolReader,
              br: &mut BitReader|
              -> (PredictionData, i32) {
-                let prediction_data =
-                    PredictionData::get_rows(row, row_top, row_toptop, pos.0, pos.1);
-                let val = decoder.decode_one(prediction_data, pos, reader, br, histograms);
-                row[pos.0] = val;
+                let mut prediction_data = PredictionData::default();
+                let mut val = 0;
+                for x in x_range {
+                    prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
+                    val = decoder.decode_one(prediction_data, (x, y), reader, br, histograms);
+                    row[x] = val;
+                }
                 (prediction_data, val)
             }
         };
 
-        let (x0, x1) = if y < 2 { (0, 0) } else { (2, xsize - 2) };
+        let (x0, x1) = if y == 0 || xsize <= 4 {
+            (0, 0)
+        } else {
+            (2, xsize - 2)
+        };
 
         let mut last = 0;
         let mut prediction_data = PredictionData::default();
-        for x in 0..x0 {
+        if x0 > 0 {
             (prediction_data, last) =
-                do_decode_cold(self, row, row_top, row_toptop, (x, y), reader, br);
+                do_decode_cold(self, row, row_top, row_toptop, 0..x0, y, reader, br);
         }
         if x0 < x1 {
             let needs_toptop = self.needs_toptop();
@@ -161,8 +173,8 @@ pub(super) trait ModularChannelDecoder {
                 }
             }
         }
-        for x in x1..xsize {
-            do_decode_cold(self, row, row_top, row_toptop, (x, y), reader, br);
+        if x1 < xsize {
+            do_decode_cold(self, row, row_top, row_toptop, x1..xsize, y, reader, br);
         }
         sync_scratch(buffers[chan], y, scratch);
     }
@@ -318,7 +330,7 @@ pub(super) fn decode_modular_channel(
         tree_scratch,
         ..
     } = scratch_space;
-    if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
+    if size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
         let mut decoder = FullTree::new(
             tree,
             &header.wp_header,

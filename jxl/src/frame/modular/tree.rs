@@ -235,8 +235,24 @@ pub(super) fn compute_properties(
     let num_refs = references.num_ref_props;
     if num_refs != 0 {
         let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-        ref_properties[..num_refs]
-            .copy_from_slice(&references.data[x * num_refs..(x + 1) * num_refs]);
+        let src = &references.data[x * num_refs..];
+        match num_refs {
+            4 => ref_properties[..4].copy_from_slice(&src[..4]),
+            8 => ref_properties[..8].copy_from_slice(&src[..8]),
+            12 => ref_properties[..12].copy_from_slice(&src[..12]),
+            _ => {
+                // `num_refs` is always a multiple of 4 (`Tree::max_property_count`).
+                // Use `black_box(4)` to prevent LLVM's LoopIdiomRecognize from turning
+                // this cold fallback (`num_refs >= 16`) into a `memcpy` call inside
+                // `FlatTree::decode_row`'s per-pixel loop, which would otherwise force
+                // caller-saved register spills across the hot loop.
+                let mut i = 0;
+                while i + 4 <= num_refs {
+                    ref_properties[i..i + 4].copy_from_slice(&src[i..i + 4]);
+                    i += std::hint::black_box(4);
+                }
+            }
+        }
     }
 
     wp_pred

@@ -86,9 +86,7 @@ fn get_single_pass_coeffs<'a>(
     if coeffs_storage.len() < needed_cache_lines {
         coeffs_storage.resize(needed_cache_lines, CacheLine::default());
     }
-    let mut c = CoeffsMut::from_cachelines(&mut coeffs_storage[..], use_i16, num_coeffs);
-    c.zero(num_coeffs);
-    c
+    CoeffsMut::from_cachelines(&mut coeffs_storage[..], use_i16, num_coeffs)
 }
 
 #[inline]
@@ -105,15 +103,15 @@ fn predict_num_nonzeros(nzeros_row: &[u8; 32], bx: usize, by: usize) -> usize {
 #[inline(always)]
 fn adjust_quant_bias<D: SimdDescriptor>(
     d: D,
-    c: usize,
     quant_i: D::I32Vec,
-    biases: &[f32; 4],
+    bias_c: f32,
+    bias_num: f32,
 ) -> D::F32Vec {
     let quant = quant_i.as_f32();
-    let adjusted = quant - D::F32Vec::splat(d, biases[3]) / quant;
+    let adjusted = quant - D::F32Vec::splat(d, bias_num) / quant;
     D::I32Vec::splat(d, 2)
         .gt(quant_i.abs())
-        .if_then_else_f32(quant_i.as_f32() * D::F32Vec::splat(d, biases[c]), adjusted)
+        .if_then_else_f32(quant_i.as_f32() * D::F32Vec::splat(d, bias_c), adjusted)
 }
 
 pub trait CoeffStorage: Sized {
@@ -301,18 +299,11 @@ impl<'a> CoeffsMut<'a> {
         }
     }
 
-    fn zero(&mut self, num_coeffs: usize) {
+    #[inline(always)]
+    fn zero_channel(&mut self, c: usize, num_coeffs: usize) {
         match self {
-            Self::I32(c_arr) => {
-                c_arr[0][..num_coeffs].fill(0);
-                c_arr[1][..num_coeffs].fill(0);
-                c_arr[2][..num_coeffs].fill(0);
-            }
-            Self::I16(c_arr) => {
-                c_arr[0][..num_coeffs].fill(0);
-                c_arr[1][..num_coeffs].fill(0);
-                c_arr[2][..num_coeffs].fill(0);
-            }
+            Self::I32(c_arr) => c_arr[c][..num_coeffs].fill(0),
+            Self::I16(c_arr) => c_arr[c][..num_coeffs].fill(0),
         }
     }
 
@@ -363,41 +354,104 @@ impl<'a> CoeffsMut<'a> {
     }
 }
 
+#[inline(always)]
+fn dequant_channel<D: SimdDescriptor, S: CoeffStorage>(
+    d: D,
+    scaled_dequant: f32,
+    dequant_matrix: &[f32],
+    (bias_c, bias_num): (f32, f32),
+    qblock_c: &[S],
+    cfl: Option<(f32, &[f32])>,
+    block_c: &mut [f32],
+) {
+    let dm_mul = D::F32Vec::splat(d, scaled_dequant);
+    if let Some((cc_mul, block_y)) = cfl {
+        let cc_vec = D::F32Vec::splat(d, cc_mul);
+        for k in (0..dequant_matrix.len()).step_by(D::F32Vec::LEN) {
+            let mul = D::F32Vec::load(d, &dequant_matrix[k..]) * dm_mul;
+            let quantized = S::load_simd(qblock_c, d, k);
+            let dequant_c = adjust_quant_bias(d, quantized, bias_c, bias_num) * mul;
+            let dequant_y = D::F32Vec::load(d, &block_y[k..]);
+            cc_vec
+                .mul_add(dequant_y, dequant_c)
+                .store(&mut block_c[k..]);
+        }
+    } else {
+        for k in (0..dequant_matrix.len()).step_by(D::F32Vec::LEN) {
+            let mul = D::F32Vec::load(d, &dequant_matrix[k..]) * dm_mul;
+            let quantized = S::load_simd(qblock_c, d, k);
+            let dequant = adjust_quant_bias(d, quantized, bias_c, bias_num) * mul;
+            dequant.store(&mut block_c[k..]);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn dequant_lane<D: SimdDescriptor, S: CoeffStorage>(
+fn dequant_block_impl<D: SimdDescriptor, S: CoeffStorage>(
     d: D,
-    scaled_dequant_x: f32,
     scaled_dequant_y: f32,
-    scaled_dequant_b: f32,
-    dequant_matrices: &[f32],
-    size: usize,
-    k: usize,
+    x_dm_multiplier: f32,
+    b_dm_multiplier: f32,
     x_cc_mul: f32,
     b_cc_mul: f32,
+    size: usize,
+    matrices: &[f32],
     biases: &[f32; 4],
-    qblock: &[&[S]; 3],
+    qb: &[&[S]; 3],
+    offset: usize,
     block: &mut [Vec<f32>; 3],
+    active: [bool; 3],
+    nz: [usize; 3],
+    dc_only: [bool; 3],
 ) {
-    let x_mul = D::F32Vec::load(d, &dequant_matrices[k..]) * D::F32Vec::splat(d, scaled_dequant_x);
-    let y_mul =
-        D::F32Vec::load(d, &dequant_matrices[size + k..]) * D::F32Vec::splat(d, scaled_dequant_y);
-    let b_mul = D::F32Vec::load(d, &dequant_matrices[2 * size + k..])
-        * D::F32Vec::splat(d, scaled_dequant_b);
+    let [block_x, block_y, block_b] = block;
 
-    let quantized_x = S::load_simd(qblock[0], d, k);
-    let quantized_y = S::load_simd(qblock[1], d, k);
-    let quantized_b = S::load_simd(qblock[2], d, k);
+    // Channel 1 (Y)
+    if nz[1] > 0 {
+        dequant_channel(
+            d,
+            scaled_dequant_y,
+            &matrices[size..2 * size],
+            (biases[1], biases[3]),
+            &qb[1][offset..],
+            None,
+            block_y,
+        );
+    } else if !dc_only[1] {
+        block_y[..size].fill(0.0);
+    }
 
-    let dequant_x_cc = adjust_quant_bias(d, 0, quantized_x, biases) * x_mul;
-    let dequant_y = adjust_quant_bias(d, 1, quantized_y, biases) * y_mul;
-    let dequant_b_cc = adjust_quant_bias(d, 2, quantized_b, biases) * b_mul;
-
-    let dequant_x = D::F32Vec::splat(d, x_cc_mul).mul_add(dequant_y, dequant_x_cc);
-    let dequant_b = D::F32Vec::splat(d, b_cc_mul).mul_add(dequant_y, dequant_b_cc);
-    dequant_x.store(&mut block[0][k..]);
-    dequant_y.store(&mut block[1][k..]);
-    dequant_b.store(&mut block[2][k..]);
+    // Channels 0 (X) and 2 (B)
+    for (c, block_c, dm_mul, cc_mul) in [
+        (0, block_x, x_dm_multiplier, x_cc_mul),
+        (2, block_b, b_dm_multiplier, b_cc_mul),
+    ] {
+        if !active[c] || dc_only[c] {
+            continue;
+        }
+        let has_cfl = nz[1] > 0 && cc_mul != 0.0;
+        if nz[c] == 0 {
+            if has_cfl {
+                let cc_vec = D::F32Vec::splat(d, cc_mul);
+                for k in (0..size).step_by(D::F32Vec::LEN) {
+                    (D::F32Vec::load(d, &block_y[k..]) * cc_vec).store(&mut block_c[k..]);
+                }
+            } else {
+                block_c[..size].fill(0.0);
+            }
+        } else {
+            dequant_channel(
+                d,
+                scaled_dequant_y * dm_mul,
+                &matrices[c * size..(c + 1) * size],
+                (biases[c], biases[3]),
+                &qb[c][offset..],
+                has_cfl.then(|| (cc_mul, &block_y[..size])),
+                block_c,
+            );
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -413,58 +467,58 @@ fn dequant_block<D: SimdDescriptor>(
     b_cc_mul: f32,
     size: usize,
     dequant_matrices: &DequantMatrices,
-    covered_blocks: usize,
     biases: &[f32; 4],
     coeffs: &CoeffsMut,
     offset: usize,
     block: &mut [Vec<f32>; 3],
+    active: [bool; 3],
+    nz: [usize; 3],
+    dc_only: [bool; 3],
 ) {
     let scaled_dequant_y = inv_global_scale / (quant as f32);
-
-    let scaled_dequant_x = scaled_dequant_y * x_dm_multiplier;
-    let scaled_dequant_b = scaled_dequant_y * b_dm_multiplier;
-
     let matrices = dequant_matrices.matrix(hf_type, 0);
 
     assert!(BLOCK_SIZE.is_multiple_of(D::F32Vec::LEN));
     match coeffs {
         CoeffsMut::I32(qb) => {
-            let qb_slices = [&qb[0][offset..], &qb[1][offset..], &qb[2][offset..]];
-            for k in (0..covered_blocks * BLOCK_SIZE).step_by(D::F32Vec::LEN) {
-                dequant_lane(
-                    d,
-                    scaled_dequant_x,
-                    scaled_dequant_y,
-                    scaled_dequant_b,
-                    matrices,
-                    size,
-                    k,
-                    x_cc_mul,
-                    b_cc_mul,
-                    biases,
-                    &qb_slices,
-                    block,
-                );
-            }
+            let qb_refs = [&qb[0][..], &qb[1][..], &qb[2][..]];
+            dequant_block_impl(
+                d,
+                scaled_dequant_y,
+                x_dm_multiplier,
+                b_dm_multiplier,
+                x_cc_mul,
+                b_cc_mul,
+                size,
+                matrices,
+                biases,
+                &qb_refs,
+                offset,
+                block,
+                active,
+                nz,
+                dc_only,
+            );
         }
         CoeffsMut::I16(qb) => {
-            let qb_slices = [&qb[0][offset..], &qb[1][offset..], &qb[2][offset..]];
-            for k in (0..covered_blocks * BLOCK_SIZE).step_by(D::F32Vec::LEN) {
-                dequant_lane(
-                    d,
-                    scaled_dequant_x,
-                    scaled_dequant_y,
-                    scaled_dequant_b,
-                    matrices,
-                    size,
-                    k,
-                    x_cc_mul,
-                    b_cc_mul,
-                    biases,
-                    &qb_slices,
-                    block,
-                );
-            }
+            let qb_refs = [&qb[0][..], &qb[1][..], &qb[2][..]];
+            dequant_block_impl(
+                d,
+                scaled_dequant_y,
+                x_dm_multiplier,
+                b_dm_multiplier,
+                x_cc_mul,
+                b_cc_mul,
+                size,
+                matrices,
+                biases,
+                &qb_refs,
+                offset,
+                block,
+                active,
+                nz,
+                dc_only,
+            );
         }
     }
 }
@@ -521,33 +575,64 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     coeffs: &CoeffsMut,
     offset: usize,
     dequant_matrices: &DequantMatrices,
+    nz: [usize; 3],
 ) -> Result<(), Error> {
-    for b in transform_buffer.iter_mut() {
-        if b.len() < num_coeffs {
-            b.resize(num_coeffs, 0.0);
+    let active = [
+        (sbx[0] << hshift[0]) == bx && (sby[0] << vshift[0]) == by,
+        (sbx[1] << hshift[1]) == bx && (sby[1] << vshift[1]) == by,
+        (sbx[2] << hshift[2]) == bx && (sby[2] << vshift[2]) == by,
+    ];
+    let dc_only = [
+        num_blocks == 1 && nz[0] == 0 && (nz[1] == 0 || x_cc_mul == 0.0),
+        num_blocks == 1 && nz[1] == 0,
+        num_blocks == 1 && nz[2] == 0 && (nz[1] == 0 || b_cc_mul == 0.0),
+    ];
+    if !dc_only[0] || !dc_only[1] || !dc_only[2] {
+        for (c, b) in transform_buffer.iter_mut().enumerate() {
+            if active[c] && !dc_only[c] && b.len() < num_coeffs {
+                b.resize(num_coeffs, 0.0);
+            }
         }
+        dequant_block::<D>(
+            d,
+            transform_type,
+            inv_global_scale,
+            raw_quant,
+            x_dm_multiplier,
+            b_dm_multiplier,
+            x_cc_mul,
+            b_cc_mul,
+            num_coeffs,
+            dequant_matrices,
+            quant_biases,
+            coeffs,
+            offset,
+            transform_buffer,
+            active,
+            nz,
+            dc_only,
+        );
     }
-    dequant_block::<D>(
-        d,
-        transform_type,
-        inv_global_scale,
-        raw_quant,
-        x_dm_multiplier,
-        b_dm_multiplier,
-        x_cc_mul,
-        b_cc_mul,
-        num_coeffs,
-        dequant_matrices,
-        num_blocks,
-        quant_biases,
-        coeffs,
-        offset,
-        transform_buffer,
-    );
     let xs = covered_blocks_x(transform_type) as usize;
     let ys = covered_blocks_y(transform_type) as usize;
     for c in [1, 0, 2] {
-        if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
+        if !active[c] {
+            continue;
+        }
+        let downsampled_rect = Rect {
+            origin: (
+                block_rect.origin.0 >> hshift[c],
+                block_rect.origin.1 >> vshift[c],
+            ),
+            size: block_rect.size,
+        };
+        if dc_only[c] {
+            let dc = lf_rects[c].row(sby[c])[sbx[c]];
+            let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
+            let row_val = [dc; 8];
+            for i in 0..8 {
+                output_rect.row(i)[..8].copy_from_slice(&row_val);
+            }
             continue;
         }
         let lf = &mut scratch[..];
@@ -564,14 +649,11 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             (32, _) => copy_lf_rows::<32>(lf, rect, x0, y0, ys),
             _ => unreachable!(),
         }
-        transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
-        let downsampled_rect = Rect {
-            origin: (
-                block_rect.origin.0 >> hshift[c],
-                block_rect.origin.1 >> vshift[c],
-            ),
-            size: block_rect.size,
-        };
+        let tb = &mut transform_buffer[c][..];
+        d.call(
+            #[inline(always)]
+            |d| transform_to_pixels_impl(d, transform_type, lf, tb),
+        );
         let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
         let h = downsampled_rect.size.1;
         let src = &transform_buffer[c];
@@ -617,6 +699,7 @@ simd_function!(
         coeffs: &CoeffsMut,
         offset: usize,
         dequant_matrices: &DequantMatrices,
+        nz: [usize; 3],
     ) -> Result<(), Error> {
         dequant_and_transform_to_pixels(
             d,
@@ -644,6 +727,7 @@ simd_function!(
             coeffs,
             offset,
             dequant_matrices,
+            nz,
         )
     }
 );
@@ -817,20 +901,23 @@ pub fn decode_vardct_group(
 
         let row_cmap_x = ytox_map.row(ty);
         let row_cmap_b = ytob_map.row(ty);
+        let row_raw_quant = raw_quant_map.row(by);
+        let row_quant_lf = quant_lf_rect.row(by);
+        let row_transform = transform_map.row(by);
 
         for bx in 0..block_group_rect.size.0 {
-            let sbx = [bx >> hshift[0], bx >> hshift[1], bx >> hshift[2]];
-            let tx = bx / COLOR_TILE_DIM_IN_BLOCKS;
-            let x_cc_mul = color_correlation_params.y_to_x(row_cmap_x[tx] as i32);
-            let b_cc_mul = color_correlation_params.y_to_b(row_cmap_b[tx] as i32);
-            let raw_quant = raw_quant_map.row(by)[bx] as u32;
-            let quant_lf = quant_lf_rect.row(by)[bx] as usize;
-            let raw_transform_id = transform_map.row(by)[bx];
+            let raw_transform_id = row_transform[bx];
             let transform_id = raw_transform_id & 127;
             let is_first_block = raw_transform_id >= 128;
             if !is_first_block {
                 continue;
             }
+            let sbx = [bx >> hshift[0], bx >> hshift[1], bx >> hshift[2]];
+            let tx = bx / COLOR_TILE_DIM_IN_BLOCKS;
+            let x_cc_mul = color_correlation_params.y_to_x(row_cmap_x[tx] as i32);
+            let b_cc_mul = color_correlation_params.y_to_b(row_cmap_b[tx] as i32);
+            let raw_quant = row_raw_quant[bx] as u32;
+            let quant_lf = row_quant_lf[bx] as usize;
             let transform_type = HfTransformType::from_usize(transform_id as usize)
                 .ok_or(Error::InvalidVarDCTTransform(transform_id as usize))?;
             let cx = covered_blocks_x(transform_type) as usize;
@@ -846,6 +933,12 @@ pub fn decode_vardct_group(
             let num_coeffs = num_blocks * BLOCK_SIZE;
             let log_num_blocks = num_blocks.ilog2() as usize;
 
+            let active = [
+                (sbx[0] << hshift[0]) == bx && (sby[0] << vshift[0]) == by,
+                (sbx[1] << hshift[1]) == bx && (sby[1] << vshift[1]) == by,
+                (sbx[2] << hshift[2]) == bx && (sby[2] << vshift[2]) == by,
+            ];
+
             let (mut coeffs, offset) = match &mut locked_coeffs {
                 Some(locked) => (
                     CoeffsMut::from_cachelines(&mut locked[..], use_i16, GROUP_DIM * GROUP_DIM),
@@ -856,6 +949,8 @@ pub fn decode_vardct_group(
                     0,
                 ),
             };
+
+            let mut block_nonzeros = if is_multi_pass { [1; 3] } else { [0; 3] };
 
             for PassInfo {
                 histogram_index,
@@ -870,7 +965,7 @@ pub fn decode_vardct_group(
                 let pass_info = &hf_global.passes[*pass];
                 let context_offset = *histogram_index * block_context_map.num_ac_contexts();
                 for c in [1, 0, 2] {
-                    if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
+                    if !active[c] {
                         continue;
                     }
                     trace!(
@@ -897,6 +992,13 @@ pub fn decode_vardct_group(
                     }
                     let val = nonzeros.shrc(log_num_blocks) as u8;
                     num_nzeros[c][sbx[c]..sbx[c] + cx].fill(val);
+                    if nonzeros == 0 {
+                        continue;
+                    }
+                    if !is_multi_pass && block_nonzeros[c] == 0 {
+                        coeffs.zero_channel(c, num_coeffs);
+                    }
+                    block_nonzeros[c] += nonzeros;
                     let histo_offset = block_context_map.zero_density_context_offset(block_context)
                         + context_offset;
                     let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
@@ -943,6 +1045,7 @@ pub fn decode_vardct_group(
                     &coeffs,
                     offset,
                     dequant_matrices,
+                    block_nonzeros,
                 )?;
             }
             if is_multi_pass {
@@ -1032,36 +1135,40 @@ mod test {
         let mut block_i32 = [vec![0.0f32; 64], vec![0.0f32; 64], vec![0.0f32; 64]];
         let mut block_i16 = [vec![0.0f32; 64], vec![0.0f32; 64], vec![0.0f32; 64]];
 
-        for k in 0..64 {
-            dequant_lane(
-                d,
-                1.0,
-                1.0,
-                1.0,
-                &dequant_matrices,
-                64,
-                k,
-                0.0,
-                0.0,
-                &biases,
-                &q_i32,
-                &mut block_i32,
-            );
-            dequant_lane(
-                d,
-                1.0,
-                1.0,
-                1.0,
-                &dequant_matrices,
-                64,
-                k,
-                0.0,
-                0.0,
-                &biases,
-                &q_i16,
-                &mut block_i16,
-            );
-        }
+        dequant_block_impl(
+            d,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            64,
+            &dequant_matrices,
+            &biases,
+            &q_i32,
+            0,
+            &mut block_i32,
+            [true; 3],
+            [64; 3],
+            [false; 3],
+        );
+        dequant_block_impl(
+            d,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            64,
+            &dequant_matrices,
+            &biases,
+            &q_i16,
+            0,
+            &mut block_i16,
+            [true; 3],
+            [64; 3],
+            [false; 3],
+        );
 
         for c in 0..3 {
             for i in 0..64 {
