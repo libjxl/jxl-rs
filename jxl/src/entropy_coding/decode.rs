@@ -31,6 +31,24 @@ pub fn unpack_signed(unsigned: u32) -> i32 {
     ((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32
 }
 
+pub trait ClusteredRowSample: Copy {
+    fn from_i32(v: i32) -> Self;
+}
+
+impl ClusteredRowSample for i32 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v
+    }
+}
+
+impl ClusteredRowSample for i16 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v as i16
+    }
+}
+
 #[derive(UnconditionalCoder, Debug, Clone, Copy)]
 pub struct Lz77Params {
     pub enabled: bool,
@@ -412,12 +430,12 @@ impl SymbolReader {
         unpack_signed(unsigned)
     }
 
-    pub fn read_signed_clustered_row(
+    pub fn read_signed_clustered_row<T: ClusteredRowSample>(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
         cluster: usize,
-        row: &mut [i32],
+        row: &mut [T],
     ) {
         let uint_config = &histograms.uint_configs[cluster];
         match &mut self.state {
@@ -426,26 +444,26 @@ impl SymbolReader {
                     let table = hc.table(cluster);
                     for r in row.iter_mut() {
                         let token = table.read(br);
-                        *r = unpack_signed(HybridUint::read_config_420(token, br));
+                        *r = T::from_i32(unpack_signed(HybridUint::read_config_420(token, br)));
                     }
                 }
                 (Codes::Huffman(hc), false) => {
                     let table = hc.table(cluster);
                     for r in row.iter_mut() {
                         let token = table.read(br);
-                        *r = unpack_signed(uint_config.read(token, br));
+                        *r = T::from_i32(unpack_signed(uint_config.read(token, br)));
                     }
                 }
                 (Codes::Ans(ans), true) => {
                     for r in row.iter_mut() {
                         let token = self.ans_reader.read(ans, br, cluster);
-                        *r = unpack_signed(HybridUint::read_config_420(token, br));
+                        *r = T::from_i32(unpack_signed(HybridUint::read_config_420(token, br)));
                     }
                 }
                 (Codes::Ans(ans), false) => {
                     for r in row.iter_mut() {
                         let token = self.ans_reader.read(ans, br, cluster);
-                        *r = unpack_signed(uint_config.read(token, br));
+                        *r = T::from_i32(unpack_signed(uint_config.read(token, br)));
                     }
                 }
             },
@@ -460,7 +478,7 @@ impl SymbolReader {
                         if lz77_state.copy_pos.wrapping_add(1) == lz77_state.num_decoded {
                             let sym = lz77_state.window
                                 [(lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize];
-                            row[x..x + count].fill(unpack_signed(sym));
+                            row[x..x + count].fill(T::from_i32(unpack_signed(sym)));
                             lz77_state.push_decoded_symbol_run(sym, count);
                         } else {
                             for dst in &mut row[x..x + count] {
@@ -468,7 +486,7 @@ impl SymbolReader {
                                     [(lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize];
                                 lz77_state.copy_pos += 1;
                                 lz77_state.push_decoded_symbol(sym);
-                                *dst = unpack_signed(sym);
+                                *dst = T::from_i32(unpack_signed(sym));
                             }
                             lz77_state.num_to_copy -= count as u32;
                         }
@@ -485,13 +503,13 @@ impl SymbolReader {
                     let Some(lz77_token) = token.checked_sub(lz77_state.min_symbol) else {
                         let sym = uint_config.read(token, br);
                         lz77_state.push_decoded_symbol(sym);
-                        row[x] = unpack_signed(sym);
+                        row[x] = T::from_i32(unpack_signed(sym));
                         x += 1;
                         continue;
                     };
                     if lz77_state.num_decoded == 0 {
                         self.errors.lz77_repeat = true;
-                        row[x] = 0;
+                        row[x] = T::from_i32(0);
                         x += 1;
                         continue;
                     }
@@ -502,7 +520,7 @@ impl SymbolReader {
                             lz77_state.min_length, "LZ77 num_to_copy overflow"
                         );
                         self.errors.arithmetic_overflow = true;
-                        row[x] = 0;
+                        row[x] = T::from_i32(0);
                         x += 1;
                         continue;
                     };
