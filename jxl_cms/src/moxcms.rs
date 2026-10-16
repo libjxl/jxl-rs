@@ -36,7 +36,7 @@ impl JxlCms for MoxCms {
         let output = ColorProfile::new_from_slice(&output_icc)
             .map_err(|e| Error::CmsOutputParseError(e.to_string()))?;
         let input_layout = layout_from_color_space(input.color_space)?;
-        let output_layout = layout_from_color_space(input.color_space)?;
+        let output_layout = layout_from_color_space(output.color_space)?;
         let input_channels = input_layout.channels();
         let output_channels = output_layout.channels();
 
