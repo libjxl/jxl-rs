@@ -59,6 +59,17 @@ fn level5_limits(input: &CodestreamInput, decode_options: &JxlDecoderOptions) ->
         || input.box_parser().container_level() != Some(ProfileLevel::Main10)
 }
 
+fn is_level5_limit_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::TreeTooTall(..)
+            | Error::TooManyModularTransforms(..)
+            | Error::TooManyModularChannels(..)
+            | Error::FrameDurationTooShort(..)
+            | Error::SplinesAreaTooLarge(..)
+    ) || matches!(err, Error::PatchesTooMany(s, ..) if s == "patch area")
+}
+
 fn check_size_limit(
     pixel_limit: Option<usize>,
     (xs, ys): (usize, usize),
@@ -277,6 +288,13 @@ impl CodestreamParser {
                 Err(Error::UnexpectedCodestreamBoxEnd)
             }
             Err(Error::OutOfBounds(size_hint)) => Ok(Event::NeedMoreInput { size_hint }),
+            Err(e)
+                if decode_options.max_profile_level == ProfileLevel::Main10
+                    && input.box_parser().container_level() != Some(ProfileLevel::Main10)
+                    && is_level5_limit_error(&e) =>
+            {
+                Err(Error::LackingCodestreamBox)
+            }
             result => result,
         }
     }

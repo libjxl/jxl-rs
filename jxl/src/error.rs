@@ -63,6 +63,8 @@ pub enum Error {
     InvalidBox,
     #[error("Unexpected end of codestream box")]
     UnexpectedCodestreamBoxEnd,
+    #[error("Lacking codestream box")]
+    LackingCodestreamBox,
     #[error("ICC is too large")]
     IccTooLarge,
     #[error("Invalid ICC stream: unexpected end of stream")]
