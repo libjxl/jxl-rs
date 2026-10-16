@@ -13,7 +13,7 @@ use crate::frame::modular::tree::TreeNode;
 use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, ScratchSpace, Tree};
 use crate::headers::JxlHeader;
 use crate::headers::modular::GroupHeader;
-use crate::image::ImageRectMut;
+use crate::image::{BufferRecycler, ImageRectMut};
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.
@@ -205,6 +205,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
     scratch_space: &mut ScratchSpace,
+    recycler: &BufferRecycler,
     level5_limits: bool,
 ) -> Result<()> {
     // Skip decoding if all grids are zero-sized.
@@ -232,6 +233,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
                     &mut buffer_storage,
                     &h,
                     storage,
+                    recycler,
                     level5_limits,
                 )?;
                 (h, new_bufs)
@@ -253,7 +255,12 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
             })
             .sum::<usize>();
         let size_limit = (1024 + num_local_samples).min(1 << 20);
-        Some(Tree::read(br, size_limit, level5_limits)?)
+        Some(Tree::read(
+            br,
+            size_limit,
+            level5_limits,
+            &mut scratch_space.lz77_window,
+        )?)
     } else {
         None
     };
@@ -272,7 +279,12 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     if can_decode_fast_lossless(tree) {
         decode_fast_lossless(buffers, tree, br, partial_decoded_buffers, storage)?
     } else {
-        let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
+        let mut reader = SymbolReader::new(
+            &tree.histograms,
+            br,
+            Some(image_width),
+            &mut scratch_space.lz77_window,
+        )?;
 
         let mut last_safe_buf = 0;
         for i in 0..buffers.len() {
@@ -296,6 +308,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
                 storage,
                 scratch_space,
             ) {
+                reader.reclaim_lz77_scratch(&mut scratch_space.lz77_window);
                 if let Some(p) = partial_decoded_buffers {
                     *p = last_safe_buf;
                 }
@@ -303,13 +316,18 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
             }
         }
 
+        reader.reclaim_lz77_scratch(&mut scratch_space.lz77_window);
         reader.check_final_state(&tree.histograms, br)?;
 
         drop(buffers);
     }
 
     for step in transform_steps.iter().rev() {
-        step.local_apply(&mut buffer_storage, scratch_space, storage)?;
+        step.local_apply(&mut buffer_storage, scratch_space, storage, recycler)?;
+    }
+
+    for buf in buffer_storage {
+        buf.recycle(recycler);
     }
 
     Ok(())

@@ -9,8 +9,14 @@ use std::ptr::null_mut;
 
 use super::Rect;
 use crate::error::{Error, Result};
-use crate::util::CACHE_LINE_BYTE_SIZE;
 use crate::util::tracing_wrappers::*;
+
+/// Maximum alignment of any `ImageDataType` (8 bytes for `f64`/`u64`).
+/// Using `MAX_IMAGE_ALIGN` instead of `CACHE_LINE_BYTE_SIZE` (64) for allocation alignment
+/// allows the standard library's `System` allocator to use `calloc` (which obtains lazily
+/// zeroed pages from the OS for large allocations) instead of `posix_memalign` + synchronous
+/// `memset` on the calling thread.
+pub(super) const MAX_IMAGE_ALIGN: usize = 8;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RawImageBuffer {
@@ -188,7 +194,7 @@ impl RawImageBuffer {
     }
 
     /// Returns zeroed memory if `copy_from` is `None`, otherwise it returns memory initialized
-    /// with the contents of `copy_from`. The returned buffer is aligned to CACHE_LINE_BYTE_SIZE bytes.
+    /// with the contents of `copy_from`. The returned buffer is aligned to `MAX_IMAGE_ALIGN` bytes.
     /// The returned RawImageBuffer owns the memory it references, which belongs to a single
     /// allocation of size minimum_allocation_size().
     ///
@@ -211,8 +217,7 @@ impl RawImageBuffer {
             return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
         }
         debug!("trying to allocate image");
-        let bytes_between_rows =
-            bytes_per_row.div_ceil(CACHE_LINE_BYTE_SIZE) * CACHE_LINE_BYTE_SIZE;
+        let bytes_between_rows = bytes_per_row.next_multiple_of(MAX_IMAGE_ALIGN);
         // Note: matches RawImageBuffer::minimum_allocation_size.
         let Some(allocation_len) = (num_rows - 1)
             .checked_mul(bytes_between_rows)
@@ -221,7 +226,7 @@ impl RawImageBuffer {
             return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
         };
         assert_ne!(allocation_len, 0);
-        let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE)
+        let layout = Layout::from_size_align(allocation_len, MAX_IMAGE_ALIGN)
             .map_err(|_| Error::ImageSizeTooLarge(bytes_per_row, num_rows))?;
         let memory = if let Some(src) = copy_from {
             // SAFETY: we just checked that allocation_len is not 0.
@@ -278,7 +283,7 @@ impl RawImageBuffer {
     pub(super) unsafe fn deallocate(&mut self) {
         if !self.buf.is_null() {
             let allocation_len = self.minimum_allocation_size();
-            let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE).unwrap();
+            let layout = Layout::from_size_align(allocation_len, MAX_IMAGE_ALIGN).unwrap();
             // SAFETY: the buffer was allocated in `try_allocate` with the same layout.
             unsafe {
                 dealloc(self.buf, layout);

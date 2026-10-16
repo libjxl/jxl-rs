@@ -394,6 +394,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
 
             self.render_with_new_group(group_id, buffer_splitter)?;
+        } else {
+            self.shared.buffer_recycler.recycle_buffer(buf);
         }
         Ok(())
     }

@@ -227,7 +227,6 @@ impl QuantEncoding {
                     // qtable[] values are already checked for <= 0 so the denominator may not be negative.
                     return Err(InvalidRawQuantTable);
                 }
-                let mut scratch = lf_global.modular_global.get_scratch_space();
                 Ok(Self::Raw {
                     qtable: decode_quant_table(
                         index,
@@ -235,7 +234,7 @@ impl QuantEncoding {
                         (required_size_x, required_size_y),
                         &lf_global.tree,
                         br,
-                        &mut scratch,
+                        lf_global.modular_global.recycler(),
                         lf_global.modular_global.storage(),
                         lf_global.modular_global.level5_limits,
                     )?,

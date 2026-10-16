@@ -370,7 +370,7 @@ impl PatchesDictionary {
         mult.saturating_mul(num_pixels).max(1 << 20)
     }
 
-    #[instrument(level = "debug", skip(br), ret, err)]
+    #[instrument(level = "debug", skip(br, lz77_scratch), ret, err)]
     pub(crate) fn read_internal(
         br: &mut BitReader,
         xsize: usize,
@@ -378,10 +378,11 @@ impl PatchesDictionary {
         num_extra_channels: usize,
         reference_frames: &[Option<ReferenceFrame>],
         level5_limits: bool,
+        lz77_scratch: &mut Vec<u32>,
     ) -> Result<PatchesDictionary> {
         let blendings_stride = num_extra_channels + 1;
-        let patches_histograms = Histograms::decode(PatchContext::NUM, br, true)?;
-        let mut patches_reader = SymbolReader::new(&patches_histograms, br, None)?;
+        let patches_histograms = Histograms::decode(PatchContext::NUM, br, true, lz77_scratch)?;
+        let mut patches_reader = SymbolReader::new(&patches_histograms, br, None, lz77_scratch)?;
         let num_ref_patch = patches_reader.read_unsigned(
             &patches_histograms,
             br,
@@ -638,6 +639,7 @@ impl PatchesDictionary {
                 ysize: ref_pos_ysize,
             })
         }
+        patches_reader.reclaim_lz77_scratch(lz77_scratch);
 
         let mut patches_dict = PatchesDictionary {
             positions,
@@ -809,6 +811,7 @@ mod tests {
                 0,
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
                 true,
+                &mut Vec::new(),
             )?;
             let want_dict = PatchesDictionary {
                 positions: vec![PatchPosition {
@@ -858,6 +861,7 @@ mod tests {
                 2,
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
                 true,
+                &mut Vec::new(),
             )?;
             let want_dict = PatchesDictionary {
                 positions: vec![
@@ -957,6 +961,7 @@ mod tests {
                 1,
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
                 true,
+                &mut Vec::new(),
             )?;
             let want_dict = PatchesDictionary {
                 positions: vec![PatchPosition {
@@ -1018,6 +1023,7 @@ mod tests {
                 0,
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
                 true,
+                &mut Vec::new(),
             )?;
             let want_dict = PatchesDictionary {
                 positions: vec![PatchPosition {
@@ -1063,6 +1069,7 @@ mod tests {
                 0,
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
                 true,
+                &mut Vec::new(),
             )?;
             let want_dict = PatchesDictionary {
                 positions: vec![

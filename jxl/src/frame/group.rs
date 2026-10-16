@@ -35,6 +35,7 @@ pub(crate) struct VarDctBuffers {
     pub(super) coeffs_storage: Vec<CacheLine>,
     pub(super) num_nzeros_storage: Vec<[u8; 32]>,
     pub(super) lf_upsample_bufs: Option<(RowBuffer, RowBuffer, usize)>,
+    pub(super) lz77_windows: Vec<Vec<u32>>,
 }
 
 impl VarDctBuffers {
@@ -45,6 +46,7 @@ impl VarDctBuffers {
             coeffs_storage: vec![],
             num_nzeros_storage: vec![],
             lf_upsample_bufs: None,
+            lz77_windows: vec![],
         }
     }
 
@@ -52,6 +54,9 @@ impl VarDctBuffers {
         let needed = num_passes * 3;
         self.num_nzeros_storage.clear();
         self.num_nzeros_storage.resize(needed, [0u8; 32]);
+        if self.lz77_windows.len() < num_passes {
+            self.lz77_windows.resize_with(num_passes, Vec::new);
+        }
     }
 
     pub(super) fn ensure_allocated(&mut self) -> Result<()> {
@@ -659,6 +664,7 @@ impl<'a, 'b> PassInfo<'a, 'b> {
         pass: usize,
         br: &'a mut BitReader<'b>,
         num_nzeros: &'a mut [[u8; 32]; 3],
+        lz77_window: &mut Vec<u32>,
     ) -> Result<Self> {
         let num_histo_bits = hf_global.num_histograms.ceil_log2();
         debug!(?pass);
@@ -678,6 +684,7 @@ impl<'a, 'b> PassInfo<'a, 'b> {
             &hf_global.passes[pass].histograms,
             br,
             None,
+            lz77_window,
         )?);
         let shift = if pass < frame_header.passes.shift.len() {
             frame_header.passes.shift[pass]
@@ -722,7 +729,10 @@ pub fn decode_vardct_group(
     let mut pass_info = passes
         .iter_mut()
         .zip(pass_chunks)
-        .map(|((pass, br), nz)| PassInfo::new(hf_global, frame_header, *pass, br, nz))
+        .zip(buffers.lz77_windows.iter_mut())
+        .map(|(((pass, br), nz), lz77_window)| {
+            PassInfo::new(hf_global, frame_header, *pass, br, nz, lz77_window)
+        })
         .collect::<Result<SmallVec<_, 4>>>()?;
 
     let scratch = &mut buffers.scratch;
@@ -940,13 +950,16 @@ pub fn decode_vardct_group(
             }
         }
     }
-    for PassInfo {
-        pass, br, reader, ..
-    } in pass_info.iter_mut()
+    for (
+        PassInfo {
+            pass, br, reader, ..
+        },
+        lz77_window,
+    ) in pass_info.iter_mut().zip(buffers.lz77_windows.iter_mut())
     {
-        std::mem::take(reader)
-            .unwrap()
-            .check_final_state(&hf_global.passes[*pass].histograms, br)?;
+        let mut reader = std::mem::take(reader).unwrap();
+        reader.reclaim_lz77_scratch(lz77_window);
+        reader.check_final_state(&hf_global.passes[*pass].histograms, br)?;
     }
     Ok(())
 }
