@@ -11,6 +11,7 @@ use crate::frame::modular::buffers::NeededBorders;
 use crate::frame::modular::transforms::step::{TransformStep, TransformStepChunk};
 use crate::frame::modular::{
     ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, ModularStorage, Predictor,
+    max_channels,
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::TransformId;
@@ -53,7 +54,7 @@ pub(super) fn meta_apply_single_transform(
     mut add_transform_buffer: impl FnMut(ChannelInfo, String) -> usize,
     cumulative_palette_samples: &mut usize,
     max_palette_samples: usize,
-    max_channels: usize,
+    level5_limits: bool,
 ) -> Result<()> {
     match transform.id {
         TransformId::Rct => {
@@ -107,6 +108,7 @@ pub(super) fn meta_apply_single_transform(
                 } else {
                     channels.len()
                 };
+                let max_channels = max_channels(level5_limits);
                 for ic in 0..num_channels {
                     let chan = &channels[begin_channel + ic].1;
                     let new_shift = if let Some(shift) = chan.shift {
@@ -167,7 +169,12 @@ pub(super) fn meta_apply_single_transform(
                     channels[begin_channel + ic] = (buf_0, new_0);
                     channels.insert(new_chan_offset + ic, (buf_1, new_1));
                     if channels.len() > max_channels {
-                        return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+                        return Err(Error::level_limit(
+                            level5_limits,
+                            "modular channels",
+                            channels.len() as u64,
+                            max_channels as u64,
+                        ));
                     }
                     trace!("applied squeeze: {channels:?}");
                 }
@@ -246,15 +253,25 @@ pub fn meta_apply_transforms(
     channels: &[ChannelInfo],
     header: &headers::modular::GroupHeader,
     max_palette_samples: usize,
-    max_channels: usize,
     storage: ModularStorage,
     level5_limits: bool,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
     if level5_limits && header.transforms.len() > 8 {
-        return Err(Error::TooManyModularTransforms(header.transforms.len(), 8));
+        return Err(Error::level_limit(
+            level5_limits,
+            "modular transforms",
+            header.transforms.len() as u64,
+            8,
+        ));
     }
+    let max_channels = max_channels(level5_limits);
     if channels.len() > max_channels {
-        return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+        return Err(Error::level_limit(
+            level5_limits,
+            "modular channels",
+            channels.len() as u64,
+            max_channels as u64,
+        ));
     }
 
     let mut buffer_info = vec![];
@@ -304,10 +321,15 @@ pub fn meta_apply_transforms(
             &mut add_transform_buffer,
             &mut cumulative_palette_samples,
             max_palette_samples,
-            max_channels,
+            level5_limits,
         )?;
         if channels.len() > max_channels {
-            return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+            return Err(Error::level_limit(
+                level5_limits,
+                "modular channels",
+                channels.len() as u64,
+                max_channels as u64,
+            ));
         }
     }
 

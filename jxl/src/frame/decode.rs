@@ -423,6 +423,7 @@ impl Frame {
                     br,
                     size_limit,
                     self.decoder_state.level5_limits,
+                    "global modular tree nodes",
                     &mut self.buffer_recycler.modular_scratch.get().lz77_window,
                 )?)
             } else {

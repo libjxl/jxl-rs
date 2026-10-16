@@ -485,10 +485,11 @@ impl PatchesDictionary {
             let patch_area = id_count.saturating_mul(ref_pos_xsize.saturating_mul(ref_pos_ysize));
             total_patch_area = total_patch_area.saturating_add(patch_area);
             if total_patch_area > max_patch_area {
-                return Err(Error::PatchesTooMany(
-                    "patch area".to_string(),
-                    total_patch_area,
-                    max_patch_area,
+                return Err(Error::level_limit(
+                    level5_limits,
+                    "patch area",
+                    total_patch_area as u64,
+                    max_patch_area as u64,
                 ));
             }
 

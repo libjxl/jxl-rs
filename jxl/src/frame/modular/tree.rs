@@ -36,10 +36,12 @@ pub struct Tree {
     pub num_properties: usize,
 }
 
-fn validate_tree(tree: &[TreeNode], num_properties: usize, max_depth: usize) -> Result<()> {
+fn validate_tree(tree: &[TreeNode], num_properties: usize, level5_limits: bool) -> Result<()> {
     if tree.is_empty() {
         return Ok(());
     }
+
+    let max_depth = if level5_limits { 64 } else { 2048 };
 
     // This mirrors libjxl's ValidateTree(), but avoids allocating
     // `num_properties * tree.len()` entries.
@@ -73,7 +75,12 @@ fn validate_tree(tree: &[TreeNode], num_properties: usize, max_depth: usize) -> 
 
     while let Some(mut frame) = stack.pop() {
         if frame.depth > max_depth {
-            return Err(Error::TreeTooTall(frame.depth, max_depth));
+            return Err(Error::level_limit(
+                level5_limits,
+                "modular tree depth",
+                frame.depth as u64,
+                max_depth as u64,
+            ));
         }
 
         match (frame.stage, tree[frame.node]) {
@@ -300,6 +307,7 @@ impl Tree {
         br: &mut BitReader,
         size_limit: usize,
         level5_limits: bool,
+        limit_name: &'static str,
         lz77_scratch: &mut Vec<u32>,
     ) -> Result<Tree> {
         assert!(size_limit <= u32::MAX as usize);
@@ -313,7 +321,12 @@ impl Tree {
         let mut max_property = 0;
         while to_decode > 0 {
             if tree.len() > size_limit {
-                return Err(Error::TreeTooLarge(tree.len(), size_limit));
+                return Err(Error::level_limit(
+                    level5_limits,
+                    limit_name,
+                    tree.len() as u64,
+                    size_limit as u64,
+                ));
             }
             if tree.len() >= tree.capacity() {
                 tree.try_reserve(tree.len() * 2 + 1)?;
@@ -371,8 +384,7 @@ impl Tree {
         tree_reader.check_final_state(&tree_histograms, br)?;
 
         let num_properties = max_property as usize + 1;
-        let max_depth = if level5_limits { 64 } else { 2048 };
-        validate_tree(&tree, num_properties, max_depth)?;
+        validate_tree(&tree, num_properties, level5_limits)?;
 
         let histograms = Histograms::decode(tree.len().div_ceil(2), br, true, lz77_scratch)?;
 

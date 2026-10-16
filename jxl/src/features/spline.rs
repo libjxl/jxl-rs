@@ -250,6 +250,7 @@ impl QuantizedSpline {
         y_to_x: f32,
         y_to_b: f32,
         area_limit: u64,
+        level5_limits: bool,
     ) -> Result<Spline> {
         let mut result = Spline {
             control_points: Vec::new_with_capacity(self.control_points.len() + 1)?,
@@ -279,7 +280,9 @@ impl QuantizedSpline {
                 current_delta_x.unsigned_abs() as u64 + current_delta_y.unsigned_abs() as u64;
 
             if manhattan_distance > area_limit {
-                return Err(Error::SplinesDistanceTooLarge(
+                return Err(Error::level_limit(
+                    level5_limits,
+                    "spline manhattan distance",
                     manhattan_distance,
                     area_limit,
                 ));
@@ -762,10 +765,13 @@ impl Splines {
                 color_correlation_params.y_to_x(0),
                 color_correlation_params.y_to_b(0),
                 area_limit,
+                level5_limits,
             )?;
             total_estimated_area_reached += spline.estimated_area_reached;
             if total_estimated_area_reached > area_limit {
-                return Err(Error::SplinesAreaTooLarge(
+                return Err(Error::level_limit(
+                    level5_limits,
+                    "spline area",
                     total_estimated_area_reached,
                     area_limit,
                 ));
@@ -1507,6 +1513,7 @@ mod test_splines {
                 0.0,
                 1.0,
                 area_limit(2u64 << 30, false),
+                false,
             )?;
             assert_eq!(
                 got_dequantized.control_points.len(),
@@ -1956,7 +1963,7 @@ mod test_splines {
                 true,
             )
             .unwrap_err();
-        assert!(matches!(err, Error::SplinesAreaTooLarge(..)));
+        assert!(matches!(err, Error::LevelLimitExceeded { .. }));
 
         splines.initialize_draw_cache(
             1 << 15,

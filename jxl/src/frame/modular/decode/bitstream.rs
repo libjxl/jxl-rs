@@ -259,6 +259,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
             br,
             size_limit,
             level5_limits,
+            "local modular tree nodes",
             &mut scratch_space.lz77_window,
         )?)
     } else {

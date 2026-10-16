@@ -97,12 +97,22 @@ pub fn meta_apply_local_transforms<'a, 'b>(
         .collect();
 
     if level5_limits && header.transforms.len() > 8 {
-        return Err(Error::TooManyModularTransforms(header.transforms.len(), 8));
+        return Err(Error::level_limit(
+            level5_limits,
+            "modular transforms",
+            header.transforms.len() as u64,
+            8,
+        ));
     }
 
     let max_channels = max_channels(level5_limits);
     if channels.len() > max_channels {
-        return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+        return Err(Error::level_limit(
+            level5_limits,
+            "modular channels",
+            channels.len() as u64,
+            max_channels as u64,
+        ));
     }
 
     debug!(?channels, "initial channels");
@@ -129,10 +139,15 @@ pub fn meta_apply_local_transforms<'a, 'b>(
             &mut cumulative_palette_samples,
             // Reasonable upper bound.
             1 << 26,
-            max_channels,
+            level5_limits,
         )?;
         if channels.len() > max_channels {
-            return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+            return Err(Error::level_limit(
+                level5_limits,
+                "modular channels",
+                channels.len() as u64,
+                max_channels as u64,
+            ));
         }
     }
 
