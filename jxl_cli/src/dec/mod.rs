@@ -37,6 +37,9 @@ pub struct DecodeOutput {
     pub output_profile: JxlColorProfile,
     pub embedded_profile: JxlColorProfile,
     pub jxl_animation: Option<JxlAnimation>,
+    /// A partial file ended before its first frame rendered anything, so that
+    /// frame was saved blank.
+    pub nothing_rendered: bool,
 }
 
 struct RayonParallelRunner;
@@ -256,6 +259,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         output_profile,
         embedded_profile,
         jxl_animation: info.animation.clone(),
+        nothing_rendered: false,
     };
 
     let extra_channels = info.extra_channels.len() - if interleave_alpha { 1 } else { 0 };
@@ -346,11 +350,8 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     if let Some(ref mut output_bufs) = output_bufs {
                         let changed =
                             decoder.flush_pixels(output_bufs, Some(&mut RayonParallelRunner))?;
-                        // Saving the first frame now would write an image with nothing in it.
                         if image_data.frames.is_empty() && !changed && partial_renders.is_empty() {
-                            return Err(eyre!(
-                                "Source file truncated before anything was rendered"
-                            ));
+                            image_data.nothing_rendered = true;
                         }
                         image_data.frames.push(ImageFrame {
                             partial_renders,
