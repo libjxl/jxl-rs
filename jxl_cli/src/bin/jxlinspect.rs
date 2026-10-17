@@ -170,22 +170,27 @@ struct FrameToc {
     entries: Vec<TocEntry>,
 }
 
-/// File offset one past the last byte of `[start, start + size)`, in codestream
-/// bytes. The end position itself may lie in a box that doesn't exist (or
-/// before a box header), so map the last byte instead.
-fn file_end(decoder: &JxlDecoder, start: u64, size: u64) -> Result<u64> {
-    let last = (start + size)
-        .checked_sub(1)
-        .ok_or_else(|| eyre!("empty range at the codestream start"))?;
-    decoder
-        .codestream_offset_to_file_offset(last)
-        .map(|o| o + 1)
-        .ok_or_else(|| eyre!("codestream offset {last} is not in any parsed box"))
+/// File range `[start, end)` of `size` codestream bytes at `pos`, or `None` if
+/// the mapper has no exact answer. The exclusive end may lie in a box that
+/// doesn't exist (or before a box header), so it is derived from the last byte;
+/// likewise the start of an empty range from the byte before it.
+fn file_range(decoder: &JxlDecoder, pos: u64, size: u64) -> Option<(u64, u64)> {
+    let map = |p| decoder.codestream_offset_to_file_offset(p);
+    if size > 0 {
+        Some((map(pos)?, map(pos + size - 1)? + 1))
+    } else {
+        let start = map(pos).or_else(|| Some(map(pos.checked_sub(1)?)? + 1))?;
+        Some((start, start))
+    }
 }
 
-/// Prints, per frame, the file offsets of the section data and of each TOC
-/// entry, plus where the LF and each HF pass are complete: the byte count
-/// after which a progressive reader has that much detail.
+/// Prints, per frame, the offsets of the section data and of each TOC entry,
+/// plus where the LF and each HF pass are complete: the byte count after which
+/// a progressive reader has that much detail.
+///
+/// Offsets are file offsets, except that for out-of-order `jxlp` boxes (where
+/// the decoder cannot map codestream positions to the file) codestream offsets
+/// are printed instead, after saying so.
 fn print_toc(path: &Path) -> Result<()> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
@@ -211,15 +216,27 @@ fn print_toc(path: &Path) -> Result<()> {
         }
     }
 
+    let file_offsets = frames.iter().all(|f| {
+        file_range(&decoder, f.data_start, 0).is_some()
+            && f.entries
+                .iter()
+                .all(|e| file_range(&decoder, f.data_start + e.offset, e.size as u64).is_some())
+    });
+    if !file_offsets {
+        println!("file offsets unavailable (out-of-order jxlp boxes); showing codestream offsets");
+    }
+    let range = |pos: u64, size: u64| {
+        if file_offsets {
+            file_range(&decoder, pos, size).unwrap()
+        } else {
+            (pos, pos + size)
+        }
+    };
+
     for (idx, frame) in frames.iter().enumerate() {
-        let to_file = |pos: u64| {
-            decoder
-                .codestream_offset_to_file_offset(pos)
-                .ok_or_else(|| eyre!("codestream offset {pos} is not in any parsed box"))
-        };
         println!(
             "Frame {idx}: section data starts at byte {}",
-            to_file(frame.data_start)?
+            range(frame.data_start, 0).0
         );
 
         let mut lf_global_end = None;
@@ -228,8 +245,7 @@ fn print_toc(path: &Path) -> Result<()> {
         let mut pass_ends: Vec<Option<u64>> = Vec::new();
         let max = |cur: &mut Option<u64>, end: u64| *cur = Some(cur.map_or(end, |c| c.max(end)));
         for e in &frame.entries {
-            let start = frame.data_start + e.offset;
-            let end = file_end(&decoder, start, e.size as u64)?;
+            let (start, end) = range(frame.data_start + e.offset, e.size as u64);
             let kind = match e.kind {
                 TocGroupKind::All => "All".to_string(),
                 TocGroupKind::LfGlobal => "LfGlobal".to_string(),
@@ -240,11 +256,7 @@ fn print_toc(path: &Path) -> Result<()> {
                     group_idx,
                 } => format!("Pass {pass_idx} group {group_idx}"),
             };
-            println!(
-                "  {kind}: bytes {} to {end} ({} B)",
-                end - e.size as u64,
-                e.size
-            );
+            println!("  {kind}: bytes {start} to {end} ({} B)", e.size);
             match e.kind {
                 TocGroupKind::All | TocGroupKind::LfGlobal => max(&mut lf_global_end, end),
                 TocGroupKind::LfGroup(_) => max(&mut lf_end, end),

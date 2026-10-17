@@ -118,7 +118,7 @@ fn assert_toc_invariants(d: &JxlDecoder) {
     assert!(!entries.is_empty(), "a frame always has >= 1 TOC entry");
     assert!(d.toc_entry(entries.len()).is_none(), "out-of-range entry");
 
-    // Offsets are relative to frame_data_offset, start at 0, and are the running
+    // Offsets are relative to frame_data_codestream_offset, start at 0, and are the running
     // sum of preceding section sizes (contiguous layout).
     let mut acc = 0u64;
     for (i, e) in entries.iter().enumerate() {
@@ -186,6 +186,55 @@ fn toc_invariants_multigroup() {
     // rather than the single "All" entry.
     let file = std::fs::read("resources/test/multiple_lf_420.jxl").unwrap();
     assert_toc_invariants(&decode_to_frame_header(&file));
+}
+
+/// Expected kind of the section with spec-order index `spec_idx`, from the JPEG XL
+/// section layout (`LfGlobal`, LF groups, `HfGlobal`, then pass-major group passes).
+fn spec_kind(spec_idx: usize, n: usize, num_lf: usize, num_groups: usize) -> TocGroupKind {
+    if n == 1 {
+        TocGroupKind::All
+    } else if spec_idx == 0 {
+        TocGroupKind::LfGlobal
+    } else if spec_idx <= num_lf {
+        TocGroupKind::LfGroup(spec_idx as u32 - 1)
+    } else if spec_idx == num_lf + 1 {
+        TocGroupKind::HfGlobal
+    } else {
+        let j = spec_idx - (num_lf + 2);
+        TocGroupKind::GroupPass {
+            pass_idx: (j / num_groups) as u32,
+            group_idx: (j % num_groups) as u32,
+        }
+    }
+}
+
+#[test]
+fn toc_kinds_follow_the_permutation() {
+    // The permutation maps spec index -> bitstream position, so the section at
+    // physical position `permutation[s]` must have the kind of spec index `s`.
+    let mut saw_permuted = false;
+    for name in ALL_FILES {
+        let file = std::fs::read(name).unwrap();
+        let d = decode_to_frame_header(&file);
+        let toc = d.toc().unwrap();
+        let header = d.raw_frame_header().unwrap();
+        let n = toc.entries.len();
+        let (num_lf, num_groups) = (header.num_lf_groups(), header.num_groups());
+        saw_permuted |= toc.permuted;
+        for spec_idx in 0..n {
+            let pos = if toc.permuted {
+                toc.permutation[spec_idx] as usize
+            } else {
+                spec_idx
+            };
+            assert_eq!(
+                d.toc_entry(pos).unwrap().kind,
+                spec_kind(spec_idx, n, num_lf, num_groups),
+                "{name}: spec index {spec_idx} at physical position {pos}"
+            );
+        }
+    }
+    assert!(saw_permuted, "no fixture has a permuted TOC");
 }
 
 #[test]
@@ -583,13 +632,83 @@ fn codestream_offset_mapping_matches_jxlp_layout() {
     // byte of the frame data maps to the same byte in the container.
     let (bare, start, entries) = bare_sections("resources/test/green_queen_vardct_e3.jxl");
     let container = rebox_inside_frame_data(&bare, start, &entries);
-    let d = decode_to_frame_header(&container);
-    let end = start + d.frame_data_size();
+    let mut fed = Fed::new(&container, container.len(), JxlDecoderOptions::default());
+    fed.run_to_frame_header();
+    let end = start + fed.decoder.frame_data_size();
+    // The mapper is not tied to the frame window; once the whole file has been
+    // parsed every codestream byte must map.
+    fed.run_to(|e| matches!(e, Event::Complete));
+    let d = &fed.decoder;
     for pos in start..end {
-        if let Some(file_offset) = d.codestream_offset_to_file_offset(pos) {
-            assert_eq!(container[file_offset as usize], bare[pos as usize], "{pos}");
-        }
+        let file_offset = d
+            .codestream_offset_to_file_offset(pos)
+            .unwrap_or_else(|| panic!("codestream position {pos} is not mapped"));
+        assert_eq!(container[file_offset as usize], bare[pos as usize], "{pos}");
     }
     // Past the end of the codestream there is no box.
     assert_eq!(d.codestream_offset_to_file_offset(bare.len() as u64), None);
+}
+
+/// The logical codestream of a container: the payloads of all `jxlp`/`jxlc`
+/// boxes in `jxlp` index order (not file order).
+fn logical_codestream(container: &[u8]) -> Vec<u8> {
+    let mut parts = Vec::new();
+    let mut pos = 12; // signature box
+    while pos + 8 <= container.len() {
+        let len = u32::from_be_bytes(container[pos..pos + 4].try_into().unwrap()) as usize;
+        let ty = &container[pos + 4..pos + 8];
+        let end = if len == 0 { container.len() } else { pos + len };
+        let payload = &container[pos + 8..end];
+        match ty {
+            b"jxlp" => {
+                let idx = u32::from_be_bytes(payload[..4].try_into().unwrap()) & 0x7fff_ffff;
+                parts.push((idx, &payload[4..]));
+            }
+            b"jxlc" => parts.push((0, payload)),
+            _ => {}
+        }
+        pos = end;
+    }
+    parts.sort_by_key(|&(idx, _)| idx);
+    parts
+        .into_iter()
+        .flat_map(|(_, p)| p.iter().copied())
+        .collect()
+}
+
+#[test]
+fn out_of_order_jxlp_never_maps_to_a_wrong_offset() {
+    // Out-of-order jxlp boxes break the codestream <-> file correspondence the
+    // mapper relies on; it must return None there rather than a wrong offset.
+    let container = std::fs::read("resources/test/ooo_jxlp_empty_dc_group_boxes.jxl").unwrap();
+    let logical = logical_codestream(&container);
+    for chunk in [container.len(), 1, 7, 64, 1000] {
+        let mut fed = Fed::new(&container, chunk, JxlDecoderOptions::default());
+        fed.run_to_frame_header();
+        let start = fed.decoder.frame_data_codestream_offset() as usize;
+        let n = fed.decoder.toc_num_entries();
+        assert!(n > 1);
+        loop {
+            for i in 0..n {
+                let e = fed.decoder.toc_entry(i).unwrap();
+                let Some(fo) = fed.decoder.toc_entry_file_offset(i) else {
+                    continue;
+                };
+                let fo = fo as usize;
+                let cs = start + e.offset as usize;
+                let len = (e.size as usize).min(4);
+                assert_eq!(
+                    container[fo..fo + len],
+                    logical[cs..cs + len],
+                    "chunk={chunk}: entry {i} ({:?}) mapped to a wrong offset",
+                    e.kind
+                );
+            }
+            match fed.step() {
+                Event::FrameComplete { .. } => break,
+                Event::NeedMoreInput { .. } => {}
+                e => panic!("unexpected event {e:?}"),
+            }
+        }
+    }
 }
