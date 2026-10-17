@@ -33,6 +33,7 @@ safety comments and to be reviewed by a non-author Unsafe Rust expert.
 ## Workspace Crates
 
 - [`jxl`](jxl/): Core JPEG XL decoder library.
+- [`jxl-gainmap`](jxl-gainmap/): Parser helpers for HDR gain map boxes.
 - [`jxl-image-rs-integration`](jxl-image-rs-integration/): Integration for the `image` crate.
 - [`jxl_cli`](jxl_cli/): CLI decoding and benchmarking tool.
 - [`jxl_cms`](jxl_cms/), [`jxl_simd`](jxl_simd/), [`jxl_transforms`](jxl_transforms/), [`jxl_macros`](jxl_macros/): Internal crates for color management, SIMD acceleration, transforms, and macros.
@@ -76,6 +77,11 @@ let decoded = image::open("input.jxl")?;
 
 Registration enables both `.jxl` extension handling and automatic detection
 of bare codestreams and JPEG XL containers.
+
+### HDR gain map boxes
+
+Use [`jxl-gainmap`](jxl-gainmap/) and its `JxlGainMap` type to parse a captured
+`jhgm` payload. See the crate README for usage.
 
 ## Testing
 
