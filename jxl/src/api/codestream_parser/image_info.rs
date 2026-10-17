@@ -56,11 +56,11 @@ impl ImageInfo {
         self.embedded_color_profile.as_ref().unwrap()
     }
 
-    fn is_gray(&self) -> bool {
+    pub(crate) fn is_gray(&self) -> bool {
         self.file_header().image_metadata.color_encoding.color_space == ColorSpace::Gray
     }
 
-    fn xyb_encoded(&self) -> bool {
+    pub(crate) fn xyb_encoded(&self) -> bool {
         self.file_header().image_metadata.xyb_encoded
     }
 
@@ -109,6 +109,20 @@ impl ImageInfo {
                 .map(|info| JxlExtraChannel {
                     ec_type: info.ec_type,
                     alpha_associated: info.alpha_associated(),
+                    bit_depth: if info.bit_depth().floating_point_sample() {
+                        JxlBitDepth::Float {
+                            bits_per_sample: info.bit_depth().bits_per_sample(),
+                            exponent_bits_per_sample: info.bit_depth().exponent_bits_per_sample(),
+                        }
+                    } else {
+                        JxlBitDepth::Int {
+                            bits_per_sample: info.bit_depth().bits_per_sample(),
+                        }
+                    },
+                    dim_shift: info.dim_shift(),
+                    name: info.name.clone(),
+                    spot_color: info.spot_color,
+                    cfa_channel: info.cfa_channel,
                 })
                 .collect(),
             animation: data
@@ -233,6 +247,8 @@ impl CodestreamParser {
         } else {
             embedded_color_profile.clone()
         };
-        self.output_color_profile = Some(output_color_profile);
+        if !self.output_color_profile_set_by_user {
+            self.output_color_profile = Some(output_color_profile);
+        }
     }
 }

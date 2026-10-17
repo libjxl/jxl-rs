@@ -103,6 +103,8 @@ pub(super) struct CodestreamParser {
 
     /// Total length of the file.
     pub file_length: Option<u64>,
+    /// Codestream byte offset at the most recent event boundary.
+    pub parsed_codestream_bytes: u64,
 
     // Temporary buffer
     local_buffer: SmallBuffer,
@@ -110,6 +112,7 @@ pub(super) struct CodestreamParser {
 
     // Output information
     pub output_color_profile: Option<JxlColorProfile>,
+    pub output_color_profile_set_by_user: bool,
     pub pixel_format: Option<JxlPixelFormat>,
 
     /// While seeking: the number of visible frames still to skip before the target.
@@ -140,6 +143,7 @@ impl CodestreamParser {
             image_info: ImageInfo::new(),
             state: ParserState::FileHeader,
             output_color_profile: None,
+            output_color_profile_set_by_user: false,
             pixel_format: None,
             local_buffer: SmallBuffer::new(4096),
             header_needed_bytes: None,
@@ -151,6 +155,7 @@ impl CodestreamParser {
             frames_decoded: 0,
             frame_scan_info: FrameScanInfo::new(),
             file_length: None,
+            parsed_codestream_bytes: 0,
         }
     }
 
@@ -160,9 +165,11 @@ impl CodestreamParser {
         self.frame_info.reset((0, 0), [false; 8]);
         self.frame_scan_info = FrameScanInfo::new();
         self.file_length = None;
+        self.parsed_codestream_bytes = 0;
         self.local_buffer.reset();
         self.header_needed_bytes = None;
         self.output_color_profile = None;
+        self.output_color_profile_set_by_user = false;
         self.pixel_format = None;
         self.visible_frames_to_skip = None;
         self.next_frame_index = 0;
@@ -171,6 +178,10 @@ impl CodestreamParser {
         {
             self.frames_decoded = 0;
         }
+    }
+
+    pub(super) fn is_done(&self) -> bool {
+        self.state == ParserState::Done
     }
 
     pub(super) fn start_new_frame(
@@ -202,6 +213,7 @@ impl CodestreamParser {
         self.local_buffer.reset();
         self.local_buffer
             .mark_consumed(start.box_parser_checkpoint.consumed_codestream);
+        self.parsed_codestream_bytes = start.box_parser_checkpoint.consumed_codestream;
         self.visible_frames_to_skip = (start.frame_index < seek_target.target.frame_index)
             .then_some(seek_target.target.frame_counters.0 - start.frame_counters.0);
         self.next_frame_index = start.frame_index;
@@ -308,6 +320,7 @@ impl CodestreamParser {
                             .with_br(|br, bits| c.image_info.parse_color_encoding(br, bits))
                     })?;
                     self.update_default_output_options();
+                    self.parsed_codestream_bytes = self.local_buffer.consumed();
                     self.state = ParserState::FrameHeader {
                         is_preview: self.image_info.has_preview(),
                     };
@@ -342,6 +355,7 @@ impl CodestreamParser {
                         c.local_buffer
                             .with_br(|br, bits| c.frame_info.parse_toc(br, bits))
                     })?;
+                    self.parsed_codestream_bytes = self.local_buffer.consumed();
 
                     // Decide how much to decode this frame.
                     let mut process_mode = ProcessMode::Process;
@@ -399,8 +413,6 @@ impl CodestreamParser {
                         toc,
                         self.image_info.file_header(),
                         decode_options,
-                        self.pixel_format.as_ref().unwrap(),
-                        self.output_color_profile.as_ref().unwrap(),
                         process_mode,
                         level5_limits,
                     )?;
@@ -464,12 +476,11 @@ impl CodestreamParser {
                         self.state = ParserState::FrameHeader { is_preview: false };
                     } else {
                         self.state = ParserState::TrailingData;
-                        self.file_length = Some(
-                            input
-                                .box_parser()
-                                .total_bytes_consumed(self.local_buffer.consumed()),
-                        );
+                        self.file_length = input
+                            .box_parser()
+                            .total_bytes_consumed(self.local_buffer.consumed());
                     }
+                    self.parsed_codestream_bytes = self.local_buffer.consumed();
 
                     if process_mode.notify_user() {
                         return Ok(Event::FrameComplete {
@@ -496,5 +507,9 @@ impl CodestreamParser {
             self.state,
             ParserState::Sections { process_mode, .. } if process_mode.notify_user()
         )
+    }
+
+    pub(super) fn has_render_pipeline(&self) -> bool {
+        matches!(self.state, ParserState::Sections { .. }) && self.frame_info.has_render_pipeline()
     }
 }
