@@ -16,6 +16,7 @@ debug = true
 members = [
   "jxl",
   "jxl-image-rs-integration",
+  "jxl-libjxl-emulation",
   "jxl_cli",
   "jxl_cms",
   "jxl_macros",
