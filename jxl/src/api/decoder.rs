@@ -238,8 +238,15 @@ impl JxlDecoder {
     /// Entries are in **bitstream (physical) order**, the order in which the
     /// sections are stored. For a permuted TOC this differs from the spec
     /// order, and `kind` is resolved through the permutation, so it always
-    /// describes the section actually stored at that position. The section
-    /// offsets are relative to [`frame_data_offset`](Self::frame_data_offset).
+    /// describes the section actually stored at that position.
+    ///
+    /// `offset` is in *codestream* bytes (container box headers are not
+    /// counted), relative to
+    /// [`frame_data_codestream_offset`](Self::frame_data_codestream_offset). To
+    /// locate a section in the file use
+    /// [`toc_entry_file_offset`](Self::toc_entry_file_offset): when the
+    /// codestream is split over several `jxlp` boxes, a box header can sit
+    /// inside the frame data.
     pub fn toc_entry(&self, index: usize) -> Option<TocEntry> {
         if !self.codestream_parser.has_visible_frame() {
             return None;
@@ -249,8 +256,9 @@ impl JxlDecoder {
 
     /// Total size in bytes of the current frame's section data, i.e. the sum of
     /// all TOC entry sizes. Entries are in bitstream order, so this is also the
-    /// distance from the first to the end of the last section. 0 outside the
-    /// window described at [`toc_num_entries`](Self::toc_num_entries).
+    /// distance in codestream bytes from the first section's start to the end of
+    /// the last. 0 outside the window described at
+    /// [`toc_num_entries`](Self::toc_num_entries).
     pub fn frame_data_size(&self) -> u64 {
         if !self.codestream_parser.has_visible_frame() {
             return 0;
@@ -261,20 +269,71 @@ impl JxlDecoder {
             .unwrap_or(0)
     }
 
-    /// File-absolute byte offset (including any container overhead) at which
-    /// the first section of the current frame, in bitstream order, begins:
-    /// immediately after the frame header and TOC. 0 outside the window
-    /// described at [`toc_num_entries`](Self::toc_num_entries).
+    /// Codestream position (container box headers not counted) at which the
+    /// first section of the current frame, in bitstream order, begins:
+    /// immediately after the frame header and TOC. [`TocEntry::offset`] values
+    /// are relative to this. 0 outside the window described at
+    /// [`toc_num_entries`](Self::toc_num_entries).
+    pub fn frame_data_codestream_offset(&self) -> u64 {
+        if !self.codestream_parser.has_visible_frame() {
+            return 0;
+        }
+        self.codestream_parser
+            .frame_info
+            .frame_data_codestream_pos()
+            .unwrap_or(0)
+    }
+
+    /// File-absolute byte offset (including container overhead) at which the
+    /// first section of the current frame, in bitstream order, begins.
     ///
-    /// [`toc_entry`](Self::toc_entry) offsets are relative to this.
+    /// This is
+    /// [`codestream_offset_to_file_offset`](Self::codestream_offset_to_file_offset)
+    /// of [`frame_data_codestream_offset`](Self::frame_data_codestream_offset).
+    /// Adding `toc_entry(i).offset` to it is only correct if no `jxlp` box
+    /// header lies in between; use
+    /// [`toc_entry_file_offset`](Self::toc_entry_file_offset) instead. 0 outside
+    /// the window described at [`toc_num_entries`](Self::toc_num_entries), or
+    /// while the containing box has not been parsed yet.
     pub fn frame_data_offset(&self) -> u64 {
         if !self.codestream_parser.has_visible_frame() {
             return 0;
         }
         self.codestream_parser
             .frame_info
-            .frame_data_offset()
+            .frame_data_codestream_pos()
+            .and_then(|pos| self.codestream_offset_to_file_offset(pos))
             .unwrap_or(0)
+    }
+
+    /// File-absolute byte offset of the first byte of TOC entry `index` (in
+    /// bitstream order) of the current frame.
+    ///
+    /// Returns `None` outside the window described at
+    /// [`toc_num_entries`](Self::toc_num_entries), if `index` is out of bounds,
+    /// or if the container box holding that byte has not been parsed yet.
+    /// Retry after providing more input in the latter case.
+    pub fn toc_entry_file_offset(&self, index: usize) -> Option<u64> {
+        let entry = self.toc_entry(index)?;
+        self.codestream_offset_to_file_offset(self.frame_data_codestream_offset() + entry.offset)
+    }
+
+    /// Maps a position in codestream bytes (i.e. with container box headers
+    /// removed; for a bare codestream the same as the file position) to the
+    /// corresponding file offset.
+    ///
+    /// Returns `None` if the box containing that position has not been parsed
+    /// yet, which can happen mid-stream when the codestream is split over
+    /// several `jxlp` boxes, and always after
+    /// [`start_new_frame`](Self::start_new_frame) until [`reset`](Self::reset),
+    /// since the box map is not rebuilt then. The result for a position is stable
+    /// once it is `Some`.
+    ///
+    /// To get the file offset one past the last byte of a range, map the range's
+    /// last byte and add 1: a range ending at a box boundary has no mapping for
+    /// its (exclusive) end position.
+    pub fn codestream_offset_to_file_offset(&self, codestream_offset: u64) -> Option<u64> {
+        self.box_parser.file_position_at(codestream_offset)
     }
 
     /// Returns visible frame info entries collected during parsing.

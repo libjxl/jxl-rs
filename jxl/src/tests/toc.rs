@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 
 use crate::api::{Event, JxlDecoder, JxlDecoderOptions, TocEntry, TocGroupKind};
+use crate::tests::api::wrap_with_jxlp_chunks;
 
 /// Single-frame files with no container, for which
 /// `frame_data_offset + frame_data_size` must be exactly the file length.
@@ -461,4 +462,134 @@ fn toc_api_reports_nothing_for_skipped_frames() {
         }
     }
     assert!(seen > 1, "expected several scanned frames");
+}
+
+/// Bare codestream plus its TOC as seen at `FrameHeader`: for a bare file the
+/// codestream and file positions coincide.
+fn bare_sections(name: &str) -> (Vec<u8>, u64, Vec<TocEntry>) {
+    let bare = std::fs::read(name).unwrap();
+    let d = decode_to_frame_header(&bare);
+    let start = d.frame_data_codestream_offset();
+    assert_eq!(start, d.frame_data_offset());
+    let entries = collect_toc(&d);
+    (bare, start, entries)
+}
+
+/// Re-boxes `bare` into `jxlp` boxes with boundaries inside the frame data:
+/// at the start of every odd-numbered section and in the middle of every
+/// even-numbered one that is big enough.
+fn rebox_inside_frame_data(bare: &[u8], start: u64, entries: &[TocEntry]) -> Vec<u8> {
+    let mut boundaries = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        let pos = (start + e.offset) as usize;
+        if i % 2 == 1 {
+            boundaries.push(pos);
+        } else if e.size >= 16 {
+            boundaries.push(pos + e.size as usize / 2);
+        }
+    }
+    wrap_with_jxlp_chunks(bare, &boundaries)
+}
+
+/// Checks that every currently mappable entry of `d` points at the bytes of
+/// the corresponding bare section. Returns how many entries could be mapped.
+fn check_mapped_entries(
+    d: &JxlDecoder,
+    container: &[u8],
+    bare: &[u8],
+    start: u64,
+    entries: &[TocEntry],
+) -> usize {
+    assert_eq!(collect_toc(d), entries, "TOC differs from the bare file's");
+    assert_eq!(d.frame_data_codestream_offset(), start);
+    let mut mapped = 0;
+    for (i, e) in entries.iter().enumerate() {
+        let Some(file_offset) = d.toc_entry_file_offset(i) else {
+            continue;
+        };
+        mapped += 1;
+        let file_offset = file_offset as usize;
+        let bare_start = (start + e.offset) as usize;
+        // A box boundary may fall inside the section; compare only the bytes up
+        // to it, which is what shows the offset is right for the section start.
+        let n = (e.size as usize).min(4);
+        assert_eq!(
+            &container[file_offset..file_offset + n],
+            &bare[bare_start..bare_start + n],
+            "entry {i} ({:?}) maps to the wrong file offset {file_offset}",
+            e.kind
+        );
+    }
+    mapped
+}
+
+#[test]
+fn toc_entry_file_offsets_across_jxlp_boundaries() {
+    for name in [
+        "resources/test/green_queen_vardct_e3.jxl",
+        "resources/test/has_permutation.jxl",
+    ] {
+        let (bare, start, entries) = bare_sections(name);
+        let container = rebox_inside_frame_data(&bare, start, &entries);
+
+        // All input at once.
+        let d = decode_to_frame_header(&container);
+        let mapped = check_mapped_entries(&d, &container, &bare, start, &entries);
+        assert!(mapped > 0, "{name}: nothing mapped");
+
+        // The naive file-absolute formula is wrong for at least one entry; if
+        // it were right everywhere, this test would not exercise the fix.
+        let naive_wrong = (0..entries.len()).any(|i| {
+            d.toc_entry_file_offset(i)
+                .is_some_and(|o| o != d.frame_data_offset() + entries[i].offset)
+        });
+        assert!(naive_wrong, "{name}: no box header inside the frame data");
+
+        // Fed in small chunks: entries whose box has not been parsed yet map to
+        // `None`, never to a wrong offset, and all map once the frame is in.
+        for chunk in [1usize, 5, 64, 1000] {
+            let mut fed = Fed::new(&container, chunk, JxlDecoderOptions::default());
+            fed.run_to_frame_header();
+            let mut saw_unmapped = false;
+            let mut seen_offsets = vec![None; entries.len()];
+            loop {
+                let mapped = check_mapped_entries(&fed.decoder, &container, &bare, start, &entries);
+                saw_unmapped |= mapped < entries.len();
+                // Once an entry maps, its offset must not change or vanish.
+                for (i, seen) in seen_offsets.iter_mut().enumerate() {
+                    let now = fed.decoder.toc_entry_file_offset(i);
+                    assert!(
+                        seen.is_none() || *seen == now,
+                        "{name}: chunk={chunk}: entry {i} mapping changed"
+                    );
+                    *seen = now;
+                }
+                match fed.step() {
+                    Event::FrameComplete { .. } => break,
+                    Event::NeedMoreInput { .. } => {}
+                    e => panic!("unexpected event {e:?}"),
+                }
+            }
+            if chunk == 1 {
+                assert!(saw_unmapped, "{name}: chunk=1 never saw an unparsed box");
+            }
+        }
+    }
+}
+
+#[test]
+fn codestream_offset_mapping_matches_jxlp_layout() {
+    // Directly check the mapper against the container layout: every codestream
+    // byte of the frame data maps to the same byte in the container.
+    let (bare, start, entries) = bare_sections("resources/test/green_queen_vardct_e3.jxl");
+    let container = rebox_inside_frame_data(&bare, start, &entries);
+    let d = decode_to_frame_header(&container);
+    let end = start + d.frame_data_size();
+    for pos in start..end {
+        if let Some(file_offset) = d.codestream_offset_to_file_offset(pos) {
+            assert_eq!(container[file_offset as usize], bare[pos as usize], "{pos}");
+        }
+    }
+    // Past the end of the codestream there is no box.
+    assert_eq!(d.codestream_offset_to_file_offset(bare.len() as u64), None);
 }

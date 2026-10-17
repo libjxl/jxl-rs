@@ -349,9 +349,15 @@ pub enum TocGroupKind {
 pub struct TocEntry {
     /// Kind of the group.
     pub kind: TocGroupKind,
-    /// Offset in bytes from the start of the frame's section data, in bitstream
-    /// order (the sum of the sizes of the preceding entries), i.e. relative to
-    /// [`JxlDecoder::frame_data_offset`](crate::api::JxlDecoder::frame_data_offset).
+    /// Offset in codestream bytes from the start of the frame's section data
+    /// (the sum of the sizes of the preceding entries in bitstream order),
+    /// relative to
+    /// [`JxlDecoder::frame_data_codestream_offset`](crate::api::JxlDecoder::frame_data_codestream_offset).
+    ///
+    /// This does not account for container box headers: if the codestream is
+    /// split over several `jxlp` boxes, a header can lie between two entries.
+    /// Use [`JxlDecoder::toc_entry_file_offset`](crate::api::JxlDecoder::toc_entry_file_offset)
+    /// to get file offsets.
     pub offset: u64,
     /// Size of the entry in bytes.
     pub size: u32,

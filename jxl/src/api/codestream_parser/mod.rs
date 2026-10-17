@@ -347,10 +347,8 @@ impl CodestreamParser {
                     // across process() calls, so this is the codestream position of
                     // the first section byte. Sample it before `make_frame` starts
                     // consuming section data.
-                    let data_offset = input
-                        .box_parser()
-                        .file_position_at(self.local_buffer.consumed());
-                    self.frame_info.set_frame_data_offset(data_offset);
+                    self.frame_info
+                        .set_frame_data_codestream_pos(self.local_buffer.consumed());
 
                     // Decide how much to decode this frame.
                     let mut process_mode = ProcessMode::Process;
