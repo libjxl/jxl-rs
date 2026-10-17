@@ -36,7 +36,7 @@ const MAX_BORDER: usize = 9;
 
 pub use builder::RenderPipelineBuilder;
 pub use channels::{
-    Channels, ChannelsMut, ChannelsView, RowBatch, StoreInterleaved, VecLoad, for_each_chunk,
+    Channels, ChannelsMut, ChannelsView, StoreInterleaved, VecLoad, for_each_chunk,
 };
 pub use low_memory_pipeline::LowMemoryRenderPipeline;
 #[cfg(test)]
@@ -110,16 +110,9 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
 /// Reduces resolution using non-overlapping, border-free input batches.
 ///
 /// `DOWNSAMPLE` is the base-2 logarithm of the horizontal and vertical reduction factors.
-/// Each call produces one output row. `position` and `xsize` are in output pixels; the
-/// input batch starts at `position * factor` and contains up to `xsize * factor_x`
-/// pixels in each of up to `factor_y` rows. Edge batches contain only valid samples:
-/// `num_rows()` reports the valid row count and each row slice gives the valid width.
-/// No padding or filter halo is provided. Used channels must have the same resolution.
+/// Each call produces one output row with `input_xsize.shrc(DOWNSAMPLE.0)` samples.
+/// `position` is in output pixels. Used input channels must have the same resolution.
 /// All `InOut` stages must precede the first downsampling stage.
-///
-/// As with in-place stages, output slices may contain scratch space beyond `xsize`.
-/// The continuity hint only guarantees a previous call over the same x range in the
-/// preceding *output* row when it is true.
 pub trait RenderPipelineDownsampleStage: Any + std::fmt::Display + Send + Sync {
     type InputT: ImageDataType;
     type OutputT: ImageDataType;
@@ -129,8 +122,8 @@ pub trait RenderPipelineDownsampleStage: Any + std::fmt::Display + Send + Sync {
     fn process_row_batch(
         &self,
         position: (usize, usize),
-        xsize: usize,
-        input_rows: &RowBatch<Self::InputT>,
+        input_xsize: usize,
+        input_rows: &Channels<Self::InputT>,
         output_rows: &mut [&mut [Self::OutputT]],
         state: Option<&mut ErasedLocalState>,
         previous_call_was_previous_row: bool,

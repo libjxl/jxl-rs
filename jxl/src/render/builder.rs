@@ -42,8 +42,9 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         assert!(chunk_size <= u16::MAX as usize);
         assert_ne!(chunk_size, 0);
         let num_channels = channel_types.len();
-        // The number of pixels that a group encompasses in the final, upsampled image along one
-        // dimension is effectively multiplied by the upsampling factor.
+        // The number of pixels that a group encompasses in the upsampled image (before applying
+        // any downsampling stages) along one dimension is effectively multiplied by the upsampling
+        // factor.
         log_group_size += downsampling_shift;
         Self {
             shared: RenderPipelineShared {
@@ -169,6 +170,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         self.add_stage_internal(Stage::InOut(Pipeline::box_inout_stage(stage)))
     }
 
+    #[expect(unused)]
     pub fn add_downsample_stage<S: RenderPipelineDownsampleStage>(self, stage: S) -> Self {
         self.add_stage_internal(Stage::Downsample(Pipeline::box_downsample_stage(stage)))
     }
@@ -226,13 +228,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             has_downsample |= matches!(stage, Stage::Downsample(_));
             let output_type = stage.output_type();
             let shift = stage.shift();
-            let downsample = stage.downsample();
-            if [shift.0, shift.1, downsample.0, downsample.1]
-                .iter()
-                .any(|&s| s as u32 >= usize::BITS - 1)
-            {
-                return Err(Error::ArithmeticOverflow);
-            }
             let border = stage.border();
             let is_extend = matches!(stage, Stage::Extend(_));
 
@@ -265,12 +260,16 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                     });
                 }
             }
-            if self.shared.extend_stage_index.is_some()
+            // Extend requires full-resolution channels, so it cannot follow a reduction.
+            if (self.shared.extend_stage_index.is_some()
                 && (shift != (0, 0)
-                    || downsample != (0, 0)
                     || border != (0, 0)
                     || is_extend
-                    || matches!(stage, Stage::Downsample(_)))
+                    || matches!(stage, Stage::Downsample(_))))
+                || (is_extend
+                    && self.shared.stages[..i]
+                        .iter()
+                        .any(|s| s.downsample() != (0, 0)))
             {
                 return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
             }
@@ -307,25 +306,10 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
         for (s, stage) in self.shared.stages.iter().enumerate() {
             let mut save_downsample = None;
-            let mut stage_downsample = None;
-            for chan in 0..num_channels {
-                let current = channel_info[s][chan].downsample;
-                if stage.uses_channel(chan) {
-                    if let Some(expected) = stage_downsample {
-                        if expected != current {
-                            return Err(Error::PipelineUnsupported(format!(
-                                "stage {stage} uses channels with different resolutions"
-                            )));
-                        }
-                    } else {
-                        stage_downsample = Some(current);
-                    }
-                    if matches!(stage, Stage::Extend(_)) && current != (0, 0) {
-                        return Err(Error::PipelineUnsupported(
-                            "extend requires full-resolution channels".into(),
-                        ));
-                    }
-                }
+            let (before, after) = channel_info.split_at_mut(s + 1);
+            for (chan, (input_info, output_info)) in before[s].iter().zip(&mut after[0]).enumerate()
+            {
+                let current = input_info.downsample;
                 if matches!(stage, Stage::Save(_)) && stage.uses_channel(chan) {
                     if let Some(expected) = save_downsample {
                         if expected != current {
@@ -335,24 +319,16 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                         save_downsample = Some(current);
                     }
                 }
-                let shift = channel_info[s + 1][chan].downsample;
+                let shift = output_info.downsample;
                 let reduction = if stage.uses_channel(chan) {
                     stage.downsample()
                 } else {
                     (0, 0)
                 };
-                let next = (
-                    (current.0 - shift.0)
-                        .checked_add(reduction.0)
-                        .ok_or(Error::ArithmeticOverflow)?,
-                    (current.1 - shift.1)
-                        .checked_add(reduction.1)
-                        .ok_or(Error::ArithmeticOverflow)?,
+                output_info.downsample = (
+                    current.0 - shift.0 + reduction.0,
+                    current.1 - shift.1 + reduction.1,
                 );
-                if next.0 as u32 >= usize::BITS - 1 || next.1 as u32 >= usize::BITS - 1 {
-                    return Err(Error::ArithmeticOverflow);
-                }
-                channel_info[s + 1][chan].downsample = next;
             }
         }
         #[cfg(feature = "tracing")]

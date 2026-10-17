@@ -143,8 +143,6 @@ pub enum Error {
     PipelineInvalidStageAfterDownsample(String),
     #[error("Render pipeline downsampling factor is too high")]
     PipelineDownsamplingFactorTooHigh,
-    #[error("Unsupported render pipeline configuration: {0}")]
-    PipelineUnsupported(String),
     #[error("Trying to copy rects of different size, src: {0}x{1} dst {2}x{3}")]
     CopyOfDifferentSize(usize, usize, usize, usize),
     #[error("LF quantization factor is too small: {0}")]

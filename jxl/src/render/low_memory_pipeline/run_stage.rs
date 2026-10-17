@@ -7,8 +7,7 @@ use super::super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use super::row_buffers::RowBuffer;
 use crate::render::internal::{PipelineBuffer, RunDownsampleStage, RunInOutStage};
 use crate::render::{
-    Channels, ChannelsMut, ErasedLocalState, RenderPipelineDownsampleStage, RowBatch,
-    RunInPlaceStage,
+    Channels, ChannelsMut, ErasedLocalState, RenderPipelineDownsampleStage, RunInPlaceStage,
 };
 use crate::util::tracing_wrappers::*;
 use crate::util::{ChannelVec, ShiftRightCeil};
@@ -81,15 +80,13 @@ impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<RowBuffer> for T {
             info.out_extra_x
         };
         let post = if info.end_of_row { 0 } else { info.out_extra_x };
-        let width = pre + info.xsize.shrc(T::DOWNSAMPLE.0) + post;
         let input_width = (pre << T::DOWNSAMPLE.0) + info.xsize + (post << T::DOWNSAMPLE.0);
-        let input = RowBatch::from_row_buffers(
+        let input_rows = Channels::from_row_buffers(
             input_buffers,
             RowBuffer::x0_offset::<T::InputT>() - (pre << T::DOWNSAMPLE.0),
             info.current_row << T::DOWNSAMPLE.1,
             info.image_height,
-            1 << T::DOWNSAMPLE.1,
-            input_width,
+            0,
         );
         let mut rows: ChannelVec<_> = output_buffers
             .iter_mut()
@@ -100,8 +97,8 @@ impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<RowBuffer> for T {
             .collect();
         self.process_row_batch(
             (info.group_x0 - pre, info.current_row),
-            width,
-            &input,
+            input_width,
+            &input_rows,
             &mut rows,
             state,
             info.previous_call_was_previous_row,

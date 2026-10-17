@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-mod downsample;
-
 use std::sync::Arc;
 
 use rand::SeedableRng;
@@ -12,7 +10,8 @@ use rand::SeedableRng;
 use super::internal::Stage;
 use super::stages::ExtendToImageDimensionsStage;
 use super::{
-    RenderPipeline, RenderPipelineBuilder, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineDownsampleStage, RenderPipelineInOutStage,
+    RenderPipelineInPlaceStage,
 };
 use crate::api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer};
 use crate::error::Result;
@@ -42,6 +41,16 @@ impl<T: RenderPipelineInOutStage> RenderPipelineTestableStage<()> for T {
     type OutputT = T::OutputT;
     fn into_stage(self) -> Stage<Image<f64>> {
         Stage::InOut(Box::new(self))
+    }
+}
+
+pub(super) struct Downsample {}
+
+impl<T: RenderPipelineDownsampleStage> RenderPipelineTestableStage<Downsample> for T {
+    type InputT = T::InputT;
+    type OutputT = T::OutputT;
+    fn into_stage(self) -> Stage<Image<f64>> {
+        Stage::Downsample(Box::new(self))
     }
 }
 
@@ -92,6 +101,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     chunk_size: usize,
 ) -> Result<Vec<Image<OutputT>>> {
     let shift = stage.shift();
+    let downsample = stage.downsample();
     let final_size = stage.new_size(image_size);
     const LOG_GROUP_SIZE: usize = 8;
     let all_channels = (0..input_images.len()).collect::<Vec<_>>();
@@ -138,7 +148,17 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     let num_groups = image_size.0.shrc(LOG_GROUP_SIZE) * image_size.1.shrc(LOG_GROUP_SIZE);
 
     let mut outputs = (0..input_images.len())
-        .map(|_| Image::<OutputT>::new(final_size))
+        .map(|c| {
+            let size = if uses_channel[c] {
+                (
+                    final_size.0.shrc(downsample.0),
+                    final_size.1.shrc(downsample.1),
+                )
+            } else {
+                final_size
+            };
+            Image::<OutputT>::new(size)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut buf_ptrs: Vec<_> = outputs
@@ -206,6 +226,7 @@ pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
 ) -> Result<()> {
     let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
     let stage = make_stage().into_stage();
+    let chunk_alignment = 1usize << stage.downsample().0;
     let images: Result<Vec<_>> = (0..num_image_channels)
         .map(|c| {
             let size = if stage.uses_channel(c) {
@@ -226,7 +247,7 @@ pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
     )?;
 
     arbtest::arbtest(move |p| {
-        let chunk_size = p.arbitrary::<u16>()?.saturating_add(1) as usize;
+        let chunk_size = p.int_in_range(1..=u16::MAX as usize / chunk_alignment)? * chunk_alignment;
         let output = make_and_run_simple_pipeline_impl::<S::InputT, S::OutputT>(
             make_stage().into_stage(),
             &images,

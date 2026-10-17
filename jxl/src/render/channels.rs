@@ -207,50 +207,6 @@ impl<'a, T> Channels<'a, T> {
     }
 }
 
-/// Border-free input rows of a downsampling batch, in channel/row/column order.
-/// Row slices have exactly the input width of the batch and can be used with scalar
-/// operations or SIMD slice loads. Unlike `Channels::view`, row indices start at zero.
-/// Rows contain only valid samples: the final batch may have fewer rows or a shorter
-/// row slice, without mirrored or repeated padding.
-pub struct RowBatch<'a, T> {
-    channels: Channels<'a, T>,
-    rows: usize,
-    width: usize,
-}
-
-impl<'a, T: ImageDataType> RowBatch<'a, T> {
-    pub(super) fn from_row_buffers(
-        buffers: &[&'a RowBuffer],
-        x_offset: usize,
-        first_y: usize,
-        image_height: usize,
-        rows: usize,
-        width: usize,
-    ) -> Self {
-        Self {
-            channels: Channels::from_row_buffers(buffers, x_offset, first_y, image_height, 0),
-            rows: rows.min(image_height - first_y),
-            width,
-        }
-    }
-
-    pub fn num_channels(&self) -> usize {
-        self.channels.channel_buffers.len()
-    }
-
-    pub fn num_rows(&self) -> usize {
-        self.rows
-    }
-
-    pub fn row(&self, channel: usize, row: usize) -> &'a [T] {
-        assert!(row < self.rows);
-        let c = &self.channels;
-        let y = (c.center_y + row) & (c.num_rows - 1);
-        let start = y * c.stride + c.x_offset;
-        &c.channel_buffers[channel][start..start + self.width]
-    }
-}
-
 pub struct ChannelsView<'a, T, const CHANS: usize, const ROWS: usize, const RADIUS: usize> {
     // Safety invariant: For every `c < CHANS` and `r < ROWS`, `x_offset >= RADIUS` and
     // `row_offsets[r] + x_offset + RADIUS + MAX_SIMD_LANES <= channel_buffers[c].len()`

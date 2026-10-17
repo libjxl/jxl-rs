@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 mod blending;
+mod box_average;
 mod chroma_upsample;
 mod convert;
 mod epf;
@@ -19,6 +20,8 @@ mod xyb;
 mod ycbcr;
 
 pub use blending::*;
+#[expect(unused)]
+pub use box_average::*;
 pub use chroma_upsample::*;
 pub use convert::*;
 pub use epf::*;

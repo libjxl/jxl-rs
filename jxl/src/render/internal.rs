@@ -105,11 +105,14 @@ impl<Buffer> Display for Stage<Buffer> {
 #[derive(Clone, Debug)]
 pub struct ChannelInfo {
     pub ty: DataTypeTag,
+    // Resolution relative to the fixed image/group grid, not necessarily the final output.
     pub downsample: (u8, u8),
 }
 
 pub struct RenderPipelineShared<Buffer> {
     pub channel_info: Vec<Vec<ChannelInfo>>,
+    // Extent of the fixed, fully upsampled grid used for input groups. Stages may
+    // reduce channel resolution without changing these coordinates or input allocation.
     pub input_size: (usize, usize),
     pub log_group_size: usize,
     pub group_count: (usize, usize),

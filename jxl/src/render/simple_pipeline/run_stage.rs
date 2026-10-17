@@ -10,8 +10,8 @@ use crate::render::internal::PipelineBuffer;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineDownsampleStage,
-    RenderPipelineInOutStage, RenderPipelineInPlaceStage, RowBatch, RunDownsampleStage,
-    RunInOutStage, RunInPlaceStage,
+    RenderPipelineInOutStage, RenderPipelineInPlaceStage, RunDownsampleStage, RunInOutStage,
+    RunInPlaceStage,
 };
 use crate::util::tracing_wrappers::*;
 use crate::util::{mirror, round_up_size_to_cache_line};
@@ -77,6 +77,8 @@ impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<Image<f64>> for T {
             return;
         }
         let (fx, fy) = (1 << T::DOWNSAMPLE.0, 1 << T::DOWNSAMPLE.1);
+        assert!(chunk_size.is_multiple_of(fx));
+        let output_chunk_size = chunk_size / fx;
         let size = inputs[0].size();
         let output_size = (size.0.div_ceil(fx), size.1.div_ceil(fy));
         let mut input_scratch: Vec<_> = inputs
@@ -87,21 +89,24 @@ impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<Image<f64>> for T {
                     0,
                     T::DOWNSAMPLE.1 as usize,
                     0,
-                    chunk_size * fx,
+                    chunk_size,
                 )
                 .unwrap()
             })
             .collect();
         let mut output_scratch =
             vec![
-                vec![T::OutputT::default(); round_up_size_to_cache_line::<T::OutputT>(chunk_size)];
+                vec![
+                    T::OutputT::default();
+                    round_up_size_to_cache_line::<T::OutputT>(output_chunk_size)
+                ];
                 inputs.len()
             ];
         let x0 = RowBuffer::x0_offset::<T::InputT>();
         for oy in 0..output_size.1 {
             let valid_rows = fy.min(size.1 - oy * fy);
-            for ox in (0..output_size.0).step_by(chunk_size) {
-                let width = chunk_size.min(output_size.0 - ox);
+            for ox in (0..output_size.0).step_by(output_chunk_size) {
+                let width = output_chunk_size.min(output_size.0 - ox);
                 let valid_width = (width * fx).min(size.0 - ox * fx);
                 for (c, scratch) in input_scratch.iter_mut().enumerate() {
                     assert_eq!(inputs[c].size(), size);
@@ -115,11 +120,11 @@ impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<Image<f64>> for T {
                     }
                 }
                 let refs: Vec<_> = input_scratch.iter().collect();
-                let batch = RowBatch::from_row_buffers(&refs, x0, 0, valid_rows, fy, valid_width);
+                let batch = Channels::from_row_buffers(&refs, x0, 0, valid_rows, 0);
                 let mut rows: Vec<_> = output_scratch.iter_mut().map(|r| &mut r[..]).collect();
                 self.process_row_batch(
                     (ox, oy),
-                    width,
+                    valid_width,
                     &batch,
                     &mut rows,
                     state.as_deref_mut(),
