@@ -442,6 +442,7 @@ impl LowMemoryRenderPipeline {
                         current_size = s.image_size;
                         current_origin = s.frame_origin;
                     }
+                    Stage::Downsample(_) => unreachable!("rejected at pipeline construction"),
                     Stage::InOut(s) => {
                         let borderx = s.border().0 as usize;
                         let bordery = s.border().1 as isize;
@@ -587,6 +588,7 @@ impl LowMemoryRenderPipeline {
                     Stage::Extend(_) => {
                         unreachable!("duplicate extend stage");
                     }
+                    Stage::Downsample(_) => unreachable!("rejected at pipeline construction"),
                     Stage::InOut(s) => {
                         assert_eq!(s.border(), (0, 0));
                         let (inb, outb) = data.row_buffers.split_at_mut(i + 1);

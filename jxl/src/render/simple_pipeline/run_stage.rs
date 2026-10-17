@@ -9,7 +9,8 @@ use crate::image::{Image, ImageDataType};
 use crate::render::internal::PipelineBuffer;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::{
-    Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
+    Channels, ChannelsMut, ErasedLocalState, RenderPipelineDownsampleStage,
+    RenderPipelineInOutStage, RenderPipelineInPlaceStage, RowBatch, RunDownsampleStage,
     RunInOutStage, RunInPlaceStage,
 };
 use crate::util::tracing_wrappers::*;
@@ -57,6 +58,77 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<Image<f64>> for T {
                     let out_row = buffers[c].row_mut(y);
                     for ix in 0..xsize {
                         out_row[x + ix] = buffer[c][ix].to_f64();
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<Image<f64>> for T {
+    fn run_stage_on(
+        &self,
+        chunk_size: usize,
+        inputs: &[&Image<f64>],
+        outputs: &mut [Image<f64>],
+        mut state: Option<&mut ErasedLocalState>,
+    ) {
+        if inputs.is_empty() {
+            return;
+        }
+        let (fx, fy) = (1 << T::DOWNSAMPLE.0, 1 << T::DOWNSAMPLE.1);
+        let size = inputs[0].size();
+        let output_size = (size.0.div_ceil(fx), size.1.div_ceil(fy));
+        let mut input_scratch: Vec<_> = inputs
+            .iter()
+            .map(|_| {
+                RowBuffer::new(
+                    T::InputT::DATA_TYPE_ID,
+                    0,
+                    T::DOWNSAMPLE.1 as usize,
+                    0,
+                    chunk_size * fx,
+                )
+                .unwrap()
+            })
+            .collect();
+        let mut output_scratch =
+            vec![
+                vec![T::OutputT::default(); round_up_size_to_cache_line::<T::OutputT>(chunk_size)];
+                inputs.len()
+            ];
+        let x0 = RowBuffer::x0_offset::<T::InputT>();
+        for oy in 0..output_size.1 {
+            let valid_rows = fy.min(size.1 - oy * fy);
+            for ox in (0..output_size.0).step_by(chunk_size) {
+                let width = chunk_size.min(output_size.0 - ox);
+                let valid_width = (width * fx).min(size.0 - ox * fx);
+                for (c, scratch) in input_scratch.iter_mut().enumerate() {
+                    assert_eq!(inputs[c].size(), size);
+                    assert_eq!(outputs[c].size(), output_size);
+                    for r in 0..valid_rows {
+                        let src = inputs[c].row(oy * fy + r);
+                        let dst = scratch.get_row_mut::<T::InputT>(r);
+                        for x in 0..valid_width {
+                            dst[x0 + x] = T::InputT::from_f64(src[ox * fx + x]);
+                        }
+                    }
+                }
+                let refs: Vec<_> = input_scratch.iter().collect();
+                let batch = RowBatch::from_row_buffers(&refs, x0, 0, valid_rows, fy, valid_width);
+                let mut rows: Vec<_> = output_scratch.iter_mut().map(|r| &mut r[..]).collect();
+                self.process_row_batch(
+                    (ox, oy),
+                    width,
+                    &batch,
+                    &mut rows,
+                    state.as_deref_mut(),
+                    false,
+                );
+                for (c, scratch) in output_scratch.iter().enumerate() {
+                    let dst = outputs[c].row_mut(oy);
+                    for x in 0..width {
+                        dst[ox + x] = scratch[x].to_f64();
                     }
                 }
             }

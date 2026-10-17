@@ -5,8 +5,11 @@
 
 use super::super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use super::row_buffers::RowBuffer;
-use crate::render::internal::{PipelineBuffer, RunInOutStage};
-use crate::render::{Channels, ChannelsMut, ErasedLocalState, RunInPlaceStage};
+use crate::render::internal::{PipelineBuffer, RunDownsampleStage, RunInOutStage};
+use crate::render::{
+    Channels, ChannelsMut, ErasedLocalState, RenderPipelineDownsampleStage, RowBatch,
+    RunInPlaceStage,
+};
 use crate::util::tracing_wrappers::*;
 use crate::util::{ChannelVec, ShiftRightCeil};
 
@@ -60,6 +63,47 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
             &mut rows[..],
             state,
             previous_call_was_previous_row,
+        );
+    }
+}
+
+impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<RowBuffer> for T {
+    fn run_stage_on(
+        &self,
+        info: ExtraInfo,
+        input_buffers: &[&RowBuffer],
+        output_buffers: &mut [RowBuffer],
+        state: Option<&mut ErasedLocalState>,
+    ) {
+        let pre = if info.start_of_row {
+            0
+        } else {
+            info.out_extra_x
+        };
+        let post = if info.end_of_row { 0 } else { info.out_extra_x };
+        let width = pre + info.xsize + post;
+        let input = RowBatch::from_row_buffers(
+            input_buffers,
+            RowBuffer::x0_offset::<T::InputT>() - (pre << T::DOWNSAMPLE.0),
+            info.current_row << T::DOWNSAMPLE.1,
+            info.image_height,
+            1 << T::DOWNSAMPLE.1,
+            width << T::DOWNSAMPLE.0,
+        );
+        let mut rows: ChannelVec<_> = output_buffers
+            .iter_mut()
+            .map(|b| {
+                &mut b.get_row_mut::<T::OutputT>(info.current_row)
+                    [RowBuffer::x0_offset::<T::OutputT>() - pre..]
+            })
+            .collect();
+        self.process_row_batch(
+            (info.group_x0 - pre, info.current_row),
+            width,
+            &input,
+            &mut rows,
+            state,
+            info.previous_call_was_previous_row,
         );
     }
 }

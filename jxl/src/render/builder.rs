@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use super::internal::{RenderPipelineShared, Stage};
 use super::stages::ExtendToImageDimensionsStage;
-use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use super::{
+    RenderPipeline, RenderPipelineDownsampleStage, RenderPipelineInOutStage,
+    RenderPipelineInPlaceStage,
+};
 use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
@@ -166,6 +169,10 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         self.add_stage_internal(Stage::InOut(Pipeline::box_inout_stage(stage)))
     }
 
+    pub fn add_downsample_stage<S: RenderPipelineDownsampleStage>(self, stage: S) -> Self {
+        self.add_stage_internal(Stage::Downsample(Pipeline::box_downsample_stage(stage)))
+    }
+
     #[instrument(skip_all, err)]
     pub fn build(mut self) -> Result<Box<Pipeline>> {
         let mut stage_is_used = vec![false; self.shared.stages.len()];
@@ -190,7 +197,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             // trigger downstream failures.
             // TODO(veluca): we should probably compute channel information *before*
             // we do the pruning.
-            if stage.shift() != (0, 0) {
+            if stage.shift() != (0, 0) || stage.downsample() != (0, 0) {
                 stage_is_used[i] = true;
             }
             if stage_is_used[i] {
@@ -209,9 +216,23 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             .filter_map(|(s, used)| used.then_some(s))
             .collect();
 
+        let mut has_downsample = false;
         for (i, stage) in self.shared.stages.iter().enumerate() {
+            if has_downsample && matches!(stage, Stage::InOut(_)) {
+                return Err(Error::PipelineInvalidStageAfterDownsample(
+                    stage.to_string(),
+                ));
+            }
+            has_downsample |= matches!(stage, Stage::Downsample(_));
             let output_type = stage.output_type();
             let shift = stage.shift();
+            let downsample = stage.downsample();
+            if [shift.0, shift.1, downsample.0, downsample.1]
+                .iter()
+                .any(|&s| s as u32 >= usize::BITS - 1)
+            {
+                return Err(Error::ArithmeticOverflow);
+            }
             let border = stage.border();
             let is_extend = matches!(stage, Stage::Extend(_));
 
@@ -245,7 +266,11 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 }
             }
             if self.shared.extend_stage_index.is_some()
-                && (shift != (0, 0) || border != (0, 0) || is_extend)
+                && (shift != (0, 0)
+                    || downsample != (0, 0)
+                    || border != (0, 0)
+                    || is_extend
+                    || matches!(stage, Stage::Downsample(_)))
             {
                 return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
             }
@@ -261,9 +286,8 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
 
         let channel_info = &mut self.shared.channel_info;
-        // Find the input resolution in the fixed image/group coordinate system first.
-        // Keep this separate from assigning stage resolutions: stages that reduce resolution
-        // need to retain a positive downsample amount in their output metadata.
+        // All upsampling precedes downsampling, so only upsampling shifts determine
+        // the input resolution. Assign reduced stage resolutions in the forward pass.
         let mut input_downsamples = vec![(0u8, 0u8); num_channels];
         for s in (0..self.shared.stages.len()).rev() {
             for (chan, input_downsample) in input_downsamples.iter_mut().enumerate() {
@@ -283,8 +307,25 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
         for (s, stage) in self.shared.stages.iter().enumerate() {
             let mut save_downsample = None;
+            let mut stage_downsample = None;
             for chan in 0..num_channels {
                 let current = channel_info[s][chan].downsample;
+                if stage.uses_channel(chan) {
+                    if let Some(expected) = stage_downsample {
+                        if expected != current {
+                            return Err(Error::PipelineUnsupported(format!(
+                                "stage {stage} uses channels with different resolutions"
+                            )));
+                        }
+                    } else {
+                        stage_downsample = Some(current);
+                    }
+                    if matches!(stage, Stage::Extend(_)) && current != (0, 0) {
+                        return Err(Error::PipelineUnsupported(
+                            "extend requires full-resolution channels".into(),
+                        ));
+                    }
+                }
                 if matches!(stage, Stage::Save(_)) && stage.uses_channel(chan) {
                     if let Some(expected) = save_downsample {
                         if expected != current {
@@ -295,7 +336,23 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                     }
                 }
                 let shift = channel_info[s + 1][chan].downsample;
-                channel_info[s + 1][chan].downsample = (current.0 - shift.0, current.1 - shift.1);
+                let reduction = if stage.uses_channel(chan) {
+                    stage.downsample()
+                } else {
+                    (0, 0)
+                };
+                let next = (
+                    (current.0 - shift.0)
+                        .checked_add(reduction.0)
+                        .ok_or(Error::ArithmeticOverflow)?,
+                    (current.1 - shift.1)
+                        .checked_add(reduction.1)
+                        .ok_or(Error::ArithmeticOverflow)?,
+                );
+                if next.0 as u32 >= usize::BITS - 1 || next.1 as u32 >= usize::BITS - 1 {
+                    return Err(Error::ArithmeticOverflow);
+                }
+                channel_info[s + 1][chan].downsample = next;
             }
         }
         #[cfg(feature = "tracing")]

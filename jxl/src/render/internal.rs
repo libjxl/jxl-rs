@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::save::SaveStage;
 use super::stages::ExtendToImageDimensionsStage;
-use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use super::{RenderPipelineDownsampleStage, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::error::Result;
 use crate::image::{BufferRecycler, DataTypeTag, ImageDataType};
 use crate::render::ErasedLocalState;
@@ -19,6 +19,7 @@ use crate::util::sync::atomic::AtomicBool;
 pub enum Stage<Buffer> {
     InPlace(Box<dyn RunInPlaceStage<Buffer>>),
     InOut(Box<dyn RunInOutStage<Buffer>>),
+    Downsample(Box<dyn RunDownsampleStage<Buffer>>),
     Save(SaveStage),
     Extend(ExtendToImageDimensionsStage),
 }
@@ -28,6 +29,7 @@ impl<Buffer: 'static> Stage<Buffer> {
         match self {
             Stage::InPlace(s) => s.init_local_state(),
             Stage::InOut(s) => s.init_local_state(),
+            Stage::Downsample(s) => s.init_local_state(),
             _ => Ok(None),
         }
     }
@@ -35,6 +37,13 @@ impl<Buffer: 'static> Stage<Buffer> {
     pub(super) fn shift(&self) -> (u8, u8) {
         match self {
             Stage::InOut(s) => s.shift(),
+            _ => (0, 0),
+        }
+    }
+
+    pub(super) fn downsample(&self) -> (u8, u8) {
+        match self {
+            Stage::Downsample(s) => s.downsample(),
             _ => (0, 0),
         }
     }
@@ -59,6 +68,7 @@ impl<Buffer: 'static> Stage<Buffer> {
             Stage::Extend(_) => true,
             Stage::InPlace(s) => s.uses_channel(c),
             Stage::InOut(s) => s.uses_channel(c),
+            Stage::Downsample(s) => s.uses_channel(c),
             Stage::Save(s) => s.uses_channel(c),
         }
     }
@@ -67,12 +77,14 @@ impl<Buffer: 'static> Stage<Buffer> {
             Stage::Extend(_) => DataTypeTag::F32,
             Stage::InPlace(s) => s.ty(),
             Stage::InOut(s) => s.input_type(),
+            Stage::Downsample(s) => s.input_type(),
             Stage::Save(s) => s.input_type(c),
         }
     }
     pub(super) fn output_type(&self) -> Option<DataTypeTag> {
         match self {
             Stage::InOut(s) => Some(s.output_type()),
+            Stage::Downsample(s) => Some(s.output_type()),
             _ => None,
         }
     }
@@ -82,6 +94,7 @@ impl<Buffer> Display for Stage<Buffer> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Stage::InOut(s) => write!(f, "{}", s),
+            Stage::Downsample(s) => write!(f, "{}", s),
             Stage::InPlace(s) => write!(f, "{}", s),
             Stage::Save(s) => write!(f, "{}", s),
             Stage::Extend(e) => write!(f, "{}", e),
@@ -232,6 +245,42 @@ impl<T: RenderPipelineInOutStage> InOutStage for T {
     fn output_type(&self) -> DataTypeTag {
         T::OutputT::DATA_TYPE_ID
     }
+}
+
+pub trait DownsampleStage: Any + Display + Send + Sync {
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>>;
+    fn downsample(&self) -> (u8, u8);
+    fn uses_channel(&self, c: usize) -> bool;
+    fn input_type(&self) -> DataTypeTag;
+    fn output_type(&self) -> DataTypeTag;
+}
+
+impl<T: RenderPipelineDownsampleStage> DownsampleStage for T {
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
+        self.init_local_state()
+    }
+    fn downsample(&self) -> (u8, u8) {
+        T::DOWNSAMPLE
+    }
+    fn uses_channel(&self, c: usize) -> bool {
+        self.uses_channel(c)
+    }
+    fn input_type(&self) -> DataTypeTag {
+        T::InputT::DATA_TYPE_ID
+    }
+    fn output_type(&self) -> DataTypeTag {
+        T::OutputT::DATA_TYPE_ID
+    }
+}
+
+pub trait RunDownsampleStage<Buffer: PipelineBuffer>: DownsampleStage {
+    fn run_stage_on(
+        &self,
+        info: Buffer::InOutExtraInfo,
+        input_buffers: &[&Buffer],
+        output_buffers: &mut [Buffer],
+        state: Option<&mut ErasedLocalState>,
+    );
 }
 
 pub trait RunInOutStage<Buffer: PipelineBuffer>: InOutStage {

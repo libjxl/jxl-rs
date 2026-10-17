@@ -4,7 +4,10 @@
 // license that can be found in the LICENSE file.
 
 use super::internal::{RenderPipelineShared, Stage};
-use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use super::{
+    RenderPipeline, RenderPipelineDownsampleStage, RenderPipelineInOutStage,
+    RenderPipelineInPlaceStage,
+};
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::image::{Image, ImageDataType};
@@ -52,7 +55,10 @@ impl SimpleRenderPipeline {
         for (i, stage) in self.shared.stages.iter().enumerate() {
             debug!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
-            if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
+            if stage.shift() != (0, 0)
+                || matches!(stage, Stage::Downsample(_))
+                || stage.new_size(current_size) != current_size
+            {
                 // Replace buffers of different sizes.
                 current_size = stage.new_size(current_size);
                 for (c, info) in self.shared.channel_info[i + 1].iter().enumerate() {
@@ -65,7 +71,7 @@ impl SimpleRenderPipeline {
                 }
             }
             match stage {
-                Stage::InOut(stage) => {
+                Stage::InOut(_) | Stage::Downsample(_) => {
                     let input_buf: Vec<_> = current_buffers
                         .iter()
                         .enumerate()
@@ -81,12 +87,21 @@ impl SimpleRenderPipeline {
                         }
                     }
                     let mut state = stage.init_local_state()?;
-                    stage.run_stage_on(
-                        self.shared.chunk_size,
-                        &input_buf,
-                        &mut output_buf,
-                        state.as_deref_mut(),
-                    );
+                    match stage {
+                        Stage::InOut(s) => s.run_stage_on(
+                            self.shared.chunk_size,
+                            &input_buf,
+                            &mut output_buf,
+                            state.as_deref_mut(),
+                        ),
+                        Stage::Downsample(s) => s.run_stage_on(
+                            self.shared.chunk_size,
+                            &input_buf,
+                            &mut output_buf,
+                            state.as_deref_mut(),
+                        ),
+                        _ => unreachable!(),
+                    }
                     let repl_iter = (0..self.shared.num_channels())
                         .filter(|c| stage.uses_channel(*c))
                         .zip(output_buf);
@@ -211,6 +226,12 @@ impl RenderPipeline for SimpleRenderPipeline {
     fn box_inplace_stage<S: RenderPipelineInPlaceStage>(
         stage: S,
     ) -> Box<dyn super::RunInPlaceStage<Self::Buffer>> {
+        Box::new(stage)
+    }
+
+    fn box_downsample_stage<S: RenderPipelineDownsampleStage>(
+        stage: S,
+    ) -> Box<dyn super::RunDownsampleStage<Self::Buffer>> {
         Box::new(stage)
     }
 

@@ -146,6 +146,18 @@ impl<'a, T> Channels<'a, T> {
         }
     }
 
+    #[cfg_attr(not(test), expect(unused))]
+    pub fn num_valid_rows(&self) -> usize {
+        self.image_height - self.center_y
+    }
+
+    #[cfg_attr(not(test), expect(unused))]
+    pub fn row(&self, channel: usize, row: usize) -> &'a [T] {
+        assert!(row < self.num_rows);
+        let y = (self.center_y + row) & (self.num_rows - 1);
+        &self.channel_buffers[channel][y * self.stride + self.x_offset..(y + 1) * self.stride]
+    }
+
     /// Creates a compile-time sized `ChannelsView` precomputing mirrored row offsets for
     /// `CHANS` channels, `ROWS` vertical rows (`ROWS = 2 * border_y + 1`), and horizontal
     /// radius `RADIUS`.
@@ -192,6 +204,50 @@ impl<'a, T> Channels<'a, T> {
             row_offsets,
             x_offset: self.x_offset,
         }
+    }
+}
+
+/// Border-free input rows of a downsampling batch, in channel/row/column order.
+/// Row slices have exactly the input width of the batch and can be used with scalar
+/// operations or SIMD slice loads. Unlike `Channels::view`, row indices start at zero.
+/// Rows contain only valid samples: the final batch may have fewer rows or a shorter
+/// row slice, without mirrored or repeated padding.
+pub struct RowBatch<'a, T> {
+    channels: Channels<'a, T>,
+    rows: usize,
+    width: usize,
+}
+
+impl<'a, T: ImageDataType> RowBatch<'a, T> {
+    pub(super) fn from_row_buffers(
+        buffers: &[&'a RowBuffer],
+        x_offset: usize,
+        first_y: usize,
+        image_height: usize,
+        rows: usize,
+        width: usize,
+    ) -> Self {
+        Self {
+            channels: Channels::from_row_buffers(buffers, x_offset, first_y, image_height, 0),
+            rows: rows.min(image_height - first_y),
+            width,
+        }
+    }
+
+    pub fn num_channels(&self) -> usize {
+        self.channels.channel_buffers.len()
+    }
+
+    pub fn num_rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn row(&self, channel: usize, row: usize) -> &'a [T] {
+        assert!(row < self.rows);
+        let c = &self.channels;
+        let y = (c.center_y + row) & (c.num_rows - 1);
+        let start = y * c.stride + c.x_offset;
+        &c.channel_buffers[channel][start..start + self.width]
     }
 }
 

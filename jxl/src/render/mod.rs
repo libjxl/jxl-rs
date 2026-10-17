@@ -5,7 +5,7 @@
 
 use std::any::Any;
 
-use internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
+use internal::{RenderPipelineShared, RunDownsampleStage, RunInOutStage, RunInPlaceStage};
 
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
@@ -36,7 +36,7 @@ const MAX_BORDER: usize = 9;
 
 pub use builder::RenderPipelineBuilder;
 pub use channels::{
-    Channels, ChannelsMut, ChannelsView, StoreInterleaved, VecLoad, for_each_chunk,
+    Channels, ChannelsMut, ChannelsView, RowBatch, StoreInterleaved, VecLoad, for_each_chunk,
 };
 pub use low_memory_pipeline::LowMemoryRenderPipeline;
 #[cfg(test)]
@@ -107,6 +107,42 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     fn uses_channel(&self, c: usize) -> bool;
 }
 
+/// Reduces resolution using non-overlapping, border-free input batches.
+///
+/// `DOWNSAMPLE` is the base-2 logarithm of the horizontal and vertical reduction factors.
+/// Each call produces one output row. `position` and `xsize` are in output pixels; the
+/// input batch starts at `position * factor` and contains up to `xsize * factor_x`
+/// pixels in each of up to `factor_y` rows. Edge batches contain only valid samples:
+/// `num_rows()` reports the valid row count and each row slice gives the valid width.
+/// No padding or filter halo is provided. Used channels must have the same resolution.
+/// All `InOut` stages must precede the first downsampling stage.
+///
+/// As with in-place stages, output slices may contain scratch space beyond `xsize`.
+/// The continuity hint only guarantees a previous call over the same x range in the
+/// preceding *output* row when it is true.
+pub trait RenderPipelineDownsampleStage: Any + std::fmt::Display + Send + Sync {
+    type InputT: ImageDataType;
+    type OutputT: ImageDataType;
+
+    const DOWNSAMPLE: (u8, u8);
+
+    fn process_row_batch(
+        &self,
+        position: (usize, usize),
+        xsize: usize,
+        input_rows: &RowBatch<Self::InputT>,
+        output_rows: &mut [&mut [Self::OutputT]],
+        state: Option<&mut ErasedLocalState>,
+        previous_call_was_previous_row: bool,
+    );
+
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
+        Ok(None)
+    }
+
+    fn uses_channel(&self, c: usize) -> bool;
+}
+
 pub trait RenderPipeline: Sized {
     type Buffer: 'static;
 
@@ -142,6 +178,10 @@ pub trait RenderPipeline: Sized {
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,
     ) -> Box<dyn RunInOutStage<Self::Buffer>>;
+
+    fn box_downsample_stage<S: RenderPipelineDownsampleStage>(
+        stage: S,
+    ) -> Box<dyn RunDownsampleStage<Self::Buffer>>;
 
     fn box_inplace_stage<S: RenderPipelineInPlaceStage>(
         stage: S,

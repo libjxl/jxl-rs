@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use row_buffers::RowBuffer;
 
 use super::RenderPipeline;
-use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
+use super::internal::{RenderPipelineShared, RunDownsampleStage, RunInOutStage, RunInPlaceStage};
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::image::{DataTypeTag, Image, ImageDataType, Rect};
@@ -129,6 +129,15 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     type Buffer = RowBuffer;
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
+        if shared
+            .stages
+            .iter()
+            .any(|s| matches!(s, Stage::Downsample(_)))
+        {
+            return Err(crate::error::Error::PipelineUnsupported(
+                "downsampling is not yet supported by the low-memory executor".into(),
+            ));
+        }
         let nc = shared.num_channels();
         let mut previous_inout: Vec<_> = (0..nc).map(|x| (0usize, x)).collect();
         let mut stage_input_buffer_index = vec![];
@@ -523,6 +532,12 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     fn box_inplace_stage<S: super::RenderPipelineInPlaceStage>(
         stage: S,
     ) -> Box<dyn RunInPlaceStage<Self::Buffer>> {
+        Box::new(stage)
+    }
+
+    fn box_downsample_stage<S: super::RenderPipelineDownsampleStage>(
+        stage: S,
+    ) -> Box<dyn RunDownsampleStage<Self::Buffer>> {
         Box::new(stage)
     }
 
