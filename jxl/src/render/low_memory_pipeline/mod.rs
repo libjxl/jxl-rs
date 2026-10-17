@@ -12,7 +12,7 @@ use row_buffers::RowBuffer;
 use super::RenderPipeline;
 use super::internal::{RenderPipelineShared, RunDownsampleStage, RunInOutStage, RunInPlaceStage};
 use crate::api::JxlOutputBuffer;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::image::{DataTypeTag, Image, ImageDataType, Rect};
 use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
@@ -82,11 +82,17 @@ impl LowMemoryRenderPipelinePerThread {
             .iter()
             .map(|stage_cfgs| stage_cfgs.iter().map(RowBufferConfig::allocate).collect())
             .collect::<Result<_>>()?;
+        let save_width = p.shared.chunk_size
+            + if p.batch_schedule.is_some() {
+                p.border_size.0
+            } else {
+                0
+            };
         self.save_scratch = Some([
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, p.shared.chunk_size)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, save_width)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, save_width)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, save_width)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 0, 0, save_width)?,
         ]);
         self.local_states = p
             .shared
@@ -123,21 +129,78 @@ pub struct LowMemoryRenderPipeline {
     downsampling_for_stage: Vec<(usize, usize)>,
     // Sorted indices to call get_distinct_indices.
     sorted_buffer_indices: Vec<Vec<(usize, usize, usize)>>,
+    // For batched pipelines, consumers run at base_y + delay virtual rows,
+    // after all required input rows have been produced.
+    batch_schedule: Option<BatchSchedule>,
+}
+
+struct BatchSchedule {
+    stage_delay: Vec<usize>,
+    max_delay: usize,
+    alignment: (usize, usize),
+}
+
+impl BatchSchedule {
+    fn new(shared: &RenderPipelineShared<RowBuffer>) -> Result<Option<Self>> {
+        if !shared
+            .stages
+            .iter()
+            .any(|s| matches!(s, Stage::Downsample(_)))
+        {
+            return Ok(None);
+        }
+        let mut max_shift = (0, 0);
+        for info in shared.channel_info.iter().flatten() {
+            max_shift.0 = max_shift.0.max(info.downsample.0);
+            max_shift.1 = max_shift.1.max(info.downsample.1);
+        }
+        if max_shift.0 as usize > shared.log_group_size
+            || max_shift.1 as usize > shared.log_group_size
+        {
+            return Err(Error::PipelineDownsamplingFactorTooHigh);
+        }
+        let mut channel_delay = vec![0usize; shared.num_channels()];
+        let mut stage_delay = vec![0; shared.stages.len()];
+        for (i, stage) in shared.stages.iter().enumerate() {
+            let lookahead = stage.border().1 as usize + (1 << stage.downsample().1) - 1;
+            let delay = (0..shared.num_channels())
+                .filter(|&c| stage.uses_channel(c))
+                .map(|c| {
+                    let dy = shared.channel_info[i][c].downsample.1;
+                    channel_delay[c] + (lookahead << dy)
+                })
+                .max()
+                .unwrap_or(0);
+            stage_delay[i] = delay;
+            // Synchronize every used channel, including at saves: a subsequent
+            // in-place consumer must not overtake a save waiting for another channel.
+            for (c, value) in channel_delay.iter_mut().enumerate() {
+                if stage.uses_channel(c) {
+                    *value = delay;
+                }
+            }
+        }
+        let max_delay = channel_delay.iter().copied().max().unwrap_or(0);
+        Ok(Some(Self {
+            stage_delay,
+            max_delay,
+            alignment: (1 << max_shift.0, 1 << max_shift.1),
+        }))
+    }
+
+    fn buffer_shift(&self, dy: u8) -> usize {
+        // Retain rows until delayed consumers have read them. Include the largest
+        // row burst, then round to a ring capacity.
+        let rows = self.max_delay.shrc(dy) + self.alignment.1.shrc(dy) + 1;
+        rows.next_power_of_two().trailing_zeros() as usize
+    }
 }
 
 impl RenderPipeline for LowMemoryRenderPipeline {
     type Buffer = RowBuffer;
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
-        if shared
-            .stages
-            .iter()
-            .any(|s| matches!(s, Stage::Downsample(_)))
-        {
-            return Err(crate::error::Error::PipelineUnsupported(
-                "downsampling is not yet supported by the low-memory executor".into(),
-            ));
-        }
+        let batch_schedule = BatchSchedule::new(&shared)?;
         let nc = shared.num_channels();
         let mut previous_inout: Vec<_> = (0..nc).map(|x| (0usize, x)).collect();
         let mut stage_input_buffer_index = vec![];
@@ -153,12 +216,12 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         for (i, stage) in shared.stages.iter().enumerate() {
             stage_input_buffer_index.push(previous_inout.clone());
             next_border_and_cur_downsample.push(vec![]);
-            if let Stage::InOut(p) = stage {
+            if matches!(stage, Stage::InOut(_) | Stage::Downsample(_)) {
                 for (chan, (ps, pc)) in previous_inout.iter_mut().enumerate() {
-                    if !p.uses_channel(chan) {
+                    if !stage.uses_channel(chan) {
                         continue;
                     }
-                    next_border_and_cur_downsample[*ps][*pc].0 = p.border().1;
+                    next_border_and_cur_downsample[*ps][*pc].0 = stage.border().1;
                     *ps = i + 1;
                     *pc = next_border_and_cur_downsample[i + 1].len();
                     next_border_and_cur_downsample[i + 1]
@@ -197,6 +260,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         }
 
         // Compute the amount of border pixels needed per channel, per stage.
+        // The downsampling tail is border-free; only the InOut prefix adds borders.
         let mut border_pixels = vec![(0usize, 0usize); nc];
         let mut border_pixels_per_stage = vec![];
         for s in shared.stages.iter().rev() {
@@ -285,6 +349,34 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 .max(border_pixels_per_stage[s].1 << downsampling_for_stage[s].1);
         }
 
+        if let Some(schedule) = &batch_schedule {
+            // Align core/boundary region edges and chunk edges so each render job owns complete
+            // downsampling batches.
+            border_size.0 = border_size.0.next_multiple_of(schedule.alignment.0);
+            border_size.1 = border_size.1.next_multiple_of(schedule.alignment.1);
+            debug_assert!(shared.chunk_size.is_multiple_of(schedule.alignment.0));
+            debug_assert!(shared.chunk_size.is_multiple_of(schedule.alignment.1));
+            if border_size.0 > shared.chunk_size / 2 || border_size.1 > shared.chunk_size / 2 {
+                return Err(Error::PipelineDownsamplingFactorTooHigh);
+            }
+        }
+
+        // Region origins and internal edges must be aligned for every save. Image-edge
+        // extents may be shorter; the splitter rounds those up to retain partial batches.
+        for info in save_buffer_info.iter().flatten() {
+            let (dx, dy) = info.downsample;
+            if dx as usize > shared.log_group_size
+                || dy as usize > shared.log_group_size
+                || !shared.chunk_size.is_multiple_of(1 << dx)
+                || !border_size.0.is_multiple_of(1 << dx)
+                || !border_size.1.is_multiple_of(1 << dy)
+            {
+                return Err(Error::PipelineUnalignedSave(info.downsample));
+            }
+        }
+
+        let max_row_len =
+            shared.chunk_size + border_size.0 * if batch_schedule.is_some() { 3 } else { 2 };
         let mut row_buffer_configs = vec![];
         let mut initial_configs = vec![];
         for chan in 0..nc {
@@ -292,22 +384,28 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             initial_configs.push(RowBufferConfig {
                 data_type: shared.channel_info[0][chan].ty,
                 next_y_border: next_border_and_cur_downsample[0][chan].0 as usize,
-                y_shift: 0,
+                y_shift: batch_schedule.as_ref().map_or(0, |s| {
+                    s.buffer_shift(shared.channel_info[0][chan].downsample.1)
+                }),
                 x_shift: 0,
-                row_len: (shared.chunk_size + 2 * border_size.0) >> dsx,
+                row_len: max_row_len >> dsx,
             });
         }
         row_buffer_configs.push(initial_configs);
 
         for (i, stage) in shared.stages.iter().enumerate() {
             let mut stage_configs = vec![];
-            for &(next_y_border, (dsx, _)) in next_border_and_cur_downsample[i + 1].iter() {
+            for &(next_y_border, (dsx, dsy)) in next_border_and_cur_downsample[i + 1].iter() {
                 stage_configs.push(RowBufferConfig {
                     data_type: stage.output_type().unwrap(),
                     next_y_border: next_y_border as usize,
-                    y_shift: stage.shift().1 as usize,
+                    y_shift: batch_schedule
+                        .as_ref()
+                        .map_or(stage.shift().1 as usize, |s| {
+                            s.buffer_shift(dsy).max(stage.shift().1 as usize)
+                        }),
                     x_shift: stage.shift().0 as usize,
-                    row_len: (shared.chunk_size + 2 * border_size.0) >> dsx,
+                    row_len: max_row_len >> dsx,
                 });
             }
             row_buffer_configs.push(stage_configs);
@@ -317,7 +415,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         loop {
             let mut changed = false;
             for (s, stage) in shared.stages.iter().enumerate().rev() {
-                if let Stage::InOut(_) = stage {
+                if matches!(stage, Stage::InOut(_) | Stage::Downsample(_)) {
                     if let Some(mut unified_out) = row_buffer_configs[s + 1].first().copied() {
                         for cfg in &row_buffer_configs[s + 1] {
                             unified_out.merge(cfg);
@@ -367,6 +465,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             shared,
             downsampling_for_stage,
             sorted_buffer_indices,
+            batch_schedule,
         })
     }
 
@@ -418,7 +517,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 Stage::Save(s) => {
                     let (dx, dy) = self.downsampling_for_stage[i];
                     s.check_buffer_size(
-                        (size.0 >> dx, size.1 >> dy),
+                        (size.0.shrc(dx), size.1.shrc(dy)),
                         buffers[s.output_buffer_index].as_ref(),
                     )?
                 }

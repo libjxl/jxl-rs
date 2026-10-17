@@ -137,6 +137,8 @@ pub enum Error {
     PipelineChannelTypeMismatch(String, usize, DataTypeTag, DataTypeTag),
     #[error("Invalid stage {0} after extend stage")]
     PipelineInvalidStageAfterExtend(String),
+    #[error("Render pipeline regions are not aligned to saved channel downsampling {0:?}")]
+    PipelineUnalignedSave((u8, u8)),
     #[error("Invalid stage {0} after downsample stage")]
     PipelineInvalidStageAfterDownsample(String),
     #[error("Render pipeline downsampling factor is too high")]

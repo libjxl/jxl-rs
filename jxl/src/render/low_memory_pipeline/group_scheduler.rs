@@ -234,16 +234,36 @@ impl LowMemoryRenderPipeline {
                 return Ok(());
             };
 
-            let mut local_buffers = buffer_splitter.get_local_buffers(
-                &self.save_buffer_info,
-                image_area,
-                false,
-                self.shared.input_size,
-                size,
-                origin,
-            );
-
-            self.render_group(&mut data, (gx, gy), image_area, &mut local_buffers)?;
+            let chunk = if self.batch_schedule.is_some() {
+                self.shared.chunk_size
+            } else {
+                image_area.size.0
+            };
+            let mut x = image_area.origin.0;
+            while x < image_area.end().0 {
+                let remaining = image_area.end().0 - x;
+                // Keep a short tail with the preceding chunk: an internal chunk's
+                // halo must not extend past the image's right edge.
+                let width = if remaining <= chunk + self.border_size.0 {
+                    remaining
+                } else {
+                    chunk
+                };
+                let area = Rect {
+                    origin: (x, image_area.origin.1),
+                    size: (width, image_area.size.1),
+                };
+                let mut local_buffers = buffer_splitter.get_local_buffers(
+                    &self.save_buffer_info,
+                    area,
+                    false,
+                    self.shared.input_size,
+                    size,
+                    origin,
+                );
+                self.render_group(&mut data, (gx, gy), area, &mut local_buffers)?;
+                x += width;
+            }
             Ok(())
         })?;
 

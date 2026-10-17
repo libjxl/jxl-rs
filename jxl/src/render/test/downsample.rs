@@ -6,13 +6,16 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::render::stages::GaborishStage;
+use rand::SeedableRng;
+
 use crate::api::{JxlColorType, JxlDataFormat, JxlOutputBuffer};
 use crate::headers::Orientation;
 use crate::image::{BufferRecycler, DataTypeTag, Image, Rect};
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::{
-    ErasedLocalState, RenderPipeline, RenderPipelineBuilder, RenderPipelineDownsampleStage,
-    RowBatch, SimpleRenderPipeline,
+    ErasedLocalState, LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder,
+    RenderPipelineDownsampleStage, RowBatch, SimpleRenderPipeline,
 };
 use crate::util::ShiftRightCeil;
 
@@ -128,7 +131,7 @@ fn run<P: RenderPipeline>(
 }
 
 #[test]
-fn downsample_simple_partial_batches() {
+fn downsample_partial_batches() {
     for size in [(3, 3), (1, 1), (1, 3)] {
         let mut input = Image::<f32>::new(size).unwrap();
         for y in 0..size.1 {
@@ -136,10 +139,17 @@ fn downsample_simple_partial_batches() {
                 input.row_mut(y)[x] = (y * 3 + x) as f32;
             }
         }
-        let outputs =
-            run::<SimpleRenderPipeline>(&[input], (size.0.shrc(1), size.1.shrc(1)), 1, |b| {
+        let outputs = run::<SimpleRenderPipeline>(
+            &[input.try_clone().unwrap()],
+            (size.0.shrc(1), size.1.shrc(1)),
+            256,
+            |b| b.add_downsample_stage(Average::<1, 1>),
+        );
+        let low =
+            run::<LowMemoryRenderPipeline>(&[input], (size.0.shrc(1), size.1.shrc(1)), 256, |b| {
                 b.add_downsample_stage(Average::<1, 1>)
             });
+        crate::tests::assert_image_eq!(&outputs[0], &low[0]);
         let expected: &[&[f32]] = match size {
             (3, 3) => &[&[2.0, 3.5], &[6.5, 8.0]],
             (1, 1) => &[&[0.0]],
@@ -148,5 +158,89 @@ fn downsample_simple_partial_batches() {
         for (y, row) in expected.iter().enumerate() {
             assert_eq!(outputs[0].row(y), *row);
         }
+    }
+}
+
+#[test]
+fn downsample_averages_only_valid_edge_samples() {
+    for (size, expected) in [
+        ((1, 3), &[1.0][..]),
+        ((3, 1), &[1.0][..]),
+        ((1, 5), &[1.5, 4.0][..]),
+        ((5, 1), &[1.5, 4.0][..]),
+        ((5, 5), &[9.0, 11.5, 21.5, 24.0][..]),
+    ] {
+        let mut input = Image::<f32>::new(size).unwrap();
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                input.row_mut(y)[x] = (y * size.0 + x) as f32;
+            }
+        }
+        let output_size = (size.0.shrc(2), size.1.shrc(2));
+        let simple =
+            run::<SimpleRenderPipeline>(&[input.try_clone().unwrap()], output_size, 256, |b| {
+                b.add_downsample_stage(Average::<2, 2>)
+            });
+        let low = run::<LowMemoryRenderPipeline>(&[input], output_size, 256, |b| {
+            b.add_downsample_stage(Average::<2, 2>)
+        });
+        crate::tests::assert_image_eq!(&simple[0], &low[0]);
+        for y in 0..output_size.1 {
+            assert_eq!(
+                low[0].row(y),
+                &expected[y * output_size.0..(y + 1) * output_size.0]
+            );
+        }
+    }
+}
+
+fn check_batches<const X: u8, const Y: u8>(inputs: &[Image<f32>], chunk: usize) {
+    let size = inputs[0].size();
+    let size = (size.0.shrc(X), size.1.shrc(Y));
+    let simple = run::<SimpleRenderPipeline>(inputs, size, chunk, |b| {
+        b.add_downsample_stage(Average::<X, Y>)
+    });
+    let low = run::<LowMemoryRenderPipeline>(inputs, size, chunk, |b| {
+        b.add_downsample_stage(Average::<X, Y>)
+    });
+    for (a, b) in simple.iter().zip(&low) {
+        crate::tests::assert_image_eq!(a, b);
+    }
+}
+
+#[test]
+fn downsample_across_groups_and_chunks() {
+    let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
+    let inputs: Vec<_> = (0..3)
+        .map(|_| Image::new_random((513, 515), &mut rng).unwrap())
+        .collect();
+    for chunk in [128, 256] {
+        check_batches::<1, 1>(&inputs, chunk);
+        check_batches::<2, 0>(&inputs, chunk);
+        check_batches::<0, 2>(&inputs, chunk);
+    }
+}
+
+#[test]
+fn downsample_chained_with_border_stages() {
+    let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(1);
+    let inputs: Vec<_> = (0..3)
+        .map(|_| Image::new_random((515, 513), &mut rng).unwrap())
+        .collect();
+    let configure = |b: RenderPipelineBuilder<SimpleRenderPipeline>| {
+        b.add_inout_stage(GaborishStage::new([0.1; 3], [0.2; 3]))
+            .add_inout_stage(GaborishStage::new([0.1; 3], [0.2; 3]))
+            .add_downsample_stage(Average::<1, 1>)
+            .add_downsample_stage(Average::<1, 1>)
+    };
+    let simple = run::<SimpleRenderPipeline>(&inputs, (129, 129), 256, configure);
+    let low = run::<LowMemoryRenderPipeline>(&inputs, (129, 129), 256, |b| {
+        b.add_inout_stage(GaborishStage::new([0.1; 3], [0.2; 3]))
+            .add_inout_stage(GaborishStage::new([0.1; 3], [0.2; 3]))
+            .add_downsample_stage(Average::<1, 1>)
+            .add_downsample_stage(Average::<1, 1>)
+    });
+    for (a, b) in simple.iter().zip(&low) {
+        crate::tests::assert_image_eq!(a, b);
     }
 }

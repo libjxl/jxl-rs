@@ -81,14 +81,15 @@ impl<T: RenderPipelineDownsampleStage> RunDownsampleStage<RowBuffer> for T {
             info.out_extra_x
         };
         let post = if info.end_of_row { 0 } else { info.out_extra_x };
-        let width = pre + info.xsize + post;
+        let width = pre + info.xsize.shrc(T::DOWNSAMPLE.0) + post;
+        let input_width = (pre << T::DOWNSAMPLE.0) + info.xsize + (post << T::DOWNSAMPLE.0);
         let input = RowBatch::from_row_buffers(
             input_buffers,
             RowBuffer::x0_offset::<T::InputT>() - (pre << T::DOWNSAMPLE.0),
             info.current_row << T::DOWNSAMPLE.1,
             info.image_height,
             1 << T::DOWNSAMPLE.1,
-            width << T::DOWNSAMPLE.0,
+            input_width,
         );
         let mut rows: ChannelVec<_> = output_buffers
             .iter_mut()

@@ -172,41 +172,52 @@ impl<'a> BufferSplitter<'a> {
                     // Before-extend stages do not write to rects outside the current frame.
                     return None;
                 }
-                let mut channel_rect = rect.downsample(bi.downsample);
-                if !outside_current_frame {
-                    let frame_size = (
-                        frame_size.0.shrc(bi.downsample.0),
-                        frame_size.1.shrc(bi.downsample.1),
+                let channel_rect = if !outside_current_frame && bi.after_extend {
+                    // clip this rect to its visible area in the full image (in full image coordinates).
+                    let origin = (
+                        rect.origin.0 as isize + frame_origin.0,
+                        rect.origin.1 as isize + frame_origin.1,
                     );
-                    channel_rect = channel_rect.clip(frame_size);
-                    if bi.after_extend {
-                        // clip this rect to its visible area in the full image (in full image coordinates).
-                        let origin = (
-                            rect.origin.0 as isize + frame_origin.0,
-                            rect.origin.1 as isize + frame_origin.1,
-                        );
-                        let end = (
-                            origin.0 + rect.size.0 as isize,
-                            origin.1 + rect.size.1 as isize,
-                        );
-                        let origin = (origin.0.max(0) as usize, origin.1.max(0) as usize);
-                        let end = (
-                            end.0.min(full_image_size.0 as isize).max(0) as usize,
-                            end.1.min(full_image_size.1 as isize).max(0) as usize,
-                        );
-                        channel_rect = Rect {
-                            origin,
-                            size: (
-                                end.0.saturating_sub(origin.0),
-                                end.1.saturating_sub(origin.1),
-                            ),
-                        };
+                    let end = (
+                        origin.0 + rect.size.0 as isize,
+                        origin.1 + rect.size.1 as isize,
+                    );
+                    let origin = (origin.0.max(0) as usize, origin.1.max(0) as usize);
+                    let end = (
+                        end.0.min(full_image_size.0 as isize).max(0) as usize,
+                        end.1.min(full_image_size.1 as isize).max(0) as usize,
+                    );
+                    Rect {
+                        origin,
+                        size: (
+                            end.0.saturating_sub(origin.0),
+                            end.1.saturating_sub(origin.1),
+                        ),
                     }
-                }
+                } else {
+                    rect
+                };
                 if channel_rect.size.0 == 0 || channel_rect.size.1 == 0 {
                     // Buffer would be empty anyway.
                     return None;
                 }
+
+                debug_assert!(channel_rect.origin.0.is_multiple_of(1 << bi.downsample.0));
+                debug_assert!(channel_rect.origin.1.is_multiple_of(1 << bi.downsample.1));
+                let channel_rect = Rect {
+                    origin: (
+                        channel_rect.origin.0 >> bi.downsample.0,
+                        channel_rect.origin.1 >> bi.downsample.1,
+                    ),
+                    size: (
+                        channel_rect.size.0.shrc(bi.downsample.0),
+                        channel_rect.size.1.shrc(bi.downsample.1),
+                    ),
+                };
+                let full_image_size = (
+                    full_image_size.0.shrc(bi.downsample.0),
+                    full_image_size.1.shrc(bi.downsample.1),
+                );
                 let channel_rect = bi.orientation.display_rect(channel_rect, full_image_size);
                 let channel_rect = channel_rect.to_byte_rect_sz(bi.byte_size);
                 Some(buf.borrow_rect(channel_rect))

@@ -117,7 +117,7 @@ impl<'a> BufferFiller<'a> {
         }
 
         let x0 = x0 >> dx;
-        let xsize = xsize >> dx;
+        let xsize = xsize.shrc(dx);
         let group_ysize = 1 << (rp.shared.log_group_size - dy as usize);
         let group_xsize = 1 << (rp.shared.log_group_size - dx as usize);
 
@@ -324,8 +324,18 @@ impl LowMemoryRenderPipeline {
             .chain(self.downsampling_for_stage.iter().map(|d| d.1))
             .max()
             .unwrap_or(0);
-        let vy0 = y0.saturating_sub(num_extra_rows + (1 << max_dy) - 1);
-        let vy1 = image_area.end().1 + num_extra_rows;
+        let (vy0, vy1) = if let Some(schedule) = &self.batch_schedule {
+            // Inputs keep their base cadence; drain delayed consumers after the last input.
+            (
+                y0 as isize - num_extra_rows as isize - schedule.alignment.1 as isize,
+                image_area.end().1 as isize + num_extra_rows as isize + schedule.max_delay as isize,
+            )
+        } else {
+            (
+                y0.saturating_sub(num_extra_rows + (1 << max_dy) - 1) as isize,
+                (image_area.end().1 + num_extra_rows) as isize,
+            )
+        };
 
         let fillers: ChannelVec<_> = (0..num_channels)
             .map(|c| BufferFiller::new(self, c, (x0, xsize), (gx, gy), y0..image_area.end().1))
@@ -346,11 +356,20 @@ impl LowMemoryRenderPipeline {
                 // Same logic as below, but adapted to the input stage.
                 let (_, dy) = self.shared.channel_info[0][c].downsample;
                 let scaled_y_border = self.input_border_pixels[c].1 << dy;
-                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
+                let stage_vy = if self.batch_schedule.is_some() {
+                    vy
+                } else {
+                    vy - num_extra_rows as isize + scaled_y_border as isize
+                };
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
                 let y = stage_vy >> dy;
+                if self.batch_schedule.is_some()
+                    && y >= (image_area.end().1 + scaled_y_border).shrc(dy) as isize
+                {
+                    continue;
+                }
                 // The first needed row is computed with *floor* semantics (matching the
                 // x direction and BufferFiller::new): if y0 - scaled_y_border is not
                 // aligned to the channel's vertical subsampling, the subsampled row
@@ -367,16 +386,38 @@ impl LowMemoryRenderPipeline {
             }
             // Step 2: go through stages one by one.
             for (i, stage) in self.shared.stages.iter().enumerate() {
-                let (dx, dy) = self.downsampling_for_stage[i];
-                // The logic below uses *virtual* y coordinates, so we need to convert the border
-                // amount appropriately.
-                let scaled_y_border = self.stage_output_border_pixels[i].1 << dy;
-                // I knew the reason behind this formula at some point, but now I don't.
-                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
+                if self.batch_schedule.is_some()
+                    && let Stage::Extend(s) = stage
+                {
+                    current_size = s.image_size;
+                    current_origin = s.frame_origin;
+                    continue;
+                }
+                let (input_dx, input_dy) = self.downsampling_for_stage[i];
+                let (rx, ry) = stage.downsample();
+                let (dx, dy) = (input_dx + rx as usize, input_dy + ry as usize);
+                // The logic below uses *virtual* y coordinates, so convert output borders
+                // to the fixed grid. A downsampling tail has no output borders.
+                let (scaled_y_border, stage_vy) = if let Some(schedule) = &self.batch_schedule {
+                    let border = if matches!(stage, Stage::Save(_)) {
+                        0 // Saves only own the core rect, even before a border stage.
+                    } else {
+                        self.stage_output_border_pixels[i].1 << (dy - stage.shift().1 as usize)
+                    };
+                    (border, vy - schedule.stage_delay[i] as isize)
+                } else {
+                    let border = self.stage_output_border_pixels[i].1 << dy;
+                    (border, vy - num_extra_rows as isize + border as isize)
+                };
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
                 let y = stage_vy >> dy;
+                if self.batch_schedule.is_some()
+                    && y >= (image_area.end().1 + scaled_y_border).shrc(dy) as isize
+                {
+                    continue;
+                }
                 if matches!(stage, Stage::Save(_)) {
                     // Save stages write to shared output buffers, so they must only
                     // process rows owned by this rect; keep ceil semantics for them.
@@ -427,14 +468,22 @@ impl LowMemoryRenderPipeline {
                             .iter()
                             .map(|(si, ci)| &data.row_buffers[*si][*ci])
                             .collect();
+                        let (group_size, image_size) = if self.batch_schedule.is_some() {
+                            (
+                                (xsize.shrc(dx), num_rows.shrc(dy)),
+                                (current_size.0.shrc(dx), current_size.1.shrc(dy)),
+                            )
+                        } else {
+                            ((xsize >> dx, num_rows >> dy), current_size)
+                        };
                         s.save_lowmem(
                             &input_data,
                             data.save_scratch.as_mut().unwrap(),
                             &mut *buffers,
-                            (xsize >> dx, num_rows >> dy),
+                            group_size,
                             y,
                             (x0 >> dx, y0 >> dy),
-                            current_size,
+                            image_size,
                             current_origin,
                         )?;
                     }
@@ -442,7 +491,29 @@ impl LowMemoryRenderPipeline {
                         current_size = s.image_size;
                         current_origin = s.frame_origin;
                     }
-                    Stage::Downsample(_) => unreachable!("rejected at pipeline construction"),
+                    Stage::Downsample(s) => {
+                        let (inb, outb) = data.row_buffers.split_at_mut(i + 1);
+                        let input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
+                            .iter()
+                            .map(|(si, ci)| &inb[*si][*ci])
+                            .collect();
+                        let prev = std::mem::replace(&mut previous_call_was_previous_row[i], true);
+                        s.run_stage_on(
+                            ExtraInfo {
+                                xsize: xsize.shrc(input_dx),
+                                current_row: y,
+                                group_x0: x0 >> dx,
+                                out_extra_x,
+                                start_of_row,
+                                end_of_row,
+                                image_height: self.shared.input_size.1.shrc(input_dy),
+                                previous_call_was_previous_row: prev,
+                            },
+                            &input_data,
+                            &mut outb[0],
+                            data.local_states[i].as_deref_mut(),
+                        );
+                    }
                     Stage::InOut(s) => {
                         let borderx = s.border().0 as usize;
                         let bordery = s.border().1 as isize;
