@@ -50,6 +50,11 @@ impl SectionState {
             lf_global_flush_len: 0,
         }
     }
+
+    /// Number of passes completed across *all* groups, i.e. the per-group minimum.
+    fn num_completed_passes(&self) -> usize {
+        self.completed_passes.iter().copied().min().unwrap_or(0) as usize
+    }
 }
 
 pub struct FrameInfo {
@@ -65,6 +70,16 @@ pub struct FrameInfo {
     section_size: u64,
     ready_section_data: usize,
     section_state: SectionState,
+
+    /// Codestream position (bytes of codestream, excluding any container
+    /// overhead) at which the current frame's section data begins.
+    ///
+    /// Cleared when there is no current frame to describe, including for skipped
+    /// frames, where `self.frame` may still hold the *previous* frame and must
+    /// not be paired with this frame's offset. `Some` therefore means
+    /// "`self.frame` is the frame this offset belongs to", which is what the TOC
+    /// accessors gate on.
+    frame_data_codestream_pos: Option<u64>,
 
     // Or only section if in single section special case.
     lf_global_section: Option<SectionBuffer>,
@@ -92,6 +107,7 @@ impl FrameInfo {
             section_size: 0,
             ready_section_data: 0,
             section_state: SectionState::new(0, 0),
+            frame_data_codestream_pos: None,
             lf_global_section: None,
             lf_sections: vec![],
             hf_global_section: None,
@@ -118,6 +134,7 @@ impl FrameInfo {
 
     pub fn clear(&mut self) {
         self.frame_header = None;
+        self.frame_data_codestream_pos = None;
         self.toc_parser = None;
         self.section_size = 0;
         self.ready_section_data = 0;
@@ -141,6 +158,37 @@ impl FrameInfo {
     #[cfg(test)]
     pub fn current_toc(&self) -> Option<&crate::headers::toc::Toc> {
         self.frame.as_ref().map(|x| x.toc())
+    }
+
+    /// The frame the TOC accessors describe: `self.frame`, but only while it is
+    /// the frame that `frame_data_codestream_pos` belongs to.
+    fn described_frame(&self) -> Option<&Frame> {
+        self.frame_data_codestream_pos.and(self.frame.as_deref())
+    }
+
+    pub fn toc_num_entries(&self) -> Option<usize> {
+        self.described_frame().map(|f| f.toc().entries.len())
+    }
+
+    pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.described_frame().and_then(|f| f.toc_entry(index))
+    }
+
+    pub fn frame_data_size(&self) -> Option<u64> {
+        self.described_frame()
+            .map(|f| f.toc().entries.iter().map(|&e| e as u64).sum())
+    }
+
+    pub fn frame_data_codestream_pos(&self) -> Option<u64> {
+        self.described_frame().and(self.frame_data_codestream_pos)
+    }
+
+    pub fn set_frame_data_codestream_pos(&mut self, pos: u64) {
+        self.frame_data_codestream_pos = Some(pos);
+    }
+
+    pub fn num_completed_passes(&self) -> usize {
+        self.section_state.num_completed_passes()
     }
 
     pub fn parse_frame_header(
@@ -327,6 +375,8 @@ impl FrameInfo {
             frame.prepare_render_pipeline(pixel_format, output_profile)?;
             self.frame = Some(frame);
         } else {
+            // No Frame is built for this one; see `frame_data_codestream_pos`.
+            self.frame_data_codestream_pos = None;
             let num = (cbuf.len() as u64).min(self.section_size) as usize;
             cbuf.consume(num);
             self.ready_section_data += num;

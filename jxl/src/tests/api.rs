@@ -711,7 +711,7 @@ fn add_container_header(container: &mut Vec<u8>) {
     container.extend(&ftyp);
 }
 
-fn wrap_with_jxlp_chunks(codestream: &[u8], chunk_starts: &[usize]) -> Vec<u8> {
+pub(crate) fn wrap_with_jxlp_chunks(codestream: &[u8], chunk_starts: &[usize]) -> Vec<u8> {
     let mut starts = chunk_starts.to_vec();
     starts.sort_unstable();
     starts.dedup();

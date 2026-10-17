@@ -7,11 +7,11 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
     Event, ExtraChannel, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDecoder,
-    JxlDecoderOptions,
+    JxlDecoderOptions, TocEntry, TocGroupKind,
 };
 
 fn parse_jxl(path: &Path) -> Result<()> {
@@ -165,6 +165,127 @@ fn parse_jxl(path: &Path) -> Result<()> {
     Ok(())
 }
 
+struct FrameToc {
+    data_start: u64,
+    entries: Vec<TocEntry>,
+}
+
+/// File range `[start, end)` of `size` codestream bytes at `pos`, or `None` if
+/// the mapper has no exact answer. The exclusive end may lie in a box that
+/// doesn't exist (or before a box header), so it is derived from the last byte;
+/// likewise the start of an empty range from the byte before it.
+fn file_range(decoder: &JxlDecoder, pos: u64, size: u64) -> Option<(u64, u64)> {
+    let map = |p| decoder.codestream_offset_to_file_offset(p);
+    if size > 0 {
+        Some((map(pos)?, map(pos + size - 1)? + 1))
+    } else {
+        let start = map(pos).or_else(|| Some(map(pos.checked_sub(1)?)? + 1))?;
+        Some((start, start))
+    }
+}
+
+/// Prints, per frame, the offsets of the section data and of each TOC entry,
+/// plus where the LF and each HF pass are complete: the byte count after which
+/// a progressive reader has that much detail.
+///
+/// Offsets are file offsets, except that for out-of-order `jxlp` boxes (where
+/// the decoder cannot map codestream positions to the file) codestream offsets
+/// are printed instead, after saying so.
+fn print_toc(path: &Path) -> Result<()> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+
+    // Frames are only inspectable between FrameHeader and FrameComplete, but
+    // offsets are resolved at the end, once every box has been parsed (the
+    // codestream may be split over several jxlp boxes). Entries are kept in
+    // codestream coordinates until then.
+    let mut frames = Vec::new();
+    loop {
+        match decoder.process(&mut reader, None, None)? {
+            Event::FrameHeader => {
+                frames.push(FrameToc {
+                    data_start: decoder.frame_data_codestream_offset(),
+                    entries: (0..decoder.toc_num_entries())
+                        .map(|i| decoder.toc_entry(i).unwrap())
+                        .collect(),
+                });
+            }
+            Event::Complete => break,
+            Event::NeedMoreInput { .. } => return Err(eyre!("Source file {:?} truncated", path)),
+            Event::BasicInfo | Event::FrameComplete { .. } => {}
+        }
+    }
+
+    let file_offsets = frames.iter().all(|f| {
+        file_range(&decoder, f.data_start, 0).is_some()
+            && f.entries
+                .iter()
+                .all(|e| file_range(&decoder, f.data_start + e.offset, e.size as u64).is_some())
+    });
+    if !file_offsets {
+        println!("file offsets unavailable (out-of-order jxlp boxes); showing codestream offsets");
+    }
+    let range = |pos: u64, size: u64| {
+        if file_offsets {
+            file_range(&decoder, pos, size).unwrap()
+        } else {
+            (pos, pos + size)
+        }
+    };
+
+    for (idx, frame) in frames.iter().enumerate() {
+        println!(
+            "Frame {idx}: section data starts at byte {}",
+            range(frame.data_start, 0).0
+        );
+
+        let mut lf_global_end = None;
+        let mut lf_end = None;
+        let mut hf_global_end = None;
+        let mut pass_ends: Vec<Option<u64>> = Vec::new();
+        let max = |cur: &mut Option<u64>, end: u64| *cur = Some(cur.map_or(end, |c| c.max(end)));
+        for e in &frame.entries {
+            let (start, end) = range(frame.data_start + e.offset, e.size as u64);
+            let kind = match e.kind {
+                TocGroupKind::All => "All".to_string(),
+                TocGroupKind::LfGlobal => "LfGlobal".to_string(),
+                TocGroupKind::LfGroup(g) => format!("LfGroup {g}"),
+                TocGroupKind::HfGlobal => "HfGlobal".to_string(),
+                TocGroupKind::GroupPass {
+                    pass_idx,
+                    group_idx,
+                } => format!("Pass {pass_idx} group {group_idx}"),
+            };
+            println!("  {kind}: bytes {start} to {end} ({} B)", e.size);
+            match e.kind {
+                TocGroupKind::All | TocGroupKind::LfGlobal => max(&mut lf_global_end, end),
+                TocGroupKind::LfGroup(_) => max(&mut lf_end, end),
+                TocGroupKind::HfGlobal => max(&mut hf_global_end, end),
+                TocGroupKind::GroupPass { pass_idx, .. } => {
+                    let pass_idx = pass_idx as usize;
+                    if pass_ends.len() <= pass_idx {
+                        pass_ends.resize(pass_idx + 1, None);
+                    }
+                    max(&mut pass_ends[pass_idx], end);
+                }
+            }
+        }
+
+        let print_end = |label: &str, end: Option<u64>| {
+            if let Some(end) = end {
+                println!("  {label}: ends at byte {end}");
+            }
+        };
+        print_end("LfGlobal", lf_global_end);
+        print_end("LF groups", lf_end);
+        print_end("HfGlobal", hf_global_end);
+        for (pass, end) in pass_ends.into_iter().enumerate() {
+            print_end(&format!("HF pass {pass}"), end);
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     #[cfg(feature = "tracing-subscriber")]
     {
@@ -184,11 +305,20 @@ fn main() {
                 .required(true)
                 .index(1),
         )
+        .arg(
+            Arg::new("toc")
+                .long("toc")
+                .help("Also print the file offset of each frame section, and where the LF and each HF pass end")
+                .action(ArgAction::SetTrue),
+        )
         .get_matches();
 
     let filename = Path::new(matches.get_one::<String>("filename").unwrap());
 
-    let res = parse_jxl(filename);
+    let mut res = parse_jxl(filename);
+    if res.is_ok() && matches.get_flag("toc") {
+        res = print_toc(filename);
+    }
     if let Err(err) = res {
         println!("Error parsing JXL codestream: {err}");
     }

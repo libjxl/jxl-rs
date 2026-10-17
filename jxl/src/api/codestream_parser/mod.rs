@@ -343,6 +343,13 @@ impl CodestreamParser {
                             .with_br(|br, bits| c.frame_info.parse_toc(br, bits))
                     })?;
 
+                    // The TOC ends byte-aligned and `consumed()` is a running total
+                    // across process() calls, so this is the codestream position of
+                    // the first section byte. Sample it before `make_frame` starts
+                    // consuming section data.
+                    self.frame_info
+                        .set_frame_data_codestream_pos(self.local_buffer.consumed());
+
                     // Decide how much to decode this frame.
                     let mut process_mode = ProcessMode::Process;
 
