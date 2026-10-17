@@ -188,7 +188,8 @@ impl Frame {
             return Ok(false);
         }
 
-        let output_color_info = OutputColorInfo::from_header(&self.decoder_state.file_header)?;
+        let output_color_info =
+            OutputColorInfo::from_header(&self.decoder_state.file_header, Some(output_profile))?;
 
         let Some(output_tf) = output_profile.transfer_function().map(|tf| {
             TransferFunction::from_api_tf(
