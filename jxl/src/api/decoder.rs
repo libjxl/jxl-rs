@@ -324,10 +324,13 @@ impl JxlDecoder {
     ///
     /// Returns `None` if the box containing that position has not been parsed
     /// yet, which can happen mid-stream when the codestream is split over
-    /// several `jxlp` boxes, and always after
-    /// [`start_new_frame`](Self::start_new_frame) until [`reset`](Self::reset),
-    /// since the box map is not rebuilt then. The result for a position is stable
-    /// once it is `Some`.
+    /// several `jxlp` boxes. Boxes parsed before a call to
+    /// [`start_new_frame`](Self::start_new_frame) stay mapped, but no new boxes
+    /// are recorded after seeking, so positions beyond them map to `None`.
+    /// It also returns `None` for out-of-order `jxlp` layouts, from the first
+    /// out-of-order box on: the codestream order then differs from the file
+    /// order, and no exact mapping is tracked. The result for a position is
+    /// stable once it is `Some`.
     ///
     /// To get the file offset one past the last byte of a range, map the range's
     /// last byte and add 1: a range ending at a box boundary has no mapping for

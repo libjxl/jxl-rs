@@ -136,6 +136,10 @@ pub(crate) struct BoxParserCheckpoint {
     pub(crate) file_position: u64,
     codestream_left: Option<u64>,
     is_valid_checkpoint: bool,
+    // Whether `file_position` and the map key are exact: false for boxes seen once
+    // an out-of-order jxlp was, where keys and injected boxes' positions are only
+    // good for checkpoint validity bookkeeping.
+    file_mapped: bool,
     pub(super) consumed_codestream: u64,
     next_aux_box_idx: usize,
 }
@@ -150,6 +154,7 @@ pub(super) struct BoxParser {
     // to box info
     codestream_pos_to_box: BTreeMap<u64, BoxParserCheckpoint>,
     allow_checkpoint: bool,
+    ooo_seen: bool,
     container_level: Option<ProfileLevel>,
     aux: AuxBoxState,
     input_closed: bool,
@@ -175,6 +180,7 @@ impl BoxParser {
             container_level: None,
             codestream_pos_to_box: BTreeMap::new(),
             allow_checkpoint: true,
+            ooo_seen: false,
             aux: AuxBoxState {
                 boxes_to_extract: box_types.into_iter().collect(),
                 ..Default::default()
@@ -209,6 +215,7 @@ impl BoxParser {
         self.latest_codestream_box = CodestreamBoxType::None;
         self.codestream_pos_to_box.clear();
         self.allow_checkpoint = true;
+        self.ooo_seen = false;
         self.container_level = None;
         self.aux.boxes.clear();
         self.aux.box_buffer = None;
@@ -277,14 +284,19 @@ impl BoxParser {
     /// the position lies in the most recently seen codestream box, this looks up
     /// the box actually containing `codestream_pos`.
     ///
-    /// Returns `None` if that box has not been parsed yet, or if no box map is
-    /// available (after seeking, no new checkpoints are recorded).
+    /// Returns `None` if that box has not been parsed yet, if no box map is
+    /// available, or if the position lies in a box recorded after an
+    /// out-of-order `jxlp` box was seen: there the logical codestream order no
+    /// longer follows the file order, so no exact mapping is tracked.
     pub(super) fn file_position_at(&self, codestream_pos: u64) -> Option<u64> {
         let (start, b) = self
             .codestream_pos_to_box
             .range(..=codestream_pos)
             .next_back()?;
         let overflow = codestream_pos - start;
+        if !b.file_mapped {
+            return None;
+        }
         if b.codestream_left.is_some_and(|left| overflow >= left) {
             return None;
         }
@@ -348,6 +360,7 @@ impl BoxParser {
                 box_type: self.latest_codestream_box,
                 codestream_left,
                 is_valid_checkpoint,
+                file_mapped: !self.ooo_seen,
                 consumed_codestream: 0,
                 next_aux_box_idx: self.aux.next_box_idx,
             },
@@ -775,6 +788,7 @@ impl BoxParser {
                     if content_len.is_none() {
                         return Err(Error::InvalidBox);
                     }
+                    self.ooo_seen = true;
                     self.state = ParseState::OOOJxlp(idx, content_len);
                     self.ooo_jxlp_buffer.insert(
                         idx,
