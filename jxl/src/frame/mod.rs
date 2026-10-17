@@ -310,6 +310,9 @@ impl GroupStatus {
 pub struct Frame {
     pub(super) header: FrameHeader,
     toc: Toc,
+    // Per bitstream position: offset of the section from the start of the section
+    // data, and its spec-order index. Precomputed so `toc_entry` is O(1).
+    toc_layout: Vec<(u64, usize)>,
     color_channels: usize,
     pub(super) lf_global: Option<LfGlobalState>,
     pub(super) hf_global: Option<HfGlobalState>,
@@ -359,26 +362,36 @@ impl Frame {
     /// the TOC permutation when present.
     pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
         use crate::api::TocEntry;
-        let sizes = &self.toc.entries;
-        if index >= sizes.len() {
-            return None;
-        }
-        let offset: u64 = sizes[..index].iter().map(|&s| s as u64).sum();
-        // The permutation maps spec index -> bitstream position; invert it.
-        let spec_idx = if self.toc.permuted {
-            self.toc
-                .permutation
-                .iter()
-                .position(|&p| p as usize == index)
-                .unwrap_or(index)
-        } else {
-            index
-        };
+        let &(offset, spec_idx) = self.toc_layout.get(index)?;
         Some(TocEntry {
             kind: self.toc_kind_for_spec_index(spec_idx),
             offset,
-            size: sizes[index],
+            size: self.toc.entries[index],
         })
+    }
+
+    /// Builds `toc_layout`.
+    pub(super) fn toc_layout(toc: &Toc) -> Vec<(u64, usize)> {
+        let mut offset = 0u64;
+        let mut layout: Vec<_> = toc
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, &size)| {
+                let o = offset;
+                offset += size as u64;
+                (o, i)
+            })
+            .collect();
+        // The permutation maps spec index -> bitstream position; invert it.
+        if toc.permuted {
+            for (spec_idx, &pos) in toc.permutation.iter().enumerate() {
+                if let Some(entry) = layout.get_mut(pos as usize) {
+                    entry.1 = spec_idx;
+                }
+            }
+        }
+        layout
     }
 
     /// Maps a spec-order TOC index to its [`TocGroupKind`](crate::api::TocGroupKind).
