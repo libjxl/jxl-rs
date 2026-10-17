@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::bit_reader::BitReader;
 use crate::color::tf::{
     hlg_system_gamma, hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear_precise,
 };
@@ -14,6 +15,8 @@ pub use crate::headers::color_encoding::RenderingIntent;
 use crate::headers::color_encoding::{
     ColorEncoding, ColorSpace, Primaries, TransferFunction, WhitePoint,
 };
+use crate::headers::encodings::{Empty, UnconditionalCoder};
+use crate::icc::IncrementalIccReader;
 use crate::util::{Matrix3x3, Vector3, inv_3x3_matrix, mul_3x3_matrix, mul_3x3_vector};
 
 // Bradford matrices for chromatic adaptation
@@ -1228,6 +1231,45 @@ pub enum JxlColorProfile {
 }
 
 impl JxlColorProfile {
+    /// Decodes the color encoding and compressed ICC field.
+    ///
+    /// This is mainly used to decode an HDR gain map data.
+    pub fn from_raw_bytes(color_encoding: &[u8], encoded_icc: &[u8]) -> Result<Self> {
+        if color_encoding.is_empty() && encoded_icc.is_empty() {
+            return Err(Error::ApiUsageError(
+                "color_encoding and encoded_icc cannot be both empty",
+            ));
+        }
+
+        if !color_encoding.is_empty() {
+            let mut reader = BitReader::new(color_encoding);
+            let encoding = ColorEncoding::read_unconditional(&(), &mut reader, &Empty {})?;
+            reader.jump_to_byte_boundary()?;
+            if reader.total_bits_available() != 0 {
+                return Err(Error::InvalidColorEncoding);
+            }
+
+            if !encoding.want_icc {
+                if !encoded_icc.is_empty() {
+                    return Err(Error::InvalidColorEncoding);
+                }
+                return Ok(Self::Simple(JxlColorEncoding::from_internal(&encoding)?));
+            }
+        }
+
+        let mut reader = BitReader::new(encoded_icc);
+        let mut icc = IncrementalIccReader::new(&mut reader)?;
+        while icc.remaining() != 0 {
+            icc.read_one(&mut reader)?;
+        }
+        let profile = icc.finalize(&mut reader)?;
+        reader.jump_to_byte_boundary()?;
+        if reader.total_bits_available() != 0 {
+            return Err(Error::InvalidIccStream);
+        }
+        Ok(Self::Icc(profile))
+    }
+
     /// Returns the ICC profile, panicking if unavailable.
     ///
     /// # Panics
