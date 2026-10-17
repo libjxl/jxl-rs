@@ -8,7 +8,7 @@ use super::codestream_parser::{CodestreamParser, FrameStartInfo};
 use super::{
     Event, JxlAuxBox, JxlAuxBoxType, JxlBasicInfo, JxlBitstreamInput, JxlColorProfile,
     JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner, JxlParallelRunnerFun,
-    JxlPixelFormat,
+    JxlPixelFormat, TocEntry,
 };
 use crate::error::{Error, Result};
 
@@ -198,6 +198,83 @@ impl JxlDecoder {
                 .map(|anim| frame_header.duration(anim)),
             size,
         })
+    }
+
+    /// Number of passes for which every group of the current frame has data.
+    ///
+    /// Only grows while a frame is being fed, which makes it a cheap trigger for
+    /// progressive consumers: re-render when it increases. Returns 0 outside
+    /// [`Event::FrameHeader`](crate::api::Event::FrameHeader) ..
+    /// [`Event::FrameComplete`](crate::api::Event::FrameComplete).
+    pub fn num_completed_passes(&self) -> usize {
+        if !self.codestream_parser.has_visible_frame() {
+            return 0;
+        }
+        self.codestream_parser.frame_info.num_completed_passes()
+    }
+
+    /// Number of TOC entries in the current frame: 1 for single-section frames,
+    /// else `2 + num_lf_groups + num_passes * num_groups`.
+    ///
+    /// Like the other TOC accessors, this is only available between
+    /// [`Event::FrameHeader`](crate::api::Event::FrameHeader) and
+    /// [`Event::FrameComplete`](crate::api::Event::FrameComplete), and returns 0
+    /// outside that window (or when the frame is not decoded, e.g. under
+    /// [`JxlDecoderOptions::scan_frames_only`]).
+    pub fn toc_num_entries(&self) -> usize {
+        if !self.codestream_parser.has_visible_frame() {
+            return 0;
+        }
+        self.codestream_parser
+            .frame_info
+            .toc_num_entries()
+            .unwrap_or(0)
+    }
+
+    /// Returns the TOC entry at `index` of the current frame, or `None` if out
+    /// of bounds or outside the window described at
+    /// [`toc_num_entries`](Self::toc_num_entries).
+    ///
+    /// Entries are in **bitstream (physical) order**, the order in which the
+    /// sections are stored. For a permuted TOC this differs from the spec
+    /// order, and `kind` is resolved through the permutation, so it always
+    /// describes the section actually stored at that position. The section
+    /// offsets are relative to [`frame_data_offset`](Self::frame_data_offset).
+    pub fn toc_entry(&self, index: usize) -> Option<TocEntry> {
+        if !self.codestream_parser.has_visible_frame() {
+            return None;
+        }
+        self.codestream_parser.frame_info.toc_entry(index)
+    }
+
+    /// Total size in bytes of the current frame's section data, i.e. the sum of
+    /// all TOC entry sizes. Entries are in bitstream order, so this is also the
+    /// distance from the first to the end of the last section. 0 outside the
+    /// window described at [`toc_num_entries`](Self::toc_num_entries).
+    pub fn frame_data_size(&self) -> u64 {
+        if !self.codestream_parser.has_visible_frame() {
+            return 0;
+        }
+        self.codestream_parser
+            .frame_info
+            .frame_data_size()
+            .unwrap_or(0)
+    }
+
+    /// File-absolute byte offset (including any container overhead) at which
+    /// the first section of the current frame, in bitstream order, begins:
+    /// immediately after the frame header and TOC. 0 outside the window
+    /// described at [`toc_num_entries`](Self::toc_num_entries).
+    ///
+    /// [`toc_entry`](Self::toc_entry) offsets are relative to this.
+    pub fn frame_data_offset(&self) -> u64 {
+        if !self.codestream_parser.has_visible_frame() {
+            return 0;
+        }
+        self.codestream_parser
+            .frame_info
+            .frame_data_offset()
+            .unwrap_or(0)
     }
 
     /// Returns visible frame info entries collected during parsing.

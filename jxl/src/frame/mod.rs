@@ -350,6 +350,63 @@ impl Frame {
         &self.header
     }
 
+    /// Returns the TOC entry at `index`, in **bitstream (physical) order**, or
+    /// `None` if out of bounds.
+    ///
+    /// The entry's `offset` is the sum of the sizes of the preceding physical
+    /// sections, relative to the start of the frame's section data. `kind` is
+    /// the logical section stored at this physical position, resolved through
+    /// the TOC permutation when present.
+    pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        use crate::api::TocEntry;
+        let sizes = &self.toc.entries;
+        if index >= sizes.len() {
+            return None;
+        }
+        let offset: u64 = sizes[..index].iter().map(|&s| s as u64).sum();
+        // The permutation maps spec index -> bitstream position; invert it.
+        let spec_idx = if self.toc.permuted {
+            self.toc
+                .permutation
+                .iter()
+                .position(|&p| p as usize == index)
+                .unwrap_or(index)
+        } else {
+            index
+        };
+        Some(TocEntry {
+            kind: self.toc_kind_for_spec_index(spec_idx),
+            offset,
+            size: sizes[index],
+        })
+    }
+
+    /// Maps a spec-order TOC index to its [`TocGroupKind`](crate::api::TocGroupKind).
+    ///
+    /// This is the inverse of [`get_section_idx`](Self::get_section_idx) and must
+    /// be kept in sync with it.
+    fn toc_kind_for_spec_index(&self, spec_idx: usize) -> crate::api::TocGroupKind {
+        use crate::api::TocGroupKind;
+        if self.header.num_toc_entries() == 1 {
+            return TocGroupKind::All;
+        }
+        let num_lf_groups = self.header.num_lf_groups();
+        let num_groups = self.header.num_groups();
+        if spec_idx == 0 {
+            TocGroupKind::LfGlobal
+        } else if spec_idx <= num_lf_groups {
+            TocGroupKind::LfGroup((spec_idx - 1) as u32)
+        } else if spec_idx == num_lf_groups + 1 {
+            TocGroupKind::HfGlobal
+        } else {
+            let j = spec_idx - (num_lf_groups + 2);
+            TocGroupKind::GroupPass {
+                pass_idx: (j / num_groups) as u32,
+                group_idx: (j % num_groups) as u32,
+            }
+        }
+    }
+
     #[instrument(level = "debug", skip(self), ret)]
     pub fn get_section_idx(&self, section: Section) -> usize {
         if self.header.num_toc_entries() == 1 {

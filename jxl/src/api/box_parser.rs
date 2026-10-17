@@ -269,6 +269,23 @@ impl BoxParser {
         b.file_position + codestream_bytes_consumed.saturating_sub(*start)
     }
 
+    /// Maps a *codestream* byte position to the corresponding position in the
+    /// input file, adding back any container overhead that precedes it.
+    ///
+    /// Unlike [`total_bytes_consumed`](Self::total_bytes_consumed), which assumes
+    /// the position lies in the most recently seen codestream box, this looks up
+    /// the box actually containing `codestream_pos`, which matters for positions
+    /// recorded earlier (the parser may since have moved on to a later `jxlp`
+    /// box). Returns `None` if no box map is available (after seeking, no new
+    /// checkpoints are recorded).
+    pub(super) fn file_position_at(&self, codestream_pos: u64) -> Option<u64> {
+        let (start, b) = self
+            .codestream_pos_to_box
+            .range(..=codestream_pos)
+            .next_back()?;
+        Some(b.file_position + (codestream_pos - *start))
+    }
+
     pub(super) fn aux_boxes(&self, box_type: JxlAuxBoxType) -> &[JxlAuxBox] {
         self.aux
             .boxes
