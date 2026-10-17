@@ -37,6 +37,9 @@ pub struct DecodeOutput {
     pub output_profile: JxlColorProfile,
     pub embedded_profile: JxlColorProfile,
     pub jxl_animation: Option<JxlAnimation>,
+    /// A partial file ended before its first frame rendered anything, so that
+    /// frame was saved blank.
+    pub nothing_rendered: bool,
 }
 
 struct RayonParallelRunner;
@@ -256,6 +259,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         output_profile,
         embedded_profile,
         jxl_animation: info.animation.clone(),
+        nothing_rendered: false,
     };
 
     let extra_channels = info.extra_channels.len() - if interleave_alpha { 1 } else { 0 };
@@ -344,7 +348,11 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     continue;
                 } else if allow_partial_files {
                     if let Some(ref mut output_bufs) = output_bufs {
-                        decoder.flush_pixels(output_bufs, Some(&mut RayonParallelRunner))?;
+                        let changed =
+                            decoder.flush_pixels(output_bufs, Some(&mut RayonParallelRunner))?;
+                        if image_data.frames.is_empty() && !changed && partial_renders.is_empty() {
+                            image_data.nothing_rendered = true;
+                        }
                         image_data.frames.push(ImageFrame {
                             partial_renders,
                             duration: frame_duration,

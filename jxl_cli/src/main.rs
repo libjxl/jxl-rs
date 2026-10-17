@@ -257,5 +257,11 @@ fn main() -> Result<()> {
     save_icc(&output_icc, opt.icc_out.as_ref())?;
     save_icc(&embedded_icc, opt.original_icc_out.as_ref())?;
 
+    if output.nothing_rendered {
+        return Err(eyre!(
+            "Source file truncated before anything was rendered; the output is blank"
+        ));
+    }
+
     Ok(())
 }
