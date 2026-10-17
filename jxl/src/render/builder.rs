@@ -261,43 +261,42 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
 
         let channel_info = &mut self.shared.channel_info;
-        let mut cur_downsamples = vec![(0u8, 0u8); num_channels];
-        for (s, stage) in self.shared.stages.iter().enumerate().rev() {
-            let next_info = &mut channel_info[s + 1];
-            let mut save_downsample = None;
-            for chan in 0..num_channels {
-                let next_chan = &mut next_info[chan];
-                let uses_channel = stage.uses_channel(chan);
-
-                // Arithmetic overflows here should be very uncommon, so custom error variants
-                // are probably unwarranted.
-                let cur_downsample = &mut cur_downsamples[chan];
-                if matches!(stage, Stage::Save(_)) && uses_channel {
-                    if save_downsample.is_none() {
-                        save_downsample = Some(*cur_downsample);
-                    }
-                    if save_downsample != Some(*cur_downsample) {
-                        return Err(Error::SaveDifferentDownsample(
-                            save_downsample.unwrap(),
-                            *cur_downsample,
-                        ));
-                    }
-                }
-                let next_downsample = &mut next_chan.downsample;
-                let next_total_downsample = *cur_downsample;
-                cur_downsample.0 = cur_downsample
+        // Find the input resolution in the fixed image/group coordinate system first.
+        // Keep this separate from assigning stage resolutions: stages that reduce resolution
+        // need to retain a positive downsample amount in their output metadata.
+        let mut input_downsamples = vec![(0u8, 0u8); num_channels];
+        for s in (0..self.shared.stages.len()).rev() {
+            for (chan, input_downsample) in input_downsamples.iter_mut().enumerate() {
+                let shift = channel_info[s + 1][chan].downsample;
+                input_downsample.0 = input_downsample
                     .0
-                    .checked_add(next_downsample.0)
+                    .checked_add(shift.0)
                     .ok_or(Error::ArithmeticOverflow)?;
-                cur_downsample.1 = cur_downsample
+                input_downsample.1 = input_downsample
                     .1
-                    .checked_add(next_downsample.1)
+                    .checked_add(shift.1)
                     .ok_or(Error::ArithmeticOverflow)?;
-                *next_downsample = next_total_downsample;
             }
         }
-        for (chan, cur_downsample) in cur_downsamples.iter().enumerate() {
-            channel_info[0][chan].downsample = *cur_downsample;
+        for (chan, &downsample) in input_downsamples.iter().enumerate() {
+            channel_info[0][chan].downsample = downsample;
+        }
+        for (s, stage) in self.shared.stages.iter().enumerate() {
+            let mut save_downsample = None;
+            for chan in 0..num_channels {
+                let current = channel_info[s][chan].downsample;
+                if matches!(stage, Stage::Save(_)) && stage.uses_channel(chan) {
+                    if let Some(expected) = save_downsample {
+                        if expected != current {
+                            return Err(Error::SaveDifferentDownsample(expected, current));
+                        }
+                    } else {
+                        save_downsample = Some(current);
+                    }
+                }
+                let shift = channel_info[s + 1][chan].downsample;
+                channel_info[s + 1][chan].downsample = (current.0 - shift.0, current.1 - shift.1);
+            }
         }
         #[cfg(feature = "tracing")]
         {
