@@ -12,7 +12,7 @@ use crate::api::{
     BoxParserCheckpoint, Event, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer,
     JxlParallelRunner, JxlPixelFormat, ProfileLevel, SmallBuffer, VisibleFrameSeekTarget,
 };
-use crate::error::{Error, Result};
+use crate::error::{Error, LevelLimitError, Result};
 use crate::headers::frame_header::FrameHeader;
 
 mod frame_info;
@@ -57,6 +57,17 @@ enum ParserState {
 fn level5_limits(input: &CodestreamInput, decode_options: &JxlDecoderOptions) -> bool {
     decode_options.max_profile_level == ProfileLevel::Main5
         || input.box_parser().container_level() != Some(ProfileLevel::Main10)
+}
+
+fn is_level_limit_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::TreeTooTall(..)
+            | Error::TooManyModularTransforms(..)
+            | Error::TooManyModularChannels(..)
+            | Error::FrameDurationTooShort(..)
+            | Error::SplinesAreaTooLarge(..)
+    ) || matches!(err, Error::PatchesTooMany(s, ..) if s == "patch area")
 }
 
 fn check_size_limit(
@@ -277,6 +288,20 @@ impl CodestreamParser {
                 Err(Error::UnexpectedCodestreamBoxEnd)
             }
             Err(Error::OutOfBounds(size_hint)) => Ok(Event::NeedMoreInput { size_hint }),
+            Err(e) if is_level_limit_error(&e) => {
+                let container_level = input
+                    .box_parser()
+                    .container_level()
+                    .unwrap_or(ProfileLevel::Main5);
+                if container_level < decode_options.max_profile_level {
+                    Err(Error::LackingCodestreamBox)
+                } else {
+                    Err(Error::LevelLimitError(LevelLimitError::new(
+                        e,
+                        decode_options.max_profile_level,
+                    )))
+                }
+            }
             result => result,
         }
     }

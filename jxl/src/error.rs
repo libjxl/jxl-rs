@@ -7,10 +7,32 @@ use std::collections::TryReserveError;
 
 use thiserror::Error;
 
-use crate::api::{JxlColorType, JxlDataFormat};
+use crate::api::{JxlColorType, JxlDataFormat, ProfileLevel};
 use crate::entropy_coding::huffman::HUFFMAN_MAX_BITS;
 use crate::features::spline::Point;
 use crate::image::DataTypeTag;
+
+/// Error returned when JPEG XL Profile/Level limits are exceeded.
+#[derive(Error, Debug)]
+#[error("{inner} ({level} exceeded)")]
+pub struct LevelLimitError {
+    #[source]
+    pub inner: Box<Error>,
+    pub level: ProfileLevel,
+}
+
+impl LevelLimitError {
+    pub fn new(inner: Error, level: ProfileLevel) -> Self {
+        Self {
+            inner: Box::new(inner),
+            level,
+        }
+    }
+
+    pub fn details(&self) -> &Error {
+        &self.inner
+    }
+}
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -63,6 +85,10 @@ pub enum Error {
     InvalidBox,
     #[error("Unexpected end of codestream box")]
     UnexpectedCodestreamBoxEnd,
+    #[error("Lacking codestream box (invalid file)")]
+    LackingCodestreamBox,
+    #[error("{0}")]
+    LevelLimitError(#[from] LevelLimitError),
     #[error("ICC is too large")]
     IccTooLarge,
     #[error("Invalid ICC stream: unexpected end of stream")]

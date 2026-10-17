@@ -81,6 +81,15 @@ pub enum ProfileLevel {
     Main10,
 }
 
+impl std::fmt::Display for ProfileLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProfileLevel::Main5 => write!(f, "Level 5"),
+            ProfileLevel::Main10 => write!(f, "Level 10"),
+        }
+    }
+}
+
 impl Default for JxlDecoderOptions {
     fn default() -> Self {
         Self {
