@@ -412,13 +412,10 @@ impl FullModularImage {
 
         let max_palette_samples = sample_limit.unwrap_or(usize::MAX);
 
-        let max_channels = max_channels(level5_limits);
-
         let (mut buffer_info, transform_steps) = transforms::meta_apply::meta_apply_transforms(
             &channels,
             &header,
             max_palette_samples,
-            max_channels,
             storage,
             level5_limits,
         )?;

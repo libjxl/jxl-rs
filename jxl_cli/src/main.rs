@@ -193,7 +193,24 @@ fn main() -> Result<()> {
                 opt.render_interval,
                 opt.allow_partial_files,
                 $prev_output,
-            )?;
+            )
+            .map_err(|err| {
+                if let Some(jxl::error::Error::LevelLimitExceeded {
+                    level: ProfileLevel::Main5,
+                    ..
+                }) = err.downcast_ref()
+                {
+                    if allow_level10 {
+                        err.wrap_err(
+                            "Level 5 limits were enforced because the file lacks a Level 10 container box (jxll)",
+                        )
+                    } else {
+                        err.wrap_err("Pass --allow-level10 to allow Level 10 limits")
+                    }
+                } else {
+                    err
+                }
+            })?;
             if opt.preview {
                 output.frames.truncate(1);
                 let ctype = output.frames[0].color_type;

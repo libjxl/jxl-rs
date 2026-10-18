@@ -7,7 +7,7 @@ use std::collections::TryReserveError;
 
 use thiserror::Error;
 
-use crate::api::{JxlColorType, JxlDataFormat};
+use crate::api::{JxlColorType, JxlDataFormat, ProfileLevel};
 use crate::entropy_coding::huffman::HUFFMAN_MAX_BITS;
 use crate::features::spline::Point;
 use crate::image::DataTypeTag;
@@ -177,10 +177,6 @@ pub enum Error {
     PatchesRefTooLarge(usize, usize),
     #[error("Point list is empty")]
     PointListEmpty,
-    #[error("Too large area for spline: {0}, limit is {1}")]
-    SplinesAreaTooLarge(u64, u64),
-    #[error("Too large manhattan_distance reached: {0}, limit is {1}")]
-    SplinesDistanceTooLarge(u64, u64),
     #[error("Too many splines: {0}, limit is {1}")]
     SplinesTooMany(u32, u32),
     #[error("Spline has adjacent coinciding control points: point[{0}]: {1:?}, point[{2}]: {3:?}")]
@@ -195,10 +191,6 @@ pub enum Error {
     SplinesCoordinatesLimit(isize, isize),
     #[error("Spline delta-delta is out of bounds: {0}, limit is {1}")]
     SplinesDeltaLimit(i64, i64),
-    #[error("Modular tree too large: {0}, limit is {1}")]
-    TreeTooLarge(usize, usize),
-    #[error("Modular tree too tall: {0}, limit is {1}")]
-    TreeTooTall(usize, usize),
     #[error("Modular tree multiplier too large: {0}, limit is {1}")]
     TreeMultiplierTooLarge(u32, u32),
     #[error("Modular tree multiplier too large: {0}, multiplier log is {1}")]
@@ -223,8 +215,6 @@ pub enum Error {
     TooManySqueezes,
     #[error("Palette meta-channel too large: {0} samples > limit {1}")]
     PaletteTooLarge(usize, usize),
-    #[error("Too many modular channels: {0} > limit {1}")]
-    TooManyModularChannels(usize, usize),
     #[error("Invalid BlockConextMap: too big: num_lf_context: {0}, num_qf_thresholds: {1}")]
     BlockContextMapSizeTooBig(usize, usize),
     #[error("Invalid BlockConextMap: too many distinct contexts.")]
@@ -283,12 +273,35 @@ pub enum Error {
     NoLfFrame(u32),
     #[error("Brotli decompress error: {0}")]
     Brotli(std::io::Error),
-    #[error("Too many modular transforms: {0} > {1}")]
-    TooManyModularTransforms(usize, usize),
-    #[error("Frame duration {0} is too short (min 1/120s)")]
-    FrameDurationTooShort(u32),
+    #[error("{level} limit exceeded for {limit}: {val} > {max}")]
+    LevelLimitExceeded {
+        level: ProfileLevel,
+        limit: &'static str,
+        val: u64,
+        max: u64,
+    },
     #[error("API usage error: {0}")]
     ApiUsageError(&'static str),
+}
+
+impl Error {
+    pub(crate) fn level_limit(
+        level5_limits: bool,
+        limit: &'static str,
+        val: u64,
+        max: u64,
+    ) -> Self {
+        Self::LevelLimitExceeded {
+            level: if level5_limits {
+                ProfileLevel::Main5
+            } else {
+                ProfileLevel::Main10
+            },
+            limit,
+            val,
+            max,
+        }
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

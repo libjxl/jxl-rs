@@ -175,7 +175,14 @@ impl FrameInfo {
             && (frame_header.duration as u128) * (anim.tps_denominator as u128) * 120
                 < (anim.tps_numerator as u128)
         {
-            return Err(Error::FrameDurationTooShort(frame_header.duration));
+            let fps = (anim.tps_numerator as u64)
+                .div_ceil(((frame_header.duration as u64) * (anim.tps_denominator as u64)).max(1));
+            return Err(Error::level_limit(
+                level5_limits,
+                "frame rate (fps)",
+                fps,
+                120,
+            ));
         }
 
         self.frame_header = Some(frame_header);
