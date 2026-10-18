@@ -69,8 +69,20 @@ impl ImageInfo {
         decode_options: &JxlDecoderOptions,
         br: &mut BitReader,
         bits: &mut usize,
+        level5_limits: bool,
     ) -> Result<()> {
         let file_header = FileHeader::read(br)?;
+        let num_ec = file_header.image_metadata.extra_channel_info.len();
+        let max_num_ec = if level5_limits { 4 } else { 256 };
+        if num_ec > max_num_ec {
+            return Err(Error::level_limit(
+                level5_limits,
+                "extra channels",
+                num_ec as u64,
+                max_num_ec as u64,
+            ));
+        }
+
         let xsize = file_header.size.xsize() as usize;
         let ysize = file_header.size.ysize() as usize;
         check_size_limit(

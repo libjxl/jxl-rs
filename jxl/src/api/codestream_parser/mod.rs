@@ -294,9 +294,11 @@ impl CodestreamParser {
         loop {
             match self.state {
                 ParserState::FileHeader => {
-                    self.refill_and_parse(input, |c, _| {
+                    self.refill_and_parse(input, |c, input| {
                         c.local_buffer.with_br(|br, bits| {
-                            c.image_info.parse_file_header(decode_options, br, bits)
+                            let level5_limits = level5_limits(input, decode_options);
+                            c.image_info
+                                .parse_file_header(decode_options, br, bits, level5_limits)
                         })
                     })?;
                     self.state = ParserState::ColorEncoding;

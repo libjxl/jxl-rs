@@ -267,8 +267,6 @@ pub enum Error {
     InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
     #[error("Attempting to save channels with different downsample amounts: {0:?} and {1:?}")]
     SaveDifferentDownsample((u8, u8), (u8, u8)),
-    #[error("Image has {0} extra channels, more than the maximum of 256")]
-    TooManyExtraChannels(usize),
     #[error("No LF frame for level {0}")]
     NoLfFrame(u32),
     #[error("Brotli decompress error: {0}")]
