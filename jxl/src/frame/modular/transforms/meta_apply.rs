@@ -11,7 +11,7 @@ use crate::frame::modular::buffers::NeededBorders;
 use crate::frame::modular::transforms::step::{TransformStep, TransformStepChunk};
 use crate::frame::modular::{
     ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, ModularStorage, Predictor,
-    max_channels,
+    max_channels, max_modular_transforms,
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::TransformId;
@@ -256,12 +256,13 @@ pub fn meta_apply_transforms(
     storage: ModularStorage,
     level5_limits: bool,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
-    if level5_limits && header.transforms.len() > 8 {
+    let max_transforms = max_modular_transforms(level5_limits);
+    if header.transforms.len() > max_transforms {
         return Err(Error::level_limit(
             level5_limits,
             "modular transforms",
             header.transforms.len() as u64,
-            8,
+            max_transforms as u64,
         ));
     }
     let max_channels = max_channels(level5_limits);
