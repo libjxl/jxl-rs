@@ -182,7 +182,6 @@ impl ToneMapping {
 
 #[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug, Clone)]
-#[validate]
 pub struct ImageMetadata {
     #[all_default]
     all_default: bool,
@@ -221,13 +220,4 @@ pub struct ImageMetadata {
     #[default(ToneMapping::default(&field_nonserialized))]
     pub tone_mapping: ToneMapping,
     extensions: Option<Extensions>,
-}
-
-impl ImageMetadata {
-    fn check(&self, _: &Empty) -> Result<(), Error> {
-        if self.extra_channel_info.len() > 256 {
-            return Err(Error::TooManyExtraChannels(self.extra_channel_info.len()));
-        }
-        Ok(())
-    }
 }

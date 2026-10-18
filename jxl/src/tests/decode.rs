@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::api::{
     AlphaMode, Event, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat,
-    TestOptions, VisibleFrameInfo,
+    ProfileLevel, TestOptions, VisibleFrameInfo,
 };
 use crate::error::{Error, Result};
 use crate::headers::FileHeader;
@@ -68,6 +68,7 @@ pub fn decode<'a, T: ImageDataType>(
     let options = JxlDecoderOptions {
         adjust_orientation: params.adjust_orientation,
         alpha_mode: params.alpha_mode,
+        max_profile_level: ProfileLevel::Main10,
         test_options: TestOptions {
             use_simple_pipeline: params.use_simple_pipeline,
             disable_16bit_modular_buffers: params.disable_16bit_modular_buffers,
@@ -188,6 +189,7 @@ pub fn scan_frames(mut input: &[u8], chunk_size: usize) -> Vec<VisibleFrameInfo>
     let options = JxlDecoderOptions {
         scan_frames_only: true,
         skip_preview: false,
+        max_profile_level: ProfileLevel::Main10,
         ..Default::default()
     };
     let mut decoder = JxlDecoder::new(options);
@@ -238,7 +240,11 @@ pub fn compute_mse(actual: &[Image<f32>], reference: &[Image<f32>]) -> f32 {
 }
 
 pub fn image_size(mut input: &[u8]) -> Result<(usize, usize)> {
-    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let options = JxlDecoderOptions {
+        max_profile_level: ProfileLevel::Main10,
+        ..Default::default()
+    };
+    let mut decoder = JxlDecoder::new(options);
     assert_eq!(decoder.process(&mut input, None, None)?, Event::BasicInfo);
     Ok(decoder.basic_info().unwrap().size)
 }
@@ -373,7 +379,11 @@ pub fn has_decoded_pixels(frames: &[Vec<Image<f32>>]) -> bool {
 }
 
 pub fn read_headers_and_toc(mut input: &[u8]) -> Result<(FileHeader, FrameHeader, Toc)> {
-    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let options = JxlDecoderOptions {
+        max_profile_level: ProfileLevel::Main10,
+        ..Default::default()
+    };
+    let mut decoder = JxlDecoder::new(options);
 
     for expected in [Event::BasicInfo, Event::FrameHeader] {
         assert_eq!(decoder.process(&mut input, None, None)?, expected);
