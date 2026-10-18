@@ -293,7 +293,11 @@ pub struct FullModularImage {
     pub(super) level5_limits: bool,
 }
 
-pub(super) fn max_channels(level5_limits: bool) -> usize {
+fn max_modular_transforms(level5_limits: bool) -> usize {
+    if level5_limits { 8 } else { 512 }
+}
+
+fn max_channels(level5_limits: bool) -> usize {
     if level5_limits { 256 } else { 1 << 16 }
 }
 

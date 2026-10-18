@@ -9,7 +9,9 @@ use crate::frame::modular::buffers::ModularChannel;
 use crate::frame::modular::transforms::meta_apply::meta_apply_single_transform;
 use crate::frame::modular::transforms::palette::PaletteStep;
 use crate::frame::modular::transforms::step::TransformStep;
-use crate::frame::modular::{ChannelInfo, ModularStorage, ScratchSpace, max_channels};
+use crate::frame::modular::{
+    ChannelInfo, ModularStorage, ScratchSpace, max_channels, max_modular_transforms,
+};
 use crate::headers::modular::GroupHeader;
 use crate::image::BufferRecycler;
 use crate::util::tracing_wrappers::*;
@@ -96,12 +98,13 @@ pub fn meta_apply_local_transforms<'a, 'b>(
         .enumerate()
         .collect();
 
-    if level5_limits && header.transforms.len() > 8 {
+    let max_transforms = max_modular_transforms(level5_limits);
+    if header.transforms.len() > max_transforms {
         return Err(Error::level_limit(
             level5_limits,
             "modular transforms",
             header.transforms.len() as u64,
-            8,
+            max_transforms as u64,
         ));
     }
 
