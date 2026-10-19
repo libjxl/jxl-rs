@@ -230,6 +230,12 @@ fn main() -> Result<()> {
 
         let mut last_output = None;
 
+        println!(
+            "Running {} warmups, {} reps, {} total decodes; use -w and -n to change...",
+            opt.warmup_reps,
+            opt.num_reps,
+            opt.num_reps + opt.warmup_reps
+        );
         for _ in 0..opt.warmup_reps {
             let (output, _) = run_decoder!(&mut input_bytes.as_slice(), last_output.take());
             last_output = Some(output);
