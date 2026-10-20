@@ -10,6 +10,7 @@ use crate::image::Rect;
 use crate::render::LowMemoryRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::internal::{ChannelInfo, Stage};
+use crate::util::ShiftRightCeil;
 use crate::util::tracing_wrappers::*;
 
 // Finds a small set of rectangles that cover all the "true" values in `ready_mask`,
@@ -143,10 +144,16 @@ impl LowMemoryRenderPipeline {
 
         // Prepare output buffers for the group.
         let (origin, size) = if let Some(e) = self.shared.extend_stage_index {
+            let (dx, dy) = self.downsampling_for_stage[e];
             let Stage::Extend(e) = &self.shared.stages[e] else {
                 unreachable!("extend stage is not an extend stage");
             };
-            (e.frame_origin, e.image_size)
+            // BufferSplitter accepts virtual coordinates, while Extend works
+            // in the resolution at its position in the pipeline.
+            (
+                (e.frame_origin.0 << dx, e.frame_origin.1 << dy),
+                (e.image_size.0 << dx, e.image_size.1 << dy),
+            )
         } else {
             ((0, 0), self.shared.input_size)
         };
@@ -174,7 +181,13 @@ impl LowMemoryRenderPipeline {
                 }
                 let data = buf.data[c].try_read().unwrap();
                 let input = data.as_ref().unwrap();
+
+                // Crop input buffers to the actual group size.
+                let (gw, gh) = self.shared.group_size(g);
                 let (sx, sy) = input.byte_size();
+                let sx = sx.min(gw.shrc(dx) * ty.size());
+                let sy = sy.min(gh.shrc(dy));
+
                 if by != 0 {
                     let mut topbottom =
                         if let Some(b) = buf.topbottom[c].try_write().unwrap().take() {
@@ -187,9 +200,9 @@ impl LowMemoryRenderPipeline {
                                 .get_raw_buffer((width, height), false)?
                         };
                     for y in 0..(2 * by).min(sy) {
-                        topbottom.row_mut(y)[..sx].copy_from_slice(input.row(y));
+                        topbottom.row_mut(y)[..sx].copy_from_slice(&input.row(y)[..sx]);
                         topbottom.row_mut(4 * by - 1 - y)[..sx]
-                            .copy_from_slice(input.row(sy - y - 1));
+                            .copy_from_slice(&input.row(sy - y - 1)[..sx]);
                     }
                     *buf.topbottom[c].try_write().unwrap() = Some(topbottom);
                 }
@@ -209,7 +222,7 @@ impl LowMemoryRenderPipeline {
                         let row_out = leftright.row_mut(y);
                         let row_in = input.row(y);
                         row_out[..cs].copy_from_slice(&row_in[..cs]);
-                        row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
+                        row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..sx]);
                     }
                     *buf.leftright[c].try_write().unwrap() = Some(leftright);
                 }

@@ -69,6 +69,10 @@ struct Opt {
     #[clap(long, short, action)]
     info: bool,
 
+    /// Render at 1 / 2^factor resolution (0 = full resolution, maximum 3).
+    #[clap(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+    downsample_factor: u8,
+
     /// Use high precision mode for decoding
     #[clap(long)]
     high_precision: bool,
@@ -127,6 +131,7 @@ fn main() -> Result<()> {
         options.render_spot_colors = !matches!(output_format, Some(OutputFormat::Npy));
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
+        options.downsample_factor = opt.downsample_factor;
         if allow_level10 {
             options.max_profile_level = ProfileLevel::Main10;
         }

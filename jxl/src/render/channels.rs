@@ -9,7 +9,7 @@ use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor};
 
 use crate::image::ImageDataType;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
-use crate::util::{SmallVec, StackOnly, mirror};
+use crate::util::{SmallVec, mirror};
 
 pub trait VecLoad<D: SimdDescriptor>: Sized + Copy {
     type Vec: Copy;
@@ -98,7 +98,7 @@ impl<D: SimdDescriptor> StoreInterleaved<D, 8> for f32 {
 const MAX_SIMD_LANES: usize = 16;
 
 pub struct Channels<'a, T> {
-    channel_buffers: SmallVec<&'a [T], 8, StackOnly>,
+    channel_buffers: SmallVec<&'a [T], 8>,
     x_offset: usize,
     center_y: usize,
     num_rows: usize,
@@ -107,6 +107,18 @@ pub struct Channels<'a, T> {
 }
 
 impl<'a, T> Channels<'a, T> {
+    /// Central input row, starting at the current chunk's first pixel.
+    pub fn row(&self, channel: usize) -> &[T] {
+        self.row_at(channel, 0)
+    }
+
+    /// Input row at a vertical offset, mirrored at the image edge.
+    pub fn row_at(&self, channel: usize, dy: isize) -> &[T] {
+        let y = mirror(self.center_y as isize + dy, self.image_height);
+        let row = (y & (self.num_rows - 1)) * self.stride;
+        &self.channel_buffers[channel][row + self.x_offset..row + self.stride]
+    }
+
     #[inline]
     pub fn from_row_buffers(
         buffers: &[&'a RowBuffer],
@@ -118,7 +130,6 @@ impl<'a, T> Channels<'a, T> {
     where
         T: ImageDataType,
     {
-        debug_assert!(buffers.len() <= 8);
         debug_assert!(x_offset >= border_x);
         let mut channel_buffers = SmallVec::new();
         let (num_rows, stride) = if let Some(first) = buffers.first() {
@@ -251,7 +262,7 @@ impl<'a, T, const CHANS: usize, const ROWS: usize, const RADIUS: usize>
 }
 
 pub struct ChannelsMut<'a, T> {
-    channel_buffers: SmallVec<&'a mut [T], 8, StackOnly>,
+    channel_buffers: SmallVec<&'a mut [T], 8>,
     x_offset: usize,
     first_y: usize,
     num_rows: usize,
@@ -259,6 +270,13 @@ pub struct ChannelsMut<'a, T> {
 }
 
 impl<'a, T> ChannelsMut<'a, T> {
+    /// An output row, including previously accumulated contributions.
+    pub fn row_mut(&mut self, channel: usize, row: usize) -> &mut [T] {
+        assert!(row < self.num_rows);
+        let row = ((self.first_y + row) & (self.num_rows - 1)) * self.stride;
+        &mut self.channel_buffers[channel][row + self.x_offset..row + self.stride]
+    }
+
     #[inline]
     pub fn from_row_buffers(
         buffers: &'a mut [RowBuffer],
@@ -269,7 +287,6 @@ impl<'a, T> ChannelsMut<'a, T> {
     where
         T: ImageDataType,
     {
-        debug_assert!(buffers.len() <= 8);
         let mut channel_buffers = SmallVec::new();
         let (num_rows, stride) = if let Some(first) = buffers.first() {
             let num_rows = first.num_rows();

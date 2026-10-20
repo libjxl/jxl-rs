@@ -712,7 +712,7 @@ impl TransformStepChunk {
         scratch_space: &mut ScratchSpace,
         recycler: &BufferRecycler,
         pipeline_used_channels: &[bool],
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, OwnedRawImage) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, (usize, usize), OwnedRawImage) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
@@ -1061,6 +1061,9 @@ impl TransformStepChunk {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
                 let buf = &buffers[*buf_in].buffer_grid[out_grid];
                 let storage = buffers[*buf_in].storage;
+                let shift = buffers[*buf_in].info.shift.unwrap();
+                let upsampling_shift = frame_header.upsampling.ilog2() as usize;
+                let decoded_shift = (shift.0 + upsampling_shift, shift.1 + upsampling_shift);
                 if !pipeline_used_channels
                     .get(*channel)
                     .copied()
@@ -1073,7 +1076,7 @@ impl TransformStepChunk {
                     let sz = rect.map(|x| x.size).unwrap_or(buf.size);
                     let sample_size = storage.sample_size();
                     let raw = recycler.get_raw_buffer((sz.0 * sample_size, sz.1), true)?;
-                    pass_to_pipeline(*channel, *group, is_final, raw)?;
+                    pass_to_pipeline(*channel, *group, is_final, decoded_shift, raw)?;
                 } else {
                     let raw = if let Some(rect) = rect {
                         let sample_size = storage.sample_size();
@@ -1092,7 +1095,7 @@ impl TransformStepChunk {
                     } else {
                         buf.get_buffer(buf.can_consume(is_final), recycler)?.data
                     };
-                    pass_to_pipeline(*channel, *group, is_final, raw)?;
+                    pass_to_pipeline(*channel, *group, is_final, decoded_shift, raw)?;
                 }
             }
         };

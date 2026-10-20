@@ -19,6 +19,7 @@ pub trait SmallVecHeapStorage<T> {
     fn extend<Iter: Iterator<Item = T>>(&mut self, iter: Iter);
 }
 
+#[cfg_attr(not(test), expect(unused))]
 pub enum StackOnly {}
 
 impl<T> SmallVecHeapStorage<T> for StackOnly {
