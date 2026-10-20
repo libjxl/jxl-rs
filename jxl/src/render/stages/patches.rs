@@ -19,6 +19,7 @@ pub struct PatchesStage {
 struct PatchesState {
     patches_for_row_result: Vec<usize>,
     blending_scratch: Vec<f32>,
+    sampled_channels: Vec<Vec<f32>>,
 }
 
 impl PatchesStage {
@@ -73,6 +74,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
             &self.extra_channels,
             &self.decoder_state[..],
             &mut state.patches_for_row_result,
+            &mut state.sampled_channels,
             &mut state.blending_scratch,
         );
     }
@@ -85,6 +87,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         Ok(Some(Box::new(PatchesState {
             patches_for_row_result,
             blending_scratch: Vec::new(),
+            sampled_channels: Vec::new(),
         }) as Box<ErasedLocalState>))
     }
 }

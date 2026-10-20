@@ -560,6 +560,19 @@ impl FrameHeader {
         self.have_crop || !replace_all
     }
 
+    pub fn needs_full_resolution_blending(&self) -> bool {
+        self.num_extra_channels != 0
+            && self.needs_blending()
+            && std::iter::once(&self.blending_info)
+                .chain(self.ec_blending_info.iter())
+                .any(|info| {
+                    matches!(
+                        info.mode,
+                        BlendingMode::Blend | BlendingMode::AlphaWeightedAdd
+                    )
+                })
+    }
+
     /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.
     pub fn size(&self) -> (usize, usize) {
         let (width, height) = self.size_upsampled();

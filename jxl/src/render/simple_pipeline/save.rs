@@ -22,7 +22,7 @@ impl SaveStage {
         let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
             return Ok(());
         };
-        let size = data[0].size();
+        let size = data[self.channels[0]].size();
 
         self.check_buffer_size(size, Some(buf))?;
 

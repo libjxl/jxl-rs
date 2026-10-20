@@ -40,6 +40,7 @@ pub mod modular;
 mod quant_weights;
 pub mod quantizer;
 pub mod render;
+pub(crate) mod render_shift;
 
 pub(crate) use group::VarDctBuffers;
 
@@ -130,6 +131,7 @@ pub struct DecoderState {
     pub high_precision: bool,
     pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
+    pub output_downsampling_shift: usize,
     pub level5_limits: bool,
     pub sample_limit: Option<usize>,
     // Whether the latest level 1 LF frame was fully rendered.
@@ -173,6 +175,7 @@ impl DecoderState {
             high_precision: options.high_precision,
             alpha_mode: options.alpha_mode,
             adjust_orientation: options.adjust_orientation,
+            output_downsampling_shift: options.downsample_factor as usize,
             level5_limits,
             sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,
@@ -323,6 +326,8 @@ pub struct Frame {
     #[cfg(not(test))]
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
     reference_frame_data: Option<Vec<Image<f32>>>,
+    // Native post-CT foreground for the current frame only, not a reference slot.
+    blending_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
     section0_render_up_to_date: bool,
     group_status: GroupStatus,

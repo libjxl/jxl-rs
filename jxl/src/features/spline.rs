@@ -14,7 +14,7 @@ use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::{Error, Result};
 use crate::frame::color_correlation_map::ColorCorrelationParams;
 use crate::util::tracing_wrappers::*;
-use crate::util::{CeilLog2, NewWithCapacity, fast_cos, fast_erff_simd};
+use crate::util::{CeilLog2, NewWithCapacity, ShiftRightCeil, fast_cos, fast_erff_simd};
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
 const DELTA_LIMIT: i64 = 1 << 30;
@@ -752,6 +752,7 @@ impl Splines {
         color_correlation_params: &ColorCorrelationParams,
         high_precision: bool,
         level5_limits: bool,
+        shift: usize,
     ) -> Result<()> {
         let mut total_estimated_area_reached = 0u64;
         let mut splines = Vec::new();
@@ -759,7 +760,7 @@ impl Splines {
         let image_area = image_xsize.saturating_mul(image_ysize);
         let area_limit = area_limit(image_area, level5_limits);
         for (index, qspline) in self.splines.iter().enumerate() {
-            let spline = qspline.dequantize(
+            let mut spline = qspline.dequantize(
                 &self.starting_points[index],
                 self.quantization_adjustment,
                 color_correlation_params.y_to_x(0),
@@ -777,6 +778,17 @@ impl Splines {
                 ));
             }
             spline.validate_adjacent_point_coincidence()?;
+            // Validate in codestream coordinates, then rasterize directly in the
+            // reduced feature grid rather than retaining a full-size draw cache.
+            if shift != 0 {
+                let scale = 1.0 / (1usize << shift) as f32;
+                for point in &mut spline.control_points {
+                    *point = *point * scale;
+                }
+                for coefficient in &mut spline.sigma_dct.0 {
+                    *coefficient *= scale;
+                }
+            }
             splines.push(spline);
         }
 
@@ -789,6 +801,7 @@ impl Splines {
             );
         }
 
+        let image_ysize = image_ysize.shrc(shift);
         let mut segments_by_y = Vec::new();
 
         self.segments.clear();
@@ -1961,6 +1974,7 @@ mod test_splines {
                 },
                 true,
                 true,
+                0,
             )
             .unwrap_err();
         assert!(matches!(err, Error::LevelLimitExceeded { .. }));
@@ -1977,6 +1991,7 @@ mod test_splines {
             },
             true,
             false,
+            0,
         )?;
         assert_eq!(splines.segments.len(), 1940);
         let want_segments_sample = [
