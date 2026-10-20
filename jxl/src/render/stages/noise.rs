@@ -159,7 +159,7 @@ simd_function!(
 impl RenderPipelineInOutStage for ConvolveNoiseStage {
     type InputT = u16;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (2, 2);
 
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
@@ -182,6 +182,7 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         output_rows: &mut ChannelsMut<f32>,
         state: Option<&mut ErasedLocalState>,
         previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         let state: &mut [Vec<[i32; 16]>; 3] = state.unwrap().downcast_mut().unwrap();
         convolve_noise_simd_dispatch(

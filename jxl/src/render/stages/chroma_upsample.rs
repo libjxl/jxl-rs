@@ -69,7 +69,7 @@ simd_function!(
 impl RenderPipelineInOutStage for HorizontalChromaUpsample {
     type InputT = f32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (1, 0);
+    const SHIFT: (i8, i8) = (1, 0);
     const BORDER: (u8, u8) = (1, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -84,6 +84,7 @@ impl RenderPipelineInOutStage for HorizontalChromaUpsample {
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         hchroma_upsample_simd_dispatch(input_rows, output_rows, xsize);
     }
@@ -145,7 +146,7 @@ simd_function!(
 impl RenderPipelineInOutStage for VerticalChromaUpsample {
     type InputT = f32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 1);
+    const SHIFT: (i8, i8) = (0, 1);
     const BORDER: (u8, u8) = (0, 1);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -160,6 +161,7 @@ impl RenderPipelineInOutStage for VerticalChromaUpsample {
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         vchroma_upsample_simd_dispatch(input_rows, output_rows, xsize);
     }

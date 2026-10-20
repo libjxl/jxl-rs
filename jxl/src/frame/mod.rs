@@ -130,6 +130,7 @@ pub struct DecoderState {
     pub high_precision: bool,
     pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
+    pub output_downsampling_shift: u32,
     pub level5_limits: bool,
     pub sample_limit: Option<usize>,
     // Whether the latest level 1 LF frame was fully rendered.
@@ -173,6 +174,7 @@ impl DecoderState {
             high_precision: options.high_precision,
             alpha_mode: options.alpha_mode,
             adjust_orientation: options.adjust_orientation,
+            output_downsampling_shift: options.downsample_factor as u32,
             level5_limits,
             sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,

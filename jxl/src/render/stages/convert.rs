@@ -106,7 +106,7 @@ simd_function!(
 impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
     type InputT = i32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -121,6 +121,7 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         output_rows: &mut ChannelsMut<f32>,
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         let state: &mut LfQuantState = state.unwrap().downcast_mut().unwrap();
         let lf_quant = state.lf_quant.get(&self.lf_quant);
@@ -170,7 +171,7 @@ impl std::fmt::Display for ConvertModular16XYBToF32Stage {
 impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
     type InputT = i16;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -185,6 +186,7 @@ impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
         output_rows: &mut ChannelsMut<f32>,
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         let state: &mut LfQuantState = state.unwrap().downcast_mut().unwrap();
         let lf_quant = state.lf_quant.get(&self.lf_quant);
@@ -449,7 +451,7 @@ simd_function!(
 impl RenderPipelineInOutStage for ConvertModularToF32Stage {
     type InputT = i32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -464,6 +466,7 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         if self.bit_depth.floating_point_sample() {
             int_to_float(input_rows, output_rows, &self.bit_depth, xsize);
@@ -515,7 +518,7 @@ fn int16_to_float(
 impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
     type InputT = i16;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -530,6 +533,7 @@ impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         if self.bit_depth.floating_point_sample() {
             int16_to_float(input_rows, output_rows, &self.bit_depth, xsize);

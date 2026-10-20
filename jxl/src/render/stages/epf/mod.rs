@@ -67,7 +67,7 @@ macro_rules! stage {
         impl RenderPipelineInOutStage for EpfStage<$step, $border> {
             type InputT = f32;
             type OutputT = f32;
-            const SHIFT: (u8, u8) = (0, 0);
+            const SHIFT: (i8, i8) = (0, 0);
             const BORDER: (u8, u8) = ($border, $border);
 
             fn uses_channel(&self, c: usize) -> bool {
@@ -82,6 +82,7 @@ macro_rules! stage {
                 output_rows: &mut ChannelsMut<f32>,
                 state: Option<&mut ErasedLocalState>,
                 _previous_call_was_previous_row: bool,
+                _flush_output_row: bool,
             ) {
                 if xsize == 0 {
                     return;

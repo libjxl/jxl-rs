@@ -7,6 +7,8 @@ use crate::error::Result;
 use crate::frame::ReferenceFrame;
 use crate::headers::FileHeader;
 use crate::headers::frame_header::*;
+use crate::image::align_origin;
+use crate::util::ShiftRightCeil;
 use crate::util::sync::Arc;
 
 /// Does not directly modify the current image pixels, but extends the current image with
@@ -33,11 +35,16 @@ impl ExtendToImageDimensionsStage {
         frame_header: &FrameHeader,
         file_header: &FileHeader,
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
+        shift: usize,
     ) -> Result<ExtendToImageDimensionsStage> {
-        let xsize = file_header.size.xsize() as usize;
+        let xsize = (file_header.size.xsize() as usize).shrc(shift);
+        let ysize = (file_header.size.ysize() as usize).shrc(shift);
         Ok(ExtendToImageDimensionsStage {
-            frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
-            image_size: (xsize, file_header.size.ysize() as usize),
+            frame_origin: (
+                align_origin(frame_header.x0 as isize, shift),
+                align_origin(frame_header.y0 as isize, shift),
+            ),
+            image_size: (xsize, ysize),
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
             reference_frames,
@@ -101,6 +108,7 @@ mod test {
                     &frame_header,
                     &file_header,
                     reference_frames.clone(),
+                    0,
                 )
                 .unwrap()
             },

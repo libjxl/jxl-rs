@@ -7,8 +7,8 @@ use super::super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use super::row_buffers::RowBuffer;
 use crate::render::internal::{PipelineBuffer, RunInOutStage};
 use crate::render::{Channels, ChannelsMut, ErasedLocalState, RunInPlaceStage};
+use crate::util::ChannelVec;
 use crate::util::tracing_wrappers::*;
-use crate::util::{ChannelVec, ShiftRightCeil};
 
 pub struct ExtraInfo {
     // Number of *input* pixels to process (ignoring additional border pixels).
@@ -82,11 +82,12 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         output_buffers: &mut [RowBuffer],
         state: Option<&mut ErasedLocalState>,
     ) {
+        use crate::render::internal::{scale_position, scale_size};
         let x0 = RowBuffer::x0_offset::<T::InputT>();
         let xpre = if start_of_row {
             0
         } else {
-            out_extra_x.shrc(T::SHIFT.0)
+            scale_size(out_extra_x, -T::SHIFT.0)
         };
         let xstart = x0 - xpre;
         let xend = x0
@@ -94,8 +95,17 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             + if end_of_row {
                 0
             } else {
-                out_extra_x.shrc(T::SHIFT.0)
+                scale_size(out_extra_x, -T::SHIFT.0)
             };
+
+        let x = group_x0 - xpre;
+        let xsize = xend - xstart;
+        let x_factor = 1usize << (-Self::SHIFT.0).max(0);
+        debug_assert!(x.is_multiple_of(x_factor));
+        debug_assert!(xsize.is_multiple_of(x_factor) || end_of_row);
+        let y_factor = 1usize << (-Self::SHIFT.1).max(0);
+        let flush_output_row =
+            (current_row + 1).is_multiple_of(y_factor) || current_row + 1 == image_height;
 
         let input_rows = Channels::from_row_buffers(
             input_buffers,
@@ -105,21 +115,22 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             Self::BORDER.0 as usize,
         );
 
-        let output_xstart = RowBuffer::x0_offset::<T::OutputT>() - (xpre << T::SHIFT.0);
+        let output_xstart = RowBuffer::x0_offset::<T::OutputT>() - scale_position(xpre, T::SHIFT.0);
         let mut output_rows = ChannelsMut::from_row_buffers(
             output_buffers,
             output_xstart,
-            current_row << T::SHIFT.1,
-            1 << T::SHIFT.1,
+            scale_position(current_row, T::SHIFT.1),
+            1 << T::SHIFT.1.max(0),
         );
 
         self.process_row_chunk(
-            (group_x0 - xpre, current_row),
-            xend - xstart,
+            (x, current_row),
+            xsize,
             &input_rows,
             &mut output_rows,
             state,
             previous_call_was_previous_row,
+            flush_output_row,
         );
     }
 }
