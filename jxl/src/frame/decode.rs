@@ -28,7 +28,7 @@ use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
 use crate::frame::group::VarDctBuffers;
-use crate::frame::modular::ModularStorage;
+use crate::frame::render_shift::{RenderShiftInfo, RenderShiftInfoMode};
 use crate::frame::{
     DataStatus, DecoderState, Frame, GroupStatus, HfGlobalState, HfMetadata, LfGlobalState,
     PassState, coeff_order,
@@ -37,9 +37,7 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, DataTypeTag, Image, OwnedRawImage, Rect};
-#[cfg(test)]
-use crate::render::SimpleRenderPipeline;
+use crate::image::{BufferRecycler, DataTypeTag, Image, Rect};
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::stages::Upsample8x;
@@ -259,9 +257,31 @@ impl Frame {
                 image_size
             };
 
+            let shift_info = RenderShiftInfo::new(
+                &frame_header,
+                decoder_state.output_downsampling_shift,
+                RenderShiftInfoMode::ReferenceOutput,
+            );
+            let sz = shift_info.downsampled_size(sz);
             let num_ref_channels = 3 + image_metadata.extra_channel_info.len();
             Some(
                 (0..num_ref_channels)
+                    .map(|_| Image::new(sz))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+
+        let blending_frame_data = if decoder_state.output_downsampling_shift != 0
+            && frame_header.needs_full_resolution_blending()
+            && !frame_header.save_before_ct
+        {
+            // TODO(tirr-c): Pick only the extra channel used for blending.
+            let num_channels = 3 + image_metadata.extra_channel_info.len();
+            let sz = frame_header.size_upsampled();
+            Some(
+                (0..num_channels)
                     .map(|_| Image::new(sz))
                     .collect::<Result<Vec<_>>>()?,
             )
@@ -298,6 +318,7 @@ impl Frame {
             frame_counters,
             render_pipeline: None,
             reference_frame_data,
+            blending_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
             patches: Arc::new(RwLock::new(PatchesDictionary::new(num_extra_channels))),
@@ -336,6 +357,7 @@ impl Frame {
             br.skip_bits(lfg.total_bits_read)?;
         } else {
             trace!(pos = br.total_bits_read());
+            let shift_info = self.render_shift_info(RenderShiftInfoMode::FirstPass);
 
             if self.header.has_patches() {
                 info!("decoding patches");
@@ -344,6 +366,7 @@ impl Frame {
                     self.header.size_padded().0,
                     self.header.size_padded().1,
                     self.decoder_state.extra_channel_info().len(),
+                    shift_info.feature_rendering_shift(),
                     &self.decoder_state.reference_frames[..],
                     self.decoder_state.level5_limits,
                     &mut self.buffer_recycler.modular_scratch.get().lz77_window,
@@ -409,6 +432,7 @@ impl Frame {
                     &color_correlation_params,
                     self.decoder_state.high_precision,
                     self.decoder_state.level5_limits,
+                    shift_info.feature_rendering_shift(),
                 )?;
             }
 
@@ -631,7 +655,8 @@ impl Frame {
             });
         }
         // Set EPF sigma values to the correct values if we are doing EPF.
-        if self.header.restoration_filter.epf_iters > 0 {
+        let shift_info = self.render_shift_info(RenderShiftInfoMode::FirstPass);
+        if self.header.restoration_filter.epf_iters > 0 && shift_info.shift == 0 {
             *self.epf_sigma.try_write().unwrap() = SigmaSource::new(
                 &self.header,
                 self.lf_global.as_ref().unwrap(),
@@ -757,7 +782,8 @@ impl Frame {
             return Ok(());
         }
 
-        if self.header.has_noise() && render_vardct {
+        let shift_info = self.render_shift_info(RenderShiftInfoMode::FirstPass);
+        if self.header.has_noise() && shift_info.shift == 0 && render_vardct {
             self.render_noise_for_group(group, complete, buffer_splitter)?;
         }
 
@@ -766,12 +792,29 @@ impl Frame {
         }
 
         let lf_global = self.lf_global.as_ref().unwrap();
+        let fullres_buffer = |c| {
+            if shift_info.output_shift(&self.header, c) == 0 {
+                return pipeline!(self, p, p.get_buffer(c));
+            }
+
+            // `p.get_buffer(c)` returns final downsampled buffer, which is too small for raw
+            // outputs. Allocate larger buffers that can be used to output preliminary decoding
+            // results.
+            let size = self.header.size();
+            let group_dim = self.header.group_dim();
+            self.buffer_recycler.get_buffer::<f32>((
+                group_dim
+                    .min(size.0)
+                    .shrc(self.header.hshift(c))
+                    .next_multiple_of(16),
+                group_dim
+                    .min(size.1)
+                    .shrc(self.header.vshift(c))
+                    .next_multiple_of(16),
+            ))
+        };
         let mut pixels = if render_vardct {
-            Some([
-                pipeline!(self, p, p.get_buffer(0))?,
-                pipeline!(self, p, p.get_buffer(1))?,
-                pipeline!(self, p, p.get_buffer(2))?,
-            ])
+            Some([fullres_buffer(0)?, fullres_buffer(1)?, fullres_buffer(2)?])
         } else {
             None
         };
@@ -818,13 +861,10 @@ impl Frame {
                 &mut vardct_buffers,
             )?;
         }
+
         if let Some(pixels) = pixels {
             for (c, img) in pixels.into_iter().enumerate() {
-                pipeline!(
-                    self,
-                    p,
-                    p.set_buffer_for_group(c, group, complete, img, buffer_splitter)?
-                );
+                self.set_render_input(c, group, complete, img, buffer_splitter)?;
             }
         }
 
@@ -847,26 +887,15 @@ impl Frame {
 
         let lf_global = self.lf_global.as_ref().unwrap();
         let storage = lf_global.modular_global.storage();
-        let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
-            match storage {
-                ModularStorage::I16 => {
-                    let image = Image::<i16>::from_raw(raw_image);
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
-                    );
-                }
-                ModularStorage::I32 => {
-                    let image = Image::<i32>::from_raw(raw_image);
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
-                    );
-                }
-            }
-            Ok(())
+        let pass_to_pipeline = |chan, group, complete, raw_image| {
+            self.set_modular_render_input(
+                chan,
+                group,
+                complete,
+                raw_image,
+                storage,
+                buffer_splitter,
+            )
         };
 
         for (pass, br) in passes.iter_mut() {

@@ -117,7 +117,7 @@ impl<'a> BufferFiller<'a> {
         }
 
         let x0 = x0 >> dx;
-        let xsize = xsize >> dx;
+        let xsize = xsize.shrc(dx);
         let group_ysize = 1 << (rp.shared.log_group_size - dy as usize);
         let group_xsize = 1 << (rp.shared.log_group_size - dx as usize);
 
@@ -431,7 +431,7 @@ impl LowMemoryRenderPipeline {
                             &input_data,
                             data.save_scratch.as_mut().unwrap(),
                             &mut *buffers,
-                            (xsize >> dx, num_rows >> dy),
+                            (xsize.shrc(dx), num_rows.shrc(dy)),
                             y,
                             (x0 >> dx, y0 >> dy),
                             current_size,

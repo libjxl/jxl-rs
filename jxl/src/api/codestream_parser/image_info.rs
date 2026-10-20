@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::{FileHeader, JxlHeader};
 use crate::icc::IncrementalIccReader;
+use crate::util::ShiftRightCeil;
 
 pub struct ImageInfo {
     file_header: Option<FileHeader>,
@@ -71,6 +72,11 @@ impl ImageInfo {
         bits: &mut usize,
         level5_limits: bool,
     ) -> Result<()> {
+        if decode_options.downsample_factor > 3 {
+            return Err(Error::InvalidOutputDownsamplingShift(
+                decode_options.downsample_factor,
+            ));
+        }
         let file_header = FileHeader::read(br)?;
         let num_ec = file_header.image_metadata.extra_channel_info.len();
         let max_num_ec = if level5_limits { 4 } else { 256 };
@@ -97,6 +103,8 @@ impl ImageInfo {
                 file_header.image_metadata.extra_channel_info.len(),
             )?;
         }
+        let shift = decode_options.downsample_factor;
+        let (xsize, ysize) = (xsize.shrc(shift), ysize.shrc(shift));
         let data = &file_header.image_metadata;
         self.basic_info = Some(JxlBasicInfo {
             size: if decode_options.adjust_orientation && data.orientation.is_transposing() {
@@ -139,10 +147,12 @@ impl ImageInfo {
                 relative_to_max_display: data.tone_mapping.relative_to_max_display,
                 linear_below: data.tone_mapping.linear_below,
             },
-            preview_size: data
-                .preview
-                .as_ref()
-                .map(|p| (p.xsize() as usize, p.ysize() as usize)),
+            preview_size: data.preview.as_ref().map(|p| {
+                (
+                    (p.xsize() as usize).shrc(shift),
+                    (p.ysize() as usize).shrc(shift),
+                )
+            }),
         });
         self.file_header = Some(file_header);
         *bits = br.total_bits_read();
