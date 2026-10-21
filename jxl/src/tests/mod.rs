@@ -343,6 +343,7 @@ declare_test_file!(
     conformance_test_images_upsampling_5,
     "conformance_test_images/upsampling_5.jxl"
 );
+declare_test_file!(crop2x_small, "crop2x_small.jxl");
 declare_test_file!(cropped_traffic_light, "cropped_traffic_light.jxl");
 declare_test_file!(ec_dim_shift_no_upsampling, "ec_dim_shift_no_upsampling.jxl");
 declare_test_file!(ec_upsampling8_multi_group, "ec_upsampling8_multi_group.jxl");

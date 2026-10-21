@@ -527,18 +527,20 @@ impl LowMemoryRenderPipeline {
         let mut previous_call_was_previous_row: SmallVec<bool, 32> =
             std::iter::repeat_n(false, self.shared.stages.len()).collect();
 
+        let extend = self.shared.extend_stage_index.unwrap();
+        let Stage::Extend(extend_stage) = &self.shared.stages[extend] else {
+            unreachable!("extend stage is not an extend stage");
+        };
+        let image_height = extend_stage.image_size.1;
+
         // Significantly simplified version of render_group.
         for y in yrange.clone() {
-            let extend = self.shared.extend_stage_index.unwrap();
             // Step 1: get padding from extend stage.
             for c in 0..num_channels {
                 let (si, ci) = self.stage_input_buffer_index[extend][c];
                 let buffer = &mut data.row_buffers[si][ci];
-                let Stage::Extend(extend) = &self.shared.stages[extend] else {
-                    unreachable!("extend stage is not an extend stage");
-                };
                 let row = &mut buffer.get_row_mut(y)[RowBuffer::x0_offset::<f32>()..];
-                extend.process_row_chunk((x0, y), xsize, c, row);
+                extend_stage.process_row_chunk((x0, y), xsize, c, row);
             }
             // Step 2: go through remaining stages one by one.
             for (i, stage) in self.shared.stages.iter().enumerate().skip(extend + 1) {
@@ -559,7 +561,7 @@ impl LowMemoryRenderPipeline {
                                 out_extra_x: 0,
                                 start_of_row: false,
                                 end_of_row: false,
-                                image_height: self.shared.input_size.1,
+                                image_height,
                                 previous_call_was_previous_row: prev,
                             },
                             &mut buffers,
@@ -604,7 +606,7 @@ impl LowMemoryRenderPipeline {
                                 out_extra_x: 0,
                                 start_of_row: false,
                                 end_of_row: false,
-                                image_height: self.shared.input_size.1,
+                                image_height,
                                 previous_call_was_previous_row: prev,
                             },
                             &input_data,
