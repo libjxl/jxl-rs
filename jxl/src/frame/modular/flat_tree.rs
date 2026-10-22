@@ -7,12 +7,9 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use super::Predictor;
-use super::predict::WeightedPredictorState;
 use crate::error::Result;
 use crate::frame::modular::Tree;
-use crate::frame::modular::decode::References;
-use crate::frame::modular::predict::PredictionData;
-use crate::frame::modular::tree::{PredictionResult, TreeNode, compute_properties};
+use crate::frame::modular::tree::TreeNode;
 
 /// Flattened tree node for optimized traversal.
 /// Stores parent + info about both children to evaluate 3 nodes per iteration.
@@ -31,25 +28,17 @@ pub(super) enum FlatTreeNode {
     },
 }
 
-#[inline(always)]
-#[allow(clippy::too_many_arguments)]
-pub(super) fn predict_flat(
-    flat_tree: &[FlatTreeNode],
-    prediction_data: PredictionData,
-    wp_state: Option<&mut WeightedPredictorState>,
-    pos: (usize, usize),
-    references: &References,
-    property_buffer: &mut [i32; 256],
-) -> PredictionResult {
-    let wp_pred = compute_properties(
-        prediction_data,
-        wp_state,
-        pos.0,
-        pos.1,
-        references,
-        property_buffer,
-    );
+/// The data of a tree leaf needed to decode a pixel.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TreeLeaf {
+    pub(super) predictor: Predictor,
+    pub(super) multiplier: u32,
+    pub(super) context: u32,
+    pub(super) offset: i32,
+}
 
+#[inline(always)]
+pub(super) fn eval_flat_tree(flat_tree: &[FlatTreeNode], property_buffer: &[i32; 256]) -> TreeLeaf {
     let mut pos = 0;
     loop {
         // Removing this bound check doesn't seem to have a significant effect.
@@ -73,11 +62,11 @@ pub(super) fn predict_flat(
                 context,
                 offset,
             } => {
-                let pred = predictor.predict_one(prediction_data, wp_pred);
-                return PredictionResult {
-                    guess: pred + offset as i64,
+                return TreeLeaf {
+                    predictor,
                     multiplier,
                     context,
+                    offset,
                 };
             }
         };
