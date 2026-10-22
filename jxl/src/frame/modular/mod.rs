@@ -237,7 +237,7 @@ pub(crate) struct ScratchSpace {
     tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
     hsqueeze_i16_scratch: Box<[i16; 2048]>,
     pub(crate) lz77_window: Vec<u32>,
-    tree_scratch: TreeScratch,
+    tree_scratch: Box<TreeScratch>,
 }
 
 impl Debug for ScratchSpace {
@@ -255,7 +255,7 @@ impl ScratchSpace {
             tree_lut_scratch: crate::util::box_array(0u8),
             hsqueeze_i16_scratch: crate::util::box_array(0i16),
             lz77_window: Vec::new(),
-            tree_scratch: TreeScratch::default(),
+            tree_scratch: Box::new(TreeScratch::default()),
         }
     }
 }
