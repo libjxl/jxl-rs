@@ -14,9 +14,8 @@ use crate::error::{Error, Result};
 use crate::frame::block_context_map::*;
 use crate::frame::color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS;
 use crate::frame::quant_weights::DequantMatrices;
-use crate::frame::{HfGlobalState, HfMetadata, LfGlobalState};
+use crate::frame::{HfGlobalState, HfMetadata, LfGlobalState, coeff_order};
 use crate::headers::frame_header::FrameHeader;
-use crate::headers::permutation::Permutation;
 use crate::image::{Image, ImageRect, Rect};
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::util::tracing_wrappers::*;
@@ -149,7 +148,7 @@ enum CoeffsMut<'a> {
 #[allow(clippy::too_many_arguments)]
 fn decode_channel_coeffs_ans_no_lz77<T: CoeffStorage, const LOG_NUM_BLOCKS: usize>(
     current_coeffs: &mut [T],
-    permutation: &Permutation,
+    permutation: &[u32],
     histo_offset: usize,
     shift: u32,
     mut prev: usize,
@@ -190,7 +189,7 @@ fn decode_channel_coeffs_ans_no_lz77<T: CoeffStorage, const LOG_NUM_BLOCKS: usiz
 #[inline(always)]
 fn decode_channel_coeffs<T: CoeffStorage>(
     current_coeffs: &mut [T],
-    permutation: &Permutation,
+    permutation: &[u32],
     num_blocks: usize,
     num_coeffs: usize,
     log_num_blocks: usize,
@@ -312,7 +311,7 @@ impl<'a> CoeffsMut<'a> {
         &mut self,
         c: usize,
         offset: usize,
-        permutation: &Permutation,
+        permutation: &[u32],
         num_blocks: usize,
         num_coeffs: usize,
         log_num_blocks: usize,
@@ -1001,7 +1000,8 @@ pub fn decode_vardct_group(
                     block_nonzeros[c] += nonzeros;
                     let histo_offset = block_context_map.zero_density_context_offset(block_context)
                         + context_offset;
-                    let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
+                    let permutation =
+                        coeff_order::coeff_order_for(&pass_info.coeff_orders, shape_id, c);
                     coeffs.decode_channel(
                         c,
                         offset,

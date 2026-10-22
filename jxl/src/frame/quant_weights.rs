@@ -3,7 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::borrow::Cow;
 use std::f32::consts::SQRT_2;
 use std::sync::OnceLock;
 
@@ -340,8 +339,18 @@ impl QuantTable {
 
 pub struct DequantMatrices {
     /// 17 separate tables, one per QuantTable type.
-    /// Uses Cow to allow zero-copy borrowing from static cache for library tables.
-    tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY],
+    /// Library tables are resolved lazily (and cached process-wide) on first use, so that only
+    /// the tables for transform types that actually occur in the image are ever computed.
+    tables: [DequantTable; QuantTable::CARDINALITY],
+}
+
+/// Source of one dequantization table.
+#[derive(Debug)]
+enum DequantTable {
+    /// Default table from the library, computed on first access via [`LIBRARY_TABLES`].
+    Library,
+    /// Table explicitly signalled in the bitstream.
+    Custom(Box<[f32]>),
 }
 
 /// Cached computed library tables per QuantTable type.
@@ -1074,7 +1083,10 @@ impl DequantMatrices {
 
     pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
         let qt_idx = QuantTable::for_strategy(quant_kind) as usize;
-        let table = &self.tables[qt_idx];
+        let table: &[f32] = match &self.tables[qt_idx] {
+            DequantTable::Library => Self::get_library_table(qt_idx),
+            DequantTable::Custom(t) => t,
+        };
         let num = Self::REQUIRED_SIZE_X[qt_idx] * Self::REQUIRED_SIZE_Y[qt_idx] * BLOCK_SIZE;
         &table[c * num..]
     }
@@ -1086,14 +1098,12 @@ impl DequantMatrices {
     ) -> Result<Self> {
         let all_default = br.read(1)? == 1;
 
-        // Compute all tables during decode
-        let tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY] = if all_default {
-            // All library tables - borrow from static cache (zero-copy)
-            std::array::from_fn(|idx| Cow::Borrowed(Self::get_library_table(idx)))
+        // Library tables are not computed here: they are resolved on first use in `matrix()`.
+        let tables: [DequantTable; QuantTable::CARDINALITY] = if all_default {
+            std::array::from_fn(|_| DequantTable::Library)
         } else {
-            // Decode and compute each table
-            let mut tables_vec: Vec<Cow<'static, [f32]>> =
-                Vec::with_capacity(QuantTable::CARDINALITY);
+            // Decode and compute each custom table
+            let mut tables_vec: Vec<DequantTable> = Vec::with_capacity(QuantTable::CARDINALITY);
             for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
                 .iter()
                 .zip(Self::REQUIRED_SIZE_Y)
@@ -1108,8 +1118,8 @@ impl DequantMatrices {
                     br,
                 )?;
                 let table = match encoding {
-                    QuantEncoding::Library => Cow::Borrowed(Self::get_library_table(i)),
-                    _ => Cow::Owned(Self::compute_table(&encoding, i)?.into_vec()),
+                    QuantEncoding::Library => DequantTable::Library,
+                    _ => DequantTable::Custom(Self::compute_table(&encoding, i)?),
                 };
                 tables_vec.push(table);
             }
@@ -1216,9 +1226,7 @@ mod test {
     fn check_dequant_matrix_correctness() -> Result<()> {
         // All library tables
         let matrices = DequantMatrices {
-            tables: std::array::from_fn(|idx| {
-                Cow::Borrowed(DequantMatrices::get_library_table(idx))
-            }),
+            tables: std::array::from_fn(|_| DequantTable::Library),
         };
 
         // Golden data produced by libjxl.
