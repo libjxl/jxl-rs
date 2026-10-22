@@ -5,14 +5,20 @@
 
 use crate::features::spline::Splines;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
-use crate::util::sync::{Arc, RwLock};
+use crate::util::sync::Arc;
+use crate::util::{SharedSnapshot, SnapshotReader};
 
 pub struct SplinesStage {
-    splines: Arc<RwLock<Splines>>,
+    splines: Arc<SharedSnapshot<Splines>>,
+}
+
+/// Per-thread state: a cached snapshot of the splines.
+struct SplinesState {
+    splines: SnapshotReader<Splines>,
 }
 
 impl SplinesStage {
-    pub fn new(splines: Arc<RwLock<Splines>>) -> Self {
+    pub fn new(splines: Arc<SharedSnapshot<Splines>>) -> Self {
         SplinesStage { splines }
     }
 }
@@ -35,15 +41,22 @@ impl RenderPipelineInPlaceStage for SplinesStage {
         position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
-        _state: Option<&mut ErasedLocalState>,
+        state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let splines = self.splines.try_read().unwrap();
+        let state: &mut SplinesState = state.unwrap().downcast_mut().unwrap();
+        let splines = state.splines.get(&self.splines);
         if splines.splines.is_empty() {
             return;
         }
         assert!(splines.is_initialized());
         splines.draw_segments(row, position, xsize);
+    }
+
+    fn init_local_state(&self) -> crate::error::Result<Option<Box<ErasedLocalState>>> {
+        Ok(Some(Box::new(SplinesState {
+            splines: self.splines.reader(),
+        }) as Box<ErasedLocalState>))
     }
 }
 
@@ -55,7 +68,8 @@ mod test {
     use crate::features::spline::{Point, QuantizedSpline, Splines};
     use crate::frame::color_correlation_map::ColorCorrelationParams;
     use crate::render::stages::splines::SplinesStage;
-    use crate::util::sync::{Arc, RwLock};
+    use crate::util::SharedSnapshot;
+    use crate::util::sync::Arc;
 
     #[ignore = "spline rendering is not fully consistent due to sqrt precision differences"]
     #[test]
@@ -97,7 +111,7 @@ mod test {
             .unwrap();
 
         crate::render::test::test_stage_consistency(
-            || SplinesStage::new(Arc::new(RwLock::new(splines.clone()))),
+            || SplinesStage::new(Arc::new(SharedSnapshot::new(splines.clone()))),
             (500, 500),
             6,
         )

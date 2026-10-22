@@ -44,9 +44,9 @@ use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
-use crate::util::sync::{Arc, Mutex, RwLock};
+use crate::util::sync::{Arc, Mutex};
 use crate::util::tracing_wrappers::*;
-use crate::util::{CeilLog2, ShiftRightCeil, Xorshift128Plus, mirror};
+use crate::util::{CeilLog2, SharedSnapshot, ShiftRightCeil, Xorshift128Plus, mirror};
 
 fn upsample_lf_group(
     group: usize,
@@ -300,12 +300,16 @@ impl Frame {
             reference_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
-            patches: Arc::new(RwLock::new(PatchesDictionary::new(num_extra_channels))),
-            splines: Arc::new(RwLock::new(Splines::default())),
-            noise: Arc::new(RwLock::new(Noise::default())),
-            lf_quant: Arc::new(RwLock::new(LfQuantFactors::default())),
-            color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
-            epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
+            patches: Arc::new(SharedSnapshot::new(PatchesDictionary::new(
+                num_extra_channels,
+            ))),
+            splines: Arc::new(SharedSnapshot::new(Splines::default())),
+            noise: Arc::new(SharedSnapshot::new(Noise::default())),
+            lf_quant: Arc::new(SharedSnapshot::new(LfQuantFactors::default())),
+            color_correlation_params: Arc::new(SharedSnapshot::new(
+                ColorCorrelationParams::default(),
+            )),
+            epf_sigma: Arc::new(SharedSnapshot::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
             buffer_recycler,
             lf_preview_dirty_groups: BTreeSet::new(),
@@ -348,9 +352,10 @@ impl Frame {
                     self.decoder_state.level5_limits,
                     &mut self.buffer_recycler.modular_scratch.get().lz77_window,
                 )?;
-                *self.patches.try_write().unwrap() = p;
+                self.patches.set(p);
             }
 
+            let mut decoded_splines = None;
             if self.header.has_splines() {
                 info!("decoding splines");
                 let s = Splines::read(
@@ -358,17 +363,18 @@ impl Frame {
                     self.header.width * self.header.height,
                     &mut self.buffer_recycler.modular_scratch.get().lz77_window,
                 )?;
-                *self.splines.try_write().unwrap() = s;
+                // Published below, once the draw cache has been initialized.
+                decoded_splines = Some(s);
             }
 
             if self.header.has_noise() {
                 info!("decoding noise");
                 let n = Noise::read(br)?;
-                *self.noise.try_write().unwrap() = n;
+                self.noise.set(n);
             }
 
             let lf_quant = LfQuantFactors::new(br)?;
-            *self.lf_quant.try_write().unwrap() = lf_quant.clone();
+            self.lf_quant.set(lf_quant.clone());
             debug!(?lf_quant);
 
             let quant_params = if self.header.encoding == Encoding::VarDCT {
@@ -393,7 +399,7 @@ impl Frame {
             let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
                 info!("decoding color correlation params");
                 let ccp = ColorCorrelationParams::read(br)?;
-                *self.color_correlation_params.try_write().unwrap() = ccp;
+                self.color_correlation_params.set(ccp);
                 Some(ccp)
             } else {
                 None
@@ -401,15 +407,16 @@ impl Frame {
             debug!(?color_correlation_params);
 
             // Validate spline parameters
-            if self.header.has_splines() {
-                let color_correlation_params = self.color_correlation_params.try_read().unwrap();
-                self.splines.try_write().unwrap().initialize_draw_cache(
+            if let Some(mut splines) = decoded_splines {
+                let color_correlation_params = self.color_correlation_params.get();
+                splines.initialize_draw_cache(
                     self.header.size().0 as u64,
                     self.header.size().1 as u64,
                     &color_correlation_params,
                     self.decoder_state.high_precision,
                     self.decoder_state.level5_limits,
                 )?;
+                self.splines.set(splines);
             }
 
             let tree = if br.read(1)? == 1 {
@@ -632,11 +639,11 @@ impl Frame {
         }
         // Set EPF sigma values to the correct values if we are doing EPF.
         if self.header.restoration_filter.epf_iters > 0 {
-            *self.epf_sigma.try_write().unwrap() = SigmaSource::new(
+            self.epf_sigma.set(SigmaSource::new(
                 &self.header,
                 self.lf_global.as_ref().unwrap(),
                 &self.hf_meta,
-            )?;
+            )?);
         }
         Ok(())
     }

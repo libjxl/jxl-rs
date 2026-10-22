@@ -16,7 +16,8 @@ use crate::render::stages::epf::epf0::epf0_process_row_chunk_dispatch;
 use crate::render::stages::epf::epf1::epf1_process_row_chunk_dispatch;
 use crate::render::stages::epf::epf2::epf2_process_row_chunk_dispatch;
 use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
-use crate::util::sync::{Arc, RwLock};
+use crate::util::sync::Arc;
+use crate::util::{SharedSnapshot, SnapshotReader};
 
 /// Edge-preserving filter stage for step `STEP` (`0..=2`) with border radius `BORDER` (`3 - STEP`).
 pub struct EpfStage<const STEP: u8, const BORDER: u8> {
@@ -25,7 +26,12 @@ pub struct EpfStage<const STEP: u8, const BORDER: u8> {
     /// (inverse) multiplier for sigma on borders
     border_sad_mul: f32,
     channel_scale: [f32; 3],
-    sigma: Arc<RwLock<SigmaSource>>,
+    sigma: Arc<SharedSnapshot<SigmaSource>>,
+}
+
+/// Per-thread state: a cached snapshot of the sigma source.
+struct EpfState {
+    sigma: SnapshotReader<SigmaSource>,
 }
 
 impl<const STEP: u8, const BORDER: u8> std::fmt::Display for EpfStage<STEP, BORDER> {
@@ -43,7 +49,7 @@ impl<const STEP: u8, const BORDER: u8> EpfStage<STEP, BORDER> {
         sigma_scale: f32,
         border_sad_mul: f32,
         channel_scale: [f32; 3],
-        sigma: Arc<RwLock<SigmaSource>>,
+        sigma: Arc<SharedSnapshot<SigmaSource>>,
     ) -> Self {
         const { assert!(STEP <= 2) };
         const { assert!(BORDER == 3 - STEP) };
@@ -74,14 +80,15 @@ macro_rules! stage {
                 xsize: usize,
                 input_rows: &Channels<f32>,
                 output_rows: &mut ChannelsMut<f32>,
-                _state: Option<&mut ErasedLocalState>,
+                state: Option<&mut ErasedLocalState>,
                 _previous_call_was_previous_row: bool,
             ) {
                 if xsize == 0 {
                     return;
                 }
                 let (xpos, ypos) = pos;
-                let sigma = self.sigma.try_read().unwrap();
+                let state: &mut EpfState = state.unwrap().downcast_mut().unwrap();
+                let sigma = state.sigma.get(&self.sigma);
                 let row_sigma = sigma.row(ypos / BLOCK_DIM);
                 let start = xpos / BLOCK_DIM;
                 let max_needed = (xsize - 1) / BLOCK_DIM + 3;
@@ -110,6 +117,12 @@ macro_rules! stage {
                     input_rows,
                     output_rows,
                 );
+            }
+
+            fn init_local_state(&self) -> crate::error::Result<Option<Box<ErasedLocalState>>> {
+                Ok(Some(Box::new(EpfState {
+                    sigma: self.sigma.reader(),
+                }) as Box<ErasedLocalState>))
             }
         }
     };
