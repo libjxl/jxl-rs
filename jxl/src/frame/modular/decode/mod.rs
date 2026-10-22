@@ -6,6 +6,7 @@
 mod bitstream;
 mod channel;
 mod common;
+pub(super) mod quick_scorer;
 pub(super) mod specialized_trees;
 
 pub(super) use bitstream::decode_modular_subbitstream;

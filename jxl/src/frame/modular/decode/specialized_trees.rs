@@ -12,7 +12,8 @@ use crate::frame::modular::decode::channel::ModularChannelDecoder;
 use crate::frame::modular::decode::common::{
     References, init_properties_and_references, make_pixel, precompute_references,
 };
-use crate::frame::modular::flat_tree::{FlatTreeNode, eval_flat_tree};
+use crate::frame::modular::decode::quick_scorer::QuickScorer;
+use crate::frame::modular::flat_tree::{FlatTreeNode, TreeLeaf, eval_flat_tree};
 use crate::frame::modular::predict::{
     PredictionData, WeightedPredictorScratch, WeightedPredictorState, clamped_gradient,
 };
@@ -114,8 +115,55 @@ impl Reader for ReaderGeneric {
     }
 }
 
+struct LocalQsDecoder<'a, R> {
+    qs: QuickScorer<'a>,
+    wp_state: WeightedPredictorState<'a>,
+    reader: R,
+}
+
+impl<'a, R: Reader> ModularChannelDecoder for LocalQsDecoder<'a, R> {
+    #[inline(always)]
+    fn needs_toptop(&self) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        pos: (usize, usize),
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let (wp_pred, wp_prop) = self.wp_state.predict_and_property(pos, &prediction_data);
+        let cluster = self.qs.eval_local(&prediction_data, wp_prop);
+        let dec = self.reader.read(reader, histograms, br, cluster);
+        let val = dec.wrapping_add(wp_pred as i32);
+        self.wp_state.update_errors(val, pos);
+        val
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Copy)]
+enum GeneralTree<'a> {
+    Qs(QuickScorer<'a>),
+    Flat(&'a [FlatTreeNode]),
+}
+
+impl<'a> GeneralTree<'a> {
+    #[inline(always)]
+    fn eval(&self, property_buffer: &[i32; 256]) -> TreeLeaf {
+        match self {
+            GeneralTree::Qs(qs) => qs.eval(property_buffer),
+            GeneralTree::Flat(nodes) => eval_flat_tree(nodes, property_buffer),
+        }
+    }
+}
+
 struct GeneralTreeDecoder<'a, WP, R> {
-    tree: &'a [FlatTreeNode],
+    tree: GeneralTree<'a>,
     wp_state: WP,
     references: References<'a>,
     property_buffer: &'a mut [i32; 256],
@@ -146,7 +194,7 @@ impl<'a, WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder
             &self.references,
             self.property_buffer,
         );
-        let leaf = eval_flat_tree(self.tree, self.property_buffer);
+        let leaf = self.tree.eval(self.property_buffer);
         let dec = self
             .reader
             .read(reader, histograms, br, leaf.context as usize);
@@ -456,6 +504,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
         property_buffer,
         wp_scratch,
         references,
+        qs_scratch,
     } = tree_scratch;
     pruned_tree.clear();
     queue.clear();
@@ -622,7 +671,34 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
 
     let single_symbol = single_symbol.map(unpack_signed);
 
-    Tree::build_flat_tree_into(pruned_tree, flat_tree, flat_tree_bfs_queue)?;
+    let qs_opt = QuickScorer::try_build(pruned_tree, qs_scratch);
+
+    let general_tree = if let Some(qs) = qs_opt {
+        // Local trees whose leaves all use the plain weighted predictor need neither the
+        // property buffer nor the references.
+        let local_wp_only = qs.is_local()
+            && qs
+                .leaves()
+                .iter()
+                .all(|l| l.predictor == Predictor::Weighted && l.multiplier == 1 && l.offset == 0);
+        if local_wp_only {
+            let wp_state = WeightedPredictorState::new(&header.wp_header, xsize, wp_scratch);
+            dispatch_reader!(
+                single_symbol,
+                uses_non420,
+                |r| LocalQsDecoder {
+                    qs,
+                    wp_state,
+                    reader: r,
+                },
+                run
+            );
+        }
+        GeneralTree::Qs(qs)
+    } else {
+        Tree::build_flat_tree_into(pruned_tree, flat_tree, flat_tree_bfs_queue)?;
+        GeneralTree::Flat(flat_tree)
+    };
 
     let (references, property_buffer) = init_properties_and_references(
         references,
@@ -639,7 +715,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
             single_symbol,
             uses_non420,
             |r| GeneralTreeDecoder {
-                tree: flat_tree,
+                tree: general_tree,
                 wp_state: (),
                 references,
                 property_buffer,
@@ -654,7 +730,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
             single_symbol,
             uses_non420,
             |r| GeneralTreeDecoder {
-                tree: flat_tree,
+                tree: general_tree,
                 wp_state,
                 references,
                 property_buffer,
