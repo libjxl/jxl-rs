@@ -124,10 +124,12 @@ pub fn decode_coeff_orders(
     br: &mut BitReader,
     lz77_scratch: &mut Vec<u32>,
 ) -> Result<Vec<Permutation>> {
-    // Use cached natural coefficient orders instead of recomputing
+    // Orders that are not custom-signalled are left empty here and resolved lazily to the
+    // (cached) natural order at use time, see `coeff_order_for`. This avoids computing the
+    // natural orders of transform types that never occur in the image.
     let all_component_orders = 3 * NUM_ORDERS;
     let mut permutations: Vec<Permutation> = (0..all_component_orders)
-        .map(|o| Permutation(Cow::Borrowed(get_natural_coeff_order(o / 3))))
+        .map(|_| Permutation(Cow::Borrowed(&[])))
         .collect();
     if used_orders == 0 {
         return Ok(permutations);
@@ -144,12 +146,26 @@ pub fn decode_coeff_orders(
             let size = num_blocks * BLOCK_SIZE as u32;
             let permutation = Permutation::decode(size, num_blocks, &histograms, br, &mut reader)?;
             let index = 3 * ord + c;
-            permutations[index].compose(&permutation);
+            let mut order = Permutation(Cow::Borrowed(get_natural_coeff_order(ord)));
+            order.compose(&permutation);
+            permutations[index] = order;
         }
     }
     reader.reclaim_lz77_scratch(lz77_scratch);
     reader.check_final_state(&histograms, br)?;
     Ok(permutations)
+}
+
+/// Returns the coefficient order for `shape_id` and channel `c`, given the orders returned by
+/// [`decode_coeff_orders`]: either the custom-signalled order or the (cached) natural order.
+#[inline]
+pub fn coeff_order_for(orders: &[Permutation], shape_id: usize, c: usize) -> &[u32] {
+    let order = &orders[shape_id * 3 + c];
+    if order.is_empty() {
+        get_natural_coeff_order(shape_id)
+    } else {
+        order
+    }
 }
 
 #[cfg(test)]
