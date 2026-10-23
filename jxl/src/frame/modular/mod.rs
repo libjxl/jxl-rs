@@ -14,6 +14,8 @@ use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::frame::block_context_map::BlockContextMap;
 use crate::frame::modular::buffers::{ModularBuffer, ModularChannel};
+use crate::frame::modular::decode::TreeScratch;
+use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 use crate::frame::modular::transforms::step::{TransformDependency, TransformStepChunk};
 use crate::frame::quantizer::{self, LfQuantFactors, QuantizerParams};
 use crate::frame::{ColorCorrelationParams, DataStatus, HfMetaViews};
@@ -210,31 +212,10 @@ impl ModularBufferInfo {
     }
 }
 
-use std::collections::VecDeque;
-
-use crate::frame::modular::decode::specialized_trees::{LUT_TABLE_SIZE, RangeAndNode};
-use crate::frame::modular::flat_tree::FlatTreeNode;
-use crate::frame::modular::predict::WeightedPredictorScratch;
-use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
-use crate::frame::modular::tree::TreeNode;
-
-#[derive(Default)]
-struct TreeScratch {
-    pruned_tree: Vec<TreeNode>,
-    pruned_tree_queue: VecDeque<u32>,
-    flat_tree: Vec<FlatTreeNode>,
-    flat_tree_bfs_queue: VecDeque<usize>,
-    lut_stack: Vec<RangeAndNode>,
-    wp_scratch: WeightedPredictorScratch,
-    property_buffer: Vec<i32>,
-    references: Vec<i32>,
-}
-
 pub(crate) struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 4],
     decode_row_scratch: [Vec<i32>; 3],
-    tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
     hsqueeze_i16_scratch: Box<[i16; 2048]>,
     pub(crate) lz77_window: Vec<u32>,
     tree_scratch: TreeScratch,
@@ -252,7 +233,6 @@ impl ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![], vec![], vec![]],
             decode_row_scratch: [vec![], vec![], vec![]],
-            tree_lut_scratch: crate::util::box_array(0u8),
             hsqueeze_i16_scratch: crate::util::box_array(0i16),
             lz77_window: Vec::new(),
             tree_scratch: TreeScratch::default(),

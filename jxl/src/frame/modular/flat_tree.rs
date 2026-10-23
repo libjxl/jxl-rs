@@ -7,12 +7,36 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use super::Predictor;
-use super::predict::WeightedPredictorState;
 use crate::error::Result;
 use crate::frame::modular::Tree;
-use crate::frame::modular::decode::References;
 use crate::frame::modular::predict::PredictionData;
-use crate::frame::modular::tree::{PredictionResult, TreeNode, compute_properties};
+use crate::frame::modular::tree::{PredictionResult, TreeNode};
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct TreeLeaf {
+    pub predictor: Predictor,
+    pub multiplier: u32,
+    pub context: u32,
+    pub offset: i32,
+}
+
+impl TreeLeaf {
+    #[inline(always)]
+    pub fn predict(&self, prediction_data: PredictionData, wp_pred: i64) -> PredictionResult {
+        let TreeLeaf {
+            predictor,
+            multiplier,
+            context,
+            offset,
+        } = *self;
+        let pred = predictor.predict_one(prediction_data, wp_pred);
+        PredictionResult {
+            guess: pred + offset as i64,
+            multiplier,
+            context,
+        }
+    }
+}
 
 /// Flattened tree node for optimized traversal.
 /// Stores parent + info about both children to evaluate 3 nodes per iteration.
@@ -23,12 +47,7 @@ pub(super) enum FlatTreeNode {
         splitvals: [i32; 3],
         child_id: u32,
     },
-    Leaf {
-        predictor: Predictor,
-        multiplier: u32,
-        context: u32,
-        offset: i32,
-    },
+    Leaf(TreeLeaf),
 }
 
 #[inline(always)]
@@ -36,20 +55,9 @@ pub(super) enum FlatTreeNode {
 pub(super) fn predict_flat(
     flat_tree: &[FlatTreeNode],
     prediction_data: PredictionData,
-    wp_state: Option<&mut WeightedPredictorState>,
-    pos: (usize, usize),
-    references: &References,
+    wp_pred: i64,
     property_buffer: &mut [i32; 256],
 ) -> PredictionResult {
-    let wp_pred = compute_properties(
-        prediction_data,
-        wp_state,
-        pos.0,
-        pos.1,
-        references,
-        property_buffer,
-    );
-
     let mut pos = 0;
     loop {
         // Removing this bound check doesn't seem to have a significant effect.
@@ -67,18 +75,8 @@ pub(super) fn predict_flat(
                 let p2 = props[2] <= splitvals[2];
                 pos = child_id as usize + if p0 { 2 | p2 as usize } else { p1 as usize };
             }
-            FlatTreeNode::Leaf {
-                predictor,
-                multiplier,
-                context,
-                offset,
-            } => {
-                let pred = predictor.predict_one(prediction_data, wp_pred);
-                return PredictionResult {
-                    guess: pred + offset as i64,
-                    multiplier,
-                    context,
-                };
+            FlatTreeNode::Leaf(l) => {
+                return l.predict(prediction_data, wp_pred);
             }
         };
     }
@@ -110,12 +108,12 @@ impl Tree {
                     multiplier,
                     id,
                 } => {
-                    flat_nodes.push(FlatTreeNode::Leaf {
+                    flat_nodes.push(FlatTreeNode::Leaf(TreeLeaf {
                         predictor,
                         offset,
                         multiplier,
                         context: id,
-                    });
+                    }));
                 }
                 TreeNode::Split {
                     property,
