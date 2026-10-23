@@ -6,6 +6,10 @@
 mod blending;
 mod chroma_upsample;
 mod convert;
+// Reference implementation for validating the accumulation pipeline before
+// switching the decoder's approximate downsampling path.
+#[cfg(test)]
+mod downsample;
 mod epf;
 mod extend;
 mod gaborish;
@@ -21,6 +25,8 @@ mod ycbcr;
 pub use blending::*;
 pub use chroma_upsample::*;
 pub use convert::*;
+#[cfg(test)]
+pub use downsample::*;
 pub use epf::*;
 pub use extend::*;
 pub use gaborish::*;

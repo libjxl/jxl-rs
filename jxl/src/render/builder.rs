@@ -23,6 +23,7 @@ use crate::util::tracing_wrappers::*;
 pub struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
     shared: RenderPipelineShared<Pipeline::Buffer>,
     channel_types: Vec<(DataTypeTag, Option<BitDepth>)>,
+    output_downsample: (u8, u8),
 }
 
 impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
@@ -67,6 +68,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 buffer_recycler,
             },
             channel_types: channel_types.to_vec(),
+            output_downsample: (0, 0),
         }
     }
 
@@ -162,6 +164,14 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         self.add_stage_internal(Stage::InPlace(Pipeline::box_inplace_stage(stage)))
     }
 
+    /// Final channel resolution relative to the pipeline's virtual image grid.
+    #[cfg(test)]
+    pub fn with_output_downsample(mut self, level: (u8, u8)) -> Self {
+        assert!(level.0 <= 6 && level.1 <= 6);
+        self.output_downsample = level;
+        self
+    }
+
     pub fn add_inout_stage<S: RenderPipelineInOutStage>(self, stage: S) -> Self {
         self.add_stage_internal(Stage::InOut(Pipeline::box_inout_stage(stage)))
     }
@@ -240,7 +250,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                     }
                     after_info.push(ChannelInfo {
                         ty: output_type.unwrap_or(input_type),
-                        downsample: shift,
+                        downsample: (0, 0),
                     });
                 }
             }
@@ -261,7 +271,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
 
         let channel_info = &mut self.shared.channel_info;
-        let mut cur_downsamples = vec![(0u8, 0u8); num_channels];
+        let mut cur_downsamples = vec![self.output_downsample; num_channels];
         for (s, stage) in self.shared.stages.iter().enumerate().rev() {
             let next_info = &mut channel_info[s + 1];
             let mut save_downsample = None;
@@ -285,14 +295,23 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 }
                 let next_downsample = &mut next_chan.downsample;
                 let next_total_downsample = *cur_downsample;
+                let shift = if uses_channel { stage.shift() } else { (0, 0) };
+                if shift.0 < -3 || shift.1 < -3 {
+                    return Err(Error::ArithmeticOverflow);
+                }
                 cur_downsample.0 = cur_downsample
                     .0
-                    .checked_add(next_downsample.0)
+                    .checked_add_signed(shift.0)
                     .ok_or(Error::ArithmeticOverflow)?;
                 cur_downsample.1 = cur_downsample
                     .1
-                    .checked_add(next_downsample.1)
+                    .checked_add_signed(shift.1)
                     .ok_or(Error::ArithmeticOverflow)?;
+                if cur_downsample.0 as usize > self.shared.log_group_size
+                    || cur_downsample.1 as usize > self.shared.log_group_size
+                {
+                    return Err(Error::ArithmeticOverflow);
+                }
                 *next_downsample = next_total_downsample;
             }
         }

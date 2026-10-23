@@ -75,14 +75,22 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display + Send + Sync {
 ///  - the input slice contains 1 + BORDER.1 * 2 slices, each of length
 ///    xsize + BORDER.0 * 2, i.e. covering one input row and up to BORDER pixels of
 ///    padding on either side.
-///  - the output slice contains 1 << SHIFT.1 slices, each of length xsize << SHIFT.0, the
-///    corresponding output pixels.
+///  - the output slice contains `1 << max(SHIFT.1, 0)` rows. Negative shifts
+///    reduce resolution, with output lengths rounded up at the image edge.
+///
+/// Positions and lengths are in input coordinates. For a vertical shift of `-k`,
+/// each of the `1 << k` input rows receives the same output row. The stage must
+/// initialize it on the first contribution, accumulate subsequent contributions,
+/// and finalize it on the last (possibly truncated) contribution. The pipeline
+/// does not clear reused output buffers. Downsampling chunks start at reduction
+/// block boundaries; only chunks at the image edge may have a partial block.
+/// `previous_call_was_previous_row` is not an accumulation-start indicator.
 pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     type InputT: ImageDataType;
     type OutputT: ImageDataType;
 
     const BORDER: (u8, u8);
-    const SHIFT: (u8, u8);
+    const SHIFT: (i8, i8);
 
     // Note: If previous_call_was_previous_row is true, it is guaranteed
     // that the previous call on this specific implementor covered the same

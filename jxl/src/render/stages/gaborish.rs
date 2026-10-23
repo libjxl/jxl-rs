@@ -90,7 +90,7 @@ simd_function!(
 impl RenderPipelineInOutStage for GaborishStage {
     type InputT = f32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (1, 1);
 
     fn uses_channel(&self, c: usize) -> bool {

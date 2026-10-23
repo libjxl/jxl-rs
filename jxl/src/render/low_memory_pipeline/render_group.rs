@@ -325,7 +325,7 @@ impl LowMemoryRenderPipeline {
             .max()
             .unwrap_or(0);
         let vy0 = y0.saturating_sub(num_extra_rows + (1 << max_dy) - 1);
-        let vy1 = image_area.end().1 + num_extra_rows;
+        let vy1 = image_area.end().1 + num_extra_rows + self.max_stage_y_delay;
 
         let fillers: ChannelVec<_> = (0..num_channels)
             .map(|c| BufferFiller::new(self, c, (x0, xsize), (gx, gy), y0..image_area.end().1))
@@ -347,6 +347,12 @@ impl LowMemoryRenderPipeline {
                 let (_, dy) = self.shared.channel_info[0][c].downsample;
                 let scaled_y_border = self.input_border_pixels[c].1 << dy;
                 let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
+                // Extra ticks flush delayed consumers, not additional input rows.
+                if stage_vy
+                    >= (image_area.end().1 + scaled_y_border).next_multiple_of(1 << dy) as isize
+                {
+                    continue;
+                }
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
@@ -370,9 +376,16 @@ impl LowMemoryRenderPipeline {
                 let (dx, dy) = self.downsampling_for_stage[i];
                 // The logic below uses *virtual* y coordinates, so we need to convert the border
                 // amount appropriately.
-                let scaled_y_border = self.stage_output_border_pixels[i].1 << dy;
-                // I knew the reason behind this formula at some point, but now I don't.
-                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
+                let output_dy = (dy as isize - stage.shift().1 as isize) as usize;
+                let scaled_y_border = self.stage_output_border_pixels[i].1 << dy.max(output_dy);
+                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize
+                    - self.stage_y_delays[i] as isize;
+                if stage_vy
+                    >= (image_area.end().1 + scaled_y_border)
+                        .next_multiple_of(1 << output_dy.max(dy)) as isize
+                {
+                    continue;
+                }
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }

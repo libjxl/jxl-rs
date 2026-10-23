@@ -158,7 +158,7 @@ simd_function!(
 impl RenderPipelineInOutStage for ConvolveNoiseStage {
     type InputT = u16;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (2, 2);
 
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {

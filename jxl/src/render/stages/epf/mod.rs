@@ -61,7 +61,7 @@ macro_rules! stage {
         impl RenderPipelineInOutStage for EpfStage<$step, $border> {
             type InputT = f32;
             type OutputT = f32;
-            const SHIFT: (u8, u8) = (0, 0);
+            const SHIFT: (i8, i8) = (0, 0);
             const BORDER: (u8, u8) = ($border, $border);
 
             fn uses_channel(&self, c: usize) -> bool {

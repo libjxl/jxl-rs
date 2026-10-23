@@ -234,7 +234,7 @@ macro_rules! stage {
         impl RenderPipelineInOutStage for Upsample<$n, $shift> {
             type InputT = f32;
             type OutputT = f32;
-            const SHIFT: (u8, u8) = ($shift, $shift);
+            const SHIFT: (i8, i8) = ($shift, $shift);
             const BORDER: (u8, u8) = (2, 2);
 
             fn uses_channel(&self, c: usize) -> bool {

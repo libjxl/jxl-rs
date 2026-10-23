@@ -100,7 +100,7 @@ simd_function!(
 impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
     type InputT = i32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -157,7 +157,7 @@ impl std::fmt::Display for ConvertModular16XYBToF32Stage {
 impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
     type InputT = i16;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -429,7 +429,7 @@ simd_function!(
 impl RenderPipelineInOutStage for ConvertModularToF32Stage {
     type InputT = i32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -495,7 +495,7 @@ fn int16_to_float(
 impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
     type InputT = i16;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
