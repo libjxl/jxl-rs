@@ -12,8 +12,9 @@ use crate::image::Image;
 use crate::util::floor_log2_nonzero;
 
 #[repr(u8)]
-#[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Predictor {
+    #[default]
     Zero = 0,
     West = 1,
     North = 2,

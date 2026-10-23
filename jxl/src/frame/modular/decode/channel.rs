@@ -326,7 +326,6 @@ pub(super) fn decode_modular_channel(
     let size = buffers[chan].size(storage);
     let ScratchSpace {
         decode_row_scratch,
-        tree_lut_scratch,
         tree_scratch,
         ..
     } = scratch_space;
@@ -361,7 +360,6 @@ pub(super) fn decode_modular_channel(
         size.0,
         header,
         storage,
-        tree_lut_scratch,
         tree_scratch,
         |t| {
             decode_modular_channel_impl(
