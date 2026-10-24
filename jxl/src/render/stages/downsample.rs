@@ -23,8 +23,8 @@ impl<const SHIFT: u8> DownsampleFrame<SHIFT> {
 
 #[derive(Default)]
 struct Accumulators {
-    sums: Vec<f64>,
-    weights: Vec<f64>,
+    sums: Vec<f32>,
+    weights: Vec<f32>,
 }
 
 impl<const SHIFT: u8> std::fmt::Display for DownsampleFrame<SHIFT> {
@@ -57,8 +57,8 @@ impl<const SHIFT: u8> RenderPipelineInOutStage for DownsampleFrame<SHIFT> {
         _previous_call_was_previous_row: bool,
     ) {
         let factor = 1 << SHIFT;
-        debug_assert_eq!(x % factor, 0);
-        debug_assert!(xsize % factor == 0 || x + xsize == self.input_size.0);
+        debug_assert!(x.is_multiple_of(factor));
+        debug_assert!(xsize.is_multiple_of(factor) || x + xsize == self.input_size.0);
         let width = self.input_size.0.div_ceil(factor);
         let scratch = state.unwrap().downcast_mut::<Accumulators>().unwrap();
         // Index by absolute x, so different chunks can accumulate independently.
@@ -75,19 +75,24 @@ impl<const SHIFT: u8> RenderPipelineInOutStage for DownsampleFrame<SHIFT> {
                     scratch.sums[idx] = 0.0;
                     scratch.weights[idx] = 0.0;
                 }
-                for sx in ix..(ix + factor).min(xsize) {
-                    let (multiplier, weight) = if let Some(ac) = alpha {
-                        let a = input.row(*ac)[sx] as f64;
+
+                let ix_end = (ix + factor).min(xsize);
+                let src = &samples[ix..ix_end];
+                let alpha = alpha.map(|ac| &input.row(ac)[ix..ix_end]);
+                for (dx, &sample) in src.iter().enumerate() {
+                    let (multiplier, weight) = if let Some(src_a) = alpha {
+                        let a = src_a[dx];
                         (a, a)
                     } else {
                         (1.0, 1.0)
                     };
-                    scratch.sums[idx] += samples[sx] as f64 * multiplier;
+                    scratch.sums[idx] += sample * multiplier;
                     scratch.weights[idx] += weight;
                 }
+
                 if last {
                     dest[ox] = if scratch.weights[idx] > 0.0 {
-                        (scratch.sums[idx] / scratch.weights[idx]) as f32
+                        scratch.sums[idx] / scratch.weights[idx]
                     } else {
                         0.0
                     };
