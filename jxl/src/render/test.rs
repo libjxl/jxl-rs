@@ -101,7 +101,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     let mut pipeline = RenderPipelineBuilder::<SimpleRenderPipeline>::new_with_chunk_size(
         &channel_types,
         image_size,
-        downsampling_shift,
+        downsampling_shift as isize,
         LOG_GROUP_SIZE,
         chunk_size,
         Arc::new(BufferRecycler::new()),

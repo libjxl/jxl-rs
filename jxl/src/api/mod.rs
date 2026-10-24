@@ -56,6 +56,7 @@ pub struct ToneMapping {
 
 #[derive(Clone)]
 pub struct JxlBasicInfo {
+    /// Output dimensions, after the requested downsampling and orientation.
     pub size: (usize, usize),
     pub bit_depth: JxlBitDepth,
     pub orientation: Orientation,
