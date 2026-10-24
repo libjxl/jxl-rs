@@ -1,0 +1,34 @@
+[package]
+name = "jxl_c"
+description = "libjxl C-ABI compatibility layer for jxl-rs"
+version = "0.8.0"
+readme = "../README.md"
+keywords = ["jpeg-xl", "decoder", "ffi", "libjxl"]
+categories = ["multimedia::images", "api-bindings"]
+authors = ["Luca Versari <veluca93@gmail.com>"]
+repository = "https://github.com/libjxl/jxl-rs"
+edition = "2024"
+license = "BSD-3-Clause"
+rust-version.workspace = true
+
+[lib]
+name = "jxl_c"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+jxl = { path = "../jxl", version = "=0.8.0", default-features = false }
+
+[features]
+default = ["all-simd", "brotli"]
+
+brotli = ["jxl/brotli"]
+
+all-simd = ["jxl/all-simd"]
+sse42 = ["jxl/sse42"]
+avx = ["jxl/avx"]
+avx512 = ["jxl/avx512"]
+neon = ["jxl/neon"]
+simd128 = ["jxl/simd128"]
+
+[lints]
+workspace = true

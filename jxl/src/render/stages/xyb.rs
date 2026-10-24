@@ -6,8 +6,8 @@
 use jxl_simd::{F32SimdVec, SimdDescriptor, simd_function};
 
 use crate::api::{
-    JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint, adapt_to_xyz_d50,
-    primaries_to_xyz, primaries_to_xyz_d50,
+    JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
+    adapt_to_xyz_d50, primaries_to_xyz, primaries_to_xyz_d50,
 };
 use crate::color::tf::{self, TransferFunction};
 use crate::error::Result;
@@ -62,24 +62,31 @@ impl OutputColorInfo {
         ]
     }
 
-    pub fn from_header(header: &FileHeader) -> Result<Self> {
+    pub fn from_header(
+        header: &FileHeader,
+        desired_profile: Option<&JxlColorProfile>,
+    ) -> Result<Self> {
         let srgb_output = OutputColorInfo {
             luminances: SRGB_LUMINANCES,
             intensity_target: header.image_metadata.tone_mapping.intensity_target,
             opsin: header.transform_data.opsin_inverse_matrix.clone(),
             tf: TransferFunction::Srgb,
         };
-        if header.image_metadata.color_encoding.want_icc {
-            return Ok(srgb_output);
-        }
+        let desired_colorspace = match desired_profile {
+            Some(JxlColorProfile::Simple(enc)) => enc.clone(),
+            _ => {
+                if header.image_metadata.color_encoding.want_icc {
+                    return Ok(srgb_output);
+                }
+                JxlColorEncoding::from_internal(&header.image_metadata.color_encoding)?
+            }
+        };
 
         let tf;
         let mut inverse_matrix = Self::opsin_matrix_to_matrix3x3(
             header.transform_data.opsin_inverse_matrix.inverse_matrix,
         );
         let mut luminances = SRGB_LUMINANCES;
-        let desired_colorspace =
-            JxlColorEncoding::from_internal(&header.image_metadata.color_encoding)?;
         match &desired_colorspace {
             JxlColorEncoding::XYB { .. } => {
                 return Ok(srgb_output);

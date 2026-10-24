@@ -110,6 +110,7 @@ pub(super) struct CodestreamParser {
 
     // Output information
     pub output_color_profile: Option<JxlColorProfile>,
+    pub output_color_profile_set_by_user: bool,
     pub pixel_format: Option<JxlPixelFormat>,
 
     /// While seeking: the number of visible frames still to skip before the target.
@@ -140,6 +141,7 @@ impl CodestreamParser {
             image_info: ImageInfo::new(),
             state: ParserState::FileHeader,
             output_color_profile: None,
+            output_color_profile_set_by_user: false,
             pixel_format: None,
             local_buffer: SmallBuffer::new(4096),
             header_needed_bytes: None,
@@ -163,6 +165,7 @@ impl CodestreamParser {
         self.local_buffer.reset();
         self.header_needed_bytes = None;
         self.output_color_profile = None;
+        self.output_color_profile_set_by_user = false;
         self.pixel_format = None;
         self.visible_frames_to_skip = None;
         self.next_frame_index = 0;
@@ -498,5 +501,25 @@ impl CodestreamParser {
             self.state,
             ParserState::Sections { process_mode, .. } if process_mode.notify_user()
         )
+    }
+
+    pub(super) fn is_mid_frame_decode(&self) -> bool {
+        matches!(self.state, ParserState::Sections { .. }) && self.frame_info.has_started_decoding()
+    }
+
+    pub(super) fn rebuild_current_frame_pipeline(&mut self) -> Result<()> {
+        if matches!(
+            self.state,
+            ParserState::Sections {
+                process_mode: ProcessMode::Process | ProcessMode::SkipOutput,
+                ..
+            }
+        ) && let (Some(fmt), Some(prof)) = (
+            self.pixel_format.as_ref(),
+            self.output_color_profile.as_ref(),
+        ) {
+            self.frame_info.rebuild_render_pipeline(fmt, prof)?;
+        }
+        Ok(())
     }
 }

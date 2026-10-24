@@ -138,6 +138,22 @@ impl FrameInfo {
             .or(self.frame.as_ref().map(|x| x.header()))
     }
 
+    pub fn has_started_decoding(&self) -> bool {
+        self.section_state.lf_global_done
+            || self.frame.as_ref().is_some_and(|f| f.lf_global.is_some())
+    }
+
+    pub fn rebuild_render_pipeline(
+        &mut self,
+        pixel_format: &JxlPixelFormat,
+        output_profile: &JxlColorProfile,
+    ) -> Result<()> {
+        if let Some(frame) = self.frame.as_mut() {
+            frame.prepare_render_pipeline(pixel_format, output_profile)?;
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn current_toc(&self) -> Option<&crate::headers::toc::Toc> {
         self.frame.as_ref().map(|x| x.toc())

@@ -728,7 +728,8 @@ impl Frame {
             }
         }
 
-        let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
+        let output_color_info =
+            OutputColorInfo::from_header(&decoder_state.file_header, Some(output_profile))?;
 
         // Determine output TF: use output profile's TF if available, else fall back to embedded profile's TF.
         // Note: output_color_info (luminances, opsin matrix) always comes from the embedded profile;
