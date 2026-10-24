@@ -30,7 +30,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
     pub(super) fn new_with_chunk_size(
         channel_types: &[(DataTypeTag, Option<BitDepth>)],
         size: (usize, usize),
-        downsampling_shift: isize,
+        downsampling_shift: usize,
         mut log_group_size: usize,
         chunk_size: usize,
         buffer_recycler: Arc<BufferRecycler>,
@@ -41,7 +41,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         let num_channels = channel_types.len();
         // The number of pixels that a group encompasses in the final, upsampled image along one
         // dimension is effectively multiplied by the upsampling factor.
-        log_group_size = (log_group_size as isize + downsampling_shift) as usize;
+        log_group_size += downsampling_shift;
         Self {
             shared: RenderPipelineShared {
                 channel_output_downsamples: vec![0; num_channels],
@@ -121,7 +121,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
     pub fn new(
         channel_types: &[(DataTypeTag, Option<BitDepth>)],
         size: (usize, usize),
-        downsampling_shift: isize,
+        downsampling_shift: usize,
         log_group_size: usize,
         buffer_recycler: Arc<BufferRecycler>,
     ) -> Self {
@@ -130,7 +130,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             size,
             downsampling_shift,
             log_group_size,
-            1 << (log_group_size as isize + downsampling_shift),
+            1 << (log_group_size + downsampling_shift),
             buffer_recycler,
         )
     }

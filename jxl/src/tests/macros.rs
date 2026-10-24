@@ -14,6 +14,24 @@ macro_rules! declare_test_file_common {
             }
 
             #[test]
+            fn [<test_decode_downsampled_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                let file = std::fs::read(&path).unwrap();
+                for downsample_factor in 1..=3 {
+                    crate::tests::decode::decode::<f32>(
+                        &file,
+                        crate::tests::decode::DecodeParams {
+                            downsample_factor,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_else(|err| {
+                        panic!("downsample_factor={downsample_factor} for {path:?}: {err:?}")
+                    });
+                }
+            }
+
+            #[test]
             fn [<test_decode_test_file_chunks_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();

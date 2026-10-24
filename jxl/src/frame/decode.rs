@@ -28,7 +28,6 @@ use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
 use crate::frame::group::VarDctBuffers;
-use crate::frame::render_shift::{RenderShiftInfo, RenderShiftInfoMode};
 use crate::frame::{
     DataStatus, DecoderState, Frame, GroupStatus, HfGlobalState, HfMetadata, LfGlobalState,
     PassState, coeff_order,
@@ -257,12 +256,13 @@ impl Frame {
                 image_size
             };
 
-            let shift_info = RenderShiftInfo::new(
-                &frame_header,
-                decoder_state.output_downsampling_shift,
-                RenderShiftInfoMode::ReferenceOutput,
-            );
-            let sz = shift_info.downsampled_size(sz);
+            let reference_shift =
+                if frame_header.frame_type == FrameType::LFFrame || frame_header.save_before_ct {
+                    0
+                } else {
+                    decoder_state.output_downsampling_shift
+                };
+            let sz = (sz.0.shrc(reference_shift), sz.1.shrc(reference_shift));
             let num_ref_channels = 3 + image_metadata.extra_channel_info.len();
             Some(
                 (0..num_ref_channels)
@@ -340,7 +340,12 @@ impl Frame {
             br.skip_bits(lfg.total_bits_read)?;
         } else {
             trace!(pos = br.total_bits_read());
-            let shift_info = self.render_shift_info(RenderShiftInfoMode::FrameProcessing);
+            let feature_rendering_shift = self
+                .header
+                .feature_rendering_shift(self.decoder_state.output_downsampling_shift);
+            // Patches and splines use the pre-upsampling grid.
+            let feature_grid_shift =
+                feature_rendering_shift.saturating_sub(self.header.upsampling.ilog2() as usize);
 
             if self.header.has_patches() {
                 info!("decoding patches");
@@ -349,7 +354,7 @@ impl Frame {
                     self.header.size_padded().0,
                     self.header.size_padded().1,
                     self.decoder_state.extra_channel_info().len(),
-                    shift_info.feature_rendering_shift(),
+                    feature_grid_shift,
                     &self.decoder_state.reference_frames[..],
                     self.decoder_state.level5_limits,
                     &mut self.buffer_recycler.modular_scratch.get().lz77_window,
@@ -415,7 +420,7 @@ impl Frame {
                     &color_correlation_params,
                     self.decoder_state.high_precision,
                     self.decoder_state.level5_limits,
-                    shift_info.feature_rendering_shift(),
+                    feature_grid_shift,
                 )?;
             }
 
@@ -639,8 +644,12 @@ impl Frame {
             });
         }
         // Set EPF sigma values to the correct values if we are doing EPF.
-        let shift_info = self.render_shift_info(RenderShiftInfoMode::FrameProcessing);
-        if self.header.restoration_filter.epf_iters > 0 && shift_info.shift == 0 {
+        if self.header.restoration_filter.epf_iters > 0
+            && self
+                .header
+                .feature_rendering_shift(self.decoder_state.output_downsampling_shift)
+                == 0
+        {
             *self.epf_sigma.try_write().unwrap() = SigmaSource::new(
                 &self.header,
                 self.lf_global.as_ref().unwrap(),
@@ -760,8 +769,13 @@ impl Frame {
             return Ok(());
         }
 
-        let shift_info = self.render_shift_info(RenderShiftInfoMode::FrameProcessing);
-        if self.header.has_noise() && shift_info.shift == 0 && render_vardct {
+        if self.header.has_noise()
+            && self
+                .header
+                .feature_rendering_shift(self.decoder_state.output_downsampling_shift)
+                == 0
+            && render_vardct
+        {
             self.render_noise_for_group(group, complete, buffer_splitter)?;
         }
 

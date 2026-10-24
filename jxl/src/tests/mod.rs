@@ -13,7 +13,6 @@ mod compare_modular;
 mod compare_parallel;
 mod compare_prefix;
 pub(crate) mod decode;
-mod downsample;
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
 pub(crate) mod parallel_runner;
 

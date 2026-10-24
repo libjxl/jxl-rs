@@ -5,9 +5,9 @@
 
 use crate::error::Result;
 use crate::frame::ReferenceFrame;
-use crate::frame::render_shift::align_origin;
 use crate::headers::FileHeader;
 use crate::headers::frame_header::*;
+use crate::image::align_origin;
 use crate::util::ShiftRightCeil;
 use crate::util::sync::Arc;
 

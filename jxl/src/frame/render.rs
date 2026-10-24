@@ -19,13 +19,12 @@ use crate::features::spline::Splines;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
 use crate::frame::modular::ModularStorage;
 use crate::frame::quantizer::LfQuantFactors;
-use crate::frame::render_shift::{RenderShiftInfo, RenderShiftInfoMode, box_average};
 use crate::frame::{DataStatus, DecoderState, Frame};
 use crate::headers::Orientation;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::extra_channels::ExtraChannel;
 use crate::headers::frame_header::{BlendingMode, Encoding, FrameHeader, FrameType};
-use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
+use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect, box_average};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -101,17 +100,10 @@ macro_rules! pipeline {
 
 pub(super) use pipeline;
 
-#[cfg(test)]
-mod test;
-
 impl Frame {
     pub(super) fn preferred_render_input_shift(&self, channel: usize) -> (usize, usize) {
         let (x, y) = pipeline!(self, p, p.input_downsample(channel));
-        // Decoders use the upsampled frame grid, not the pipeline's virtual grid.
-        let grid_shift = self
-            .render_shift_info(RenderShiftInfoMode::FrameProcessing)
-            .shift;
-        (x as usize + grid_shift, y as usize + grid_shift)
+        (x as usize, y as usize)
     }
 
     pub(super) fn set_render_input<T: ImageDataType>(
@@ -627,12 +619,10 @@ impl Frame {
         output_profile: &JxlColorProfile,
         buffer_recycler: Arc<crate::image::BufferRecycler>,
     ) -> Result<Box<T>> {
-        let shift_info = RenderShiftInfo::new(
-            frame_header,
-            decoder_state.output_downsampling_shift,
-            RenderShiftInfoMode::FrameProcessing,
-        );
-        let render_noise = frame_header.has_noise() && shift_info.shift == 0;
+        let feature_rendering_shift =
+            frame_header.feature_rendering_shift(decoder_state.output_downsampling_shift);
+        let upsampling_shift = frame_header.upsampling.ilog2() as usize;
+        let render_noise = frame_header.has_noise() && feature_rendering_shift == 0;
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if render_noise { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
@@ -666,23 +656,20 @@ impl Frame {
             channel_types.push((DataTypeTag::U16, None));
         }
 
-        // Input processing and final output may have different resolutions.
-        // Decode-side reductions (e.g. a future unsqueeze skip) belong in
-        // shift_info; only the remaining reduction is inserted below.
-        let output_shift = RenderShiftInfo::new(
-            frame_header,
-            decoder_state.output_downsampling_shift,
-            RenderShiftInfoMode::FinalOutput,
-        )
-        .shift;
-        let remaining_shift = output_shift - shift_info.shift;
-        let mut channel_output_downsamples = vec![remaining_shift as u8; num_channels];
+        // Decode-side reductions are reported separately as actual decoded input shifts.
+        let output_shift = if frame_header.frame_type == FrameType::LFFrame {
+            0
+        } else {
+            decoder_state.output_downsampling_shift
+        };
+        let remaining_shift = output_shift - feature_rendering_shift;
+        let mut channel_output_downsamples = vec![output_shift as u8; num_channels];
         // Noise scratch channels are consumed at full resolution, before reduction.
         channel_output_downsamples.extend(std::iter::repeat_n(0, num_temp_channels));
         let mut pipeline = RenderPipelineBuilder::<T>::new(
             &channel_types,
-            shift_info.downsampled_size(frame_header.size_upsampled()),
-            shift_info.upsampling_shift as isize - shift_info.shift as isize,
+            frame_header.size_upsampled(),
+            upsampling_shift,
             frame_header.log_group_dim(),
             buffer_recycler,
         )
@@ -709,7 +696,7 @@ impl Frame {
         }
 
         let filters = &frame_header.restoration_filter;
-        if filters.gab && shift_info.shift == 0 {
+        if filters.gab && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(GaborishStage::new(
                 [
                     filters.gab_x_weight1,
@@ -725,7 +712,7 @@ impl Frame {
         }
 
         let rf = &frame_header.restoration_filter;
-        if rf.epf_iters >= 3 && shift_info.shift == 0 {
+        if rf.epf_iters >= 3 && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(Epf0Stage::new(
                 rf.epf_pass0_sigma_scale,
                 rf.epf_border_sad_mul,
@@ -733,7 +720,7 @@ impl Frame {
                 epf_sigma.clone(),
             ))
         }
-        if rf.epf_iters >= 1 && shift_info.shift == 0 {
+        if rf.epf_iters >= 1 && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(Epf1Stage::new(
                 1.0,
                 rf.epf_border_sad_mul,
@@ -741,7 +728,7 @@ impl Frame {
                 epf_sigma.clone(),
             ))
         }
-        if rf.epf_iters >= 2 && shift_info.shift == 0 {
+        if rf.epf_iters >= 2 && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(Epf2Stage::new(
                 rf.epf_pass2_sigma_scale,
                 rf.epf_border_sad_mul,
@@ -759,7 +746,7 @@ impl Frame {
         if !late_ec_upsample {
             let transform_data = &decoder_state.file_header.transform_data;
             for (ec, ec_up) in frame_header.ec_upsampling.iter().enumerate() {
-                let upsample = (ec_up.ilog2() as usize).saturating_sub(shift_info.shift);
+                let upsample = (ec_up.ilog2() as usize).saturating_sub(feature_rendering_shift);
                 if upsample > 0 {
                     pipeline = match upsample {
                         1 => pipeline.add_inout_stage(Upsample2x::new(transform_data, 3 + ec)),
@@ -783,7 +770,7 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(SplinesStage::new(splines))
         }
 
-        let color_upsample = shift_info.upsampling_shift.saturating_sub(shift_info.shift);
+        let color_upsample = upsampling_shift.saturating_sub(feature_rendering_shift);
         if color_upsample > 0 {
             let transform_data = &decoder_state.file_header.transform_data;
             let nb_channels = if late_ec_upsample {
@@ -851,12 +838,13 @@ impl Frame {
         }
 
         // Save the reference before reducing the same rows for API output.
-        if frame_header.can_be_referenced && frame_header.save_before_ct && remaining_shift != 0 {
+        let downsample_before_ct = frame_header.can_be_referenced && frame_header.save_before_ct;
+        if downsample_before_ct && remaining_shift != 0 {
             pipeline = Self::add_downsampling_stage(
                 pipeline,
                 decoder_state,
                 frame_header,
-                shift_info.shift,
+                feature_rendering_shift,
                 output_shift,
             );
         }
@@ -887,15 +875,12 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(XybColorConvertStage::new(0, stage_color_info));
         }
 
-        if frame_header.needs_full_resolution_blending()
-            && !(frame_header.can_be_referenced && frame_header.save_before_ct)
-            && remaining_shift != 0
-        {
+        if !downsample_before_ct && remaining_shift != 0 {
             pipeline = Self::add_downsampling_stage(
                 pipeline,
                 decoder_state,
                 frame_header,
-                shift_info.shift,
+                feature_rendering_shift,
                 output_shift,
             );
         }
@@ -1067,10 +1052,7 @@ impl Frame {
         output_shift: usize,
     ) -> RenderPipelineBuilder<T> {
         let size = header.size_upsampled();
-        let size = (
-            size.0.div_ceil(1 << input_shift),
-            size.1.div_ceil(1 << input_shift),
-        );
+        let size = (size.0.shrc(input_shift), size.1.shrc(input_shift));
         let alpha = (0..3 + header.num_extra_channels as usize)
             .map(|c| {
                 let info = if c < 3 {
@@ -1079,19 +1061,18 @@ impl Frame {
                     &header.ec_blending_info[c - 3]
                 };
                 let ac = 3 + info.alpha_channel as usize;
-                if c != ac
+                let associated = header.num_extra_channels != 0
+                    && info.mode == BlendingMode::Blend
+                    && decoder_state.extra_channel_info()[info.alpha_channel as usize]
+                        .alpha_associated();
+                (header.num_extra_channels != 0
+                    && c != ac
+                    && !associated
                     && matches!(
                         info.mode,
                         BlendingMode::Blend | BlendingMode::AlphaWeightedAdd
-                    )
-                {
-                    let associated = info.mode == BlendingMode::Blend
-                        && decoder_state.extra_channel_info()[info.alpha_channel as usize]
-                            .alpha_associated();
-                    Some((ac, associated))
-                } else {
-                    None
-                }
+                    ))
+                .then_some(ac)
             })
             .collect();
         match output_shift - input_shift {

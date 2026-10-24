@@ -10,12 +10,12 @@ use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOut
 /// until every channel's weighted sum has been computed.
 pub struct DownsampleFrame<const SHIFT: u8> {
     input_size: (usize, usize),
-    /// For each output channel: optional alpha channel and associated-alpha flag.
-    alpha: Vec<Option<(usize, bool)>>,
+    /// Alpha weights for straight channels; associated samples use an ordinary average.
+    alpha: Vec<Option<usize>>,
 }
 
 impl<const SHIFT: u8> DownsampleFrame<SHIFT> {
-    pub fn new(input_size: (usize, usize), alpha: Vec<Option<(usize, bool)>>) -> Self {
+    pub fn new(input_size: (usize, usize), alpha: Vec<Option<usize>>) -> Self {
         assert!((1..=3).contains(&SHIFT));
         Self { input_size, alpha }
     }
@@ -76,9 +76,9 @@ impl<const SHIFT: u8> RenderPipelineInOutStage for DownsampleFrame<SHIFT> {
                     scratch.weights[idx] = 0.0;
                 }
                 for sx in ix..(ix + factor).min(xsize) {
-                    let (multiplier, weight) = if let Some((ac, associated)) = alpha {
+                    let (multiplier, weight) = if let Some(ac) = alpha {
                         let a = input.row(*ac)[sx] as f64;
-                        (if *associated { 1.0 } else { a }, a)
+                        (a, a)
                     } else {
                         (1.0, 1.0)
                     };

@@ -10,10 +10,9 @@ use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
 use crate::features::blending::perform_blending;
-use crate::frame::render_shift::{align_origin, box_average};
 use crate::frame::{DecoderState, ReferenceFrame};
 use crate::headers::extra_channels::ExtraChannelInfo;
-use crate::image::Rect;
+use crate::image::{Rect, align_origin, box_average};
 use crate::util::tracing_wrappers::*;
 use crate::util::{NewWithCapacity, ShiftRightCeil, SmallVec};
 
@@ -803,13 +802,22 @@ impl PatchesDictionary {
                         blending_idx + (channel - 2)
                     };
                     let blend_mode = self.blendings[blending_idx].mode;
-                    let uses_alpha = blend_mode.uses_alpha();
                     let alpha_channel = self.blendings[blending_idx].alpha_channel;
-                    let alpha_premultiplied = blend_mode == PatchBlendMode::AlphaWeightedAddAbove
-                        && blend_mode == PatchBlendMode::AlphaWeightedAddBelow
+                    let alpha_premultiplied = matches!(
+                        blend_mode,
+                        PatchBlendMode::BlendAbove | PatchBlendMode::BlendBelow
+                    ) && num_ec != 0
                         && extra_channel_info[alpha_channel].alpha_associated();
-                    let alpha = uses_alpha
-                        .then(|| (&ref_frame.frame[3 + alpha_channel], alpha_premultiplied));
+                    // Weighted-add Below weights the background, not this patch.
+                    let weight_by_alpha = matches!(
+                        blend_mode,
+                        PatchBlendMode::BlendAbove
+                            | PatchBlendMode::BlendBelow
+                            | PatchBlendMode::AlphaWeightedAddAbove
+                    ) && num_ec != 0
+                        && channel != 3 + alpha_channel
+                        && !alpha_premultiplied;
+                    let alpha = weight_by_alpha.then(|| &ref_frame.frame[3 + alpha_channel]);
 
                     sampled.resize(out_x1 - out_x0, 0.0);
                     let xsize = ref_x1 - ref_x0;

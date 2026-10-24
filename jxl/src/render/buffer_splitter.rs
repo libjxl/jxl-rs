@@ -7,9 +7,8 @@ use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut};
 
 use crate::api::JxlOutputBuffer;
-use crate::frame::render_shift::align_origin;
 use crate::headers::Orientation;
-use crate::image::{Image, ImageDataType, Rect};
+use crate::image::{Image, ImageDataType, Rect, align_origin};
 use crate::util::sync::Mutex;
 use crate::util::{ChannelVec, ShiftRightCeil};
 

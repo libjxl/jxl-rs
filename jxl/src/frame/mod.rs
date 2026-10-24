@@ -40,7 +40,6 @@ pub mod modular;
 mod quant_weights;
 pub mod quantizer;
 pub mod render;
-pub(crate) mod render_shift;
 
 pub(crate) use group::VarDctBuffers;
 

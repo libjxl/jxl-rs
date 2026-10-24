@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-mod downsample;
-
 use std::sync::Arc;
 
 use rand::SeedableRng;
@@ -103,7 +101,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     let mut pipeline = RenderPipelineBuilder::<SimpleRenderPipeline>::new_with_chunk_size(
         &channel_types,
         image_size,
-        downsampling_shift as isize,
+        downsampling_shift,
         LOG_GROUP_SIZE,
         chunk_size,
         Arc::new(BufferRecycler::new()),
