@@ -667,7 +667,7 @@ impl PatchesDictionary {
 
     // `y` is already downsampled.
     #[inline(always)]
-    fn set_patches_for_row(&self, y: usize, patches_for_row_result: &mut Vec<usize>) {
+    pub fn set_patches_for_row(&self, y: usize, patches_for_row_result: &mut Vec<usize>) {
         patches_for_row_result.clear();
         if self.num_patches.len() <= y || self.num_patches[y] == 0 {
             return;
@@ -809,7 +809,7 @@ impl PatchesDictionary {
                         && blend_mode == PatchBlendMode::AlphaWeightedAddBelow
                         && extra_channel_info[alpha_channel].alpha_associated();
                     let alpha = uses_alpha
-                        .then_some((&ref_frame.frame[3 + alpha_channel], alpha_premultiplied));
+                        .then(|| (&ref_frame.frame[3 + alpha_channel], alpha_premultiplied));
 
                     sampled.resize(out_x1 - out_x0, 0.0);
                     let xsize = ref_x1 - ref_x0;

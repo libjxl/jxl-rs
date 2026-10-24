@@ -120,6 +120,9 @@ pub trait RenderPipeline: Sized {
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
 
+    /// Input resolution relative to the pipeline's virtual image grid.
+    fn input_downsample(&self, channel: usize) -> (u8, u8);
+
     /// Obtains a buffer suitable for storing the input in channel `channel`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous
     /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.

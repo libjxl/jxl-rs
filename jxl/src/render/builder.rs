@@ -23,7 +23,6 @@ use crate::util::tracing_wrappers::*;
 pub struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
     shared: RenderPipelineShared<Pipeline::Buffer>,
     channel_types: Vec<(DataTypeTag, Option<BitDepth>)>,
-    output_downsample: (u8, u8),
 }
 
 impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
@@ -45,6 +44,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         log_group_size = (log_group_size as isize + downsampling_shift) as usize;
         Self {
             shared: RenderPipelineShared {
+                channel_output_downsamples: vec![0; num_channels],
                 channel_info: vec![
                     channel_types
                         .iter()
@@ -68,7 +68,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 buffer_recycler,
             },
             channel_types: channel_types.to_vec(),
-            output_downsample: (0, 0),
         }
     }
 
@@ -164,11 +163,11 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         self.add_stage_internal(Stage::InPlace(Pipeline::box_inplace_stage(stage)))
     }
 
-    /// Final channel resolution relative to the pipeline's virtual image grid.
-    #[cfg(test)]
-    pub fn with_output_downsample(mut self, level: (u8, u8)) -> Self {
-        assert!(level.0 <= 6 && level.1 <= 6);
-        self.output_downsample = level;
+    /// Final per-channel resolution relative to the pipeline's virtual image grid.
+    pub fn with_channel_output_downsamples(mut self, levels: Vec<u8>) -> Self {
+        assert_eq!(levels.len(), self.shared.num_channels());
+        assert!(levels.iter().all(|&level| level <= 6));
+        self.shared.channel_output_downsamples = levels;
         self
     }
 
@@ -271,7 +270,12 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
 
         let channel_info = &mut self.shared.channel_info;
-        let mut cur_downsamples = vec![self.output_downsample; num_channels];
+        let mut cur_downsamples: Vec<_> = self
+            .shared
+            .channel_output_downsamples
+            .iter()
+            .map(|&level| (level, level))
+            .collect();
         for (s, stage) in self.shared.stages.iter().enumerate().rev() {
             let next_info = &mut channel_info[s + 1];
             let mut save_downsample = None;

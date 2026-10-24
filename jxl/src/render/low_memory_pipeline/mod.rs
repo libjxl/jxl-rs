@@ -472,6 +472,10 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         })
     }
 
+    fn input_downsample(&self, channel: usize) -> (u8, u8) {
+        self.shared.channel_info[0][channel].downsample
+    }
+
     #[instrument(skip_all, err)]
     fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
         let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
@@ -520,7 +524,11 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 Stage::Save(s) => {
                     let (dx, dy) = self.downsampling_for_stage[i];
                     s.check_buffer_size(
-                        (size.0.shrc(dx), size.1.shrc(dy)),
+                        if self.shared.extend_stage_index.is_some_and(|e| i > e) {
+                            size
+                        } else {
+                            (size.0.shrc(dx), size.1.shrc(dy))
+                        },
                         buffers[s.output_buffer_index].as_ref(),
                     )?
                 }
@@ -538,22 +546,24 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         // TODO(veluca): consider pre-computing those strips at pipeline construction and making
         // smaller strips.
         let e = self.shared.extend_stage_index.unwrap();
+        let (dx, dy) = self.downsampling_for_stage[e];
+        let chunk_size = self.shared.chunk_size.shrc(dx);
         let Stage::Extend(e) = &self.shared.stages[e] else {
             unreachable!("extend stage is not an extend stage");
         };
         let frame_end = (
-            e.frame_origin.0 + self.shared.input_size.0 as isize,
-            e.frame_origin.1 + self.shared.input_size.1 as isize,
+            e.frame_origin.0 + self.shared.input_size.0.shrc(dx) as isize,
+            e.frame_origin.1 + self.shared.input_size.1.shrc(dy) as isize,
         );
         // Split the full image area in 4 strips: left and right of the frame, and above and below.
-        // We divide each part further in strips of width self.shared.chunk_size.
+        // Use the row-buffer width at Extend's resolution.
         let mut strips = vec![];
         // Above (including left and right)
         if e.frame_origin.1 > 0 {
             let xend = e.image_size.0;
             let yend = (e.frame_origin.1 as usize).min(e.image_size.1);
-            for x in (0..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (0..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, 0..yend));
             }
         }
@@ -562,8 +572,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             let ystart = frame_end.1.max(0) as usize;
             let yend = e.image_size.1;
             let xend = e.image_size.0;
-            for x in (0..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (0..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
             }
         }
@@ -572,8 +582,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             let ystart = e.frame_origin.1.max(0) as usize;
             let yend = (frame_end.1 as usize).min(e.image_size.1);
             let xend = (e.frame_origin.0 as usize).min(e.image_size.0);
-            for x in (0..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (0..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
             }
         }
@@ -583,8 +593,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             let xend = e.image_size.0;
             let ystart = e.frame_origin.1.max(0) as usize;
             let yend = (frame_end.1 as usize).min(e.image_size.1);
-            for x in (xstart..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (xstart..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
             }
         }
@@ -604,10 +614,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
             let mut local_buffers = buffer_splitter.get_local_buffers(
                 &self.save_buffer_info,
-                rect_to_render,
+                Rect {
+                    origin: (rect_to_render.origin.0 << dx, rect_to_render.origin.1 << dy),
+                    size: (rect_to_render.size.0 << dx, rect_to_render.size.1 << dy),
+                },
                 true,
-                full_image_size,
-                full_image_size,
+                (full_image_size.0 << dx, full_image_size.1 << dy),
+                (full_image_size.0 << dx, full_image_size.1 << dy),
                 (0, 0),
             );
             self.render_outside_frame_internal(&mut data, xrange, yrange, &mut local_buffers)?;

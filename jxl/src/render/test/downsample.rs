@@ -4,7 +4,78 @@
 // license that can be found in the LICENSE file.
 
 use super::*;
-use crate::render::{LowMemoryRenderPipeline, stages::Downsample};
+use crate::render::{Channels, ChannelsMut, ErasedLocalState, LowMemoryRenderPipeline};
+
+/// Test stage for independent axis shifts and accumulation in shared output rows.
+struct Downsample<const X: u8, const Y: u8> {
+    channel: usize,
+    input_size: (usize, usize),
+}
+
+impl<const X: u8, const Y: u8> Downsample<X, Y> {
+    fn new(channel: usize, input_size: (usize, usize)) -> Self {
+        assert!(X <= 3 && Y <= 3);
+        Self {
+            channel,
+            input_size,
+        }
+    }
+}
+
+impl<const X: u8, const Y: u8> std::fmt::Display for Downsample<X, Y> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "box downsample {}x{} channel {}",
+            1 << X,
+            1 << Y,
+            self.channel
+        )
+    }
+}
+
+impl<const X: u8, const Y: u8> RenderPipelineInOutStage for Downsample<X, Y> {
+    type InputT = f32;
+    type OutputT = f32;
+    const BORDER: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (-(X as i8), -(Y as i8));
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        (x, y): (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
+        _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
+    ) {
+        let fx = 1 << X;
+        let fy = 1 << Y;
+        assert_eq!(x % fx, 0);
+        assert!(xsize % fx == 0 || x + xsize == self.input_size.0);
+        let input = input_rows.row(0);
+        let output = output_rows.row_mut(0, 0);
+        let first = y % fy == 0;
+        let last = y % fy == fy - 1 || y + 1 == self.input_size.1;
+        let height = fy.min(self.input_size.1 - (y / fy) * fy);
+        for (ox, ix) in (0..xsize).step_by(fx).enumerate() {
+            let width = fx.min(xsize - ix);
+            let sum: f32 = input[ix..ix + width].iter().sum();
+            if first {
+                output[ox] = sum;
+            } else {
+                output[ox] += sum;
+            }
+            if last {
+                output[ox] /= (width * height) as f32;
+            }
+        }
+    }
+}
 
 fn run<P: RenderPipeline>(
     image: &Image<f32>,
@@ -22,7 +93,7 @@ fn run<P: RenderPipeline>(
         chunk,
         Arc::new(BufferRecycler::new()),
     )
-    .with_output_downsample((level, level));
+    .with_channel_output_downsamples(vec![level]);
     let mut pipeline = stages(builder)
         .add_save_stage(
             &[0],
@@ -309,7 +380,7 @@ fn accumulation_downsample_64x_horizontal_border() {
         8,
         Arc::new(BufferRecycler::new()),
     )
-    .with_output_downsample((6, 6))
+    .with_channel_output_downsamples(vec![6])
     .add_inout_stage(Downsample::<3, 3>::new(0, size))
     .add_inout_stage(Downsample::<3, 3>::new(0, small))
     .add_inout_stage(HorizontalChromaUpsample::new(0))

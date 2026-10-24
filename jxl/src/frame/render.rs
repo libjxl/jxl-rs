@@ -24,15 +24,15 @@ use crate::frame::{DataStatus, DecoderState, Frame};
 use crate::headers::Orientation;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::extra_channels::ExtraChannel;
-use crate::headers::frame_header::{BlendingInfo, BlendingMode, Encoding, FrameHeader, FrameType};
+use crate::headers::frame_header::{BlendingMode, Encoding, FrameHeader, FrameType};
 use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::stages::*;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
-use crate::util::SmallVec;
 use crate::util::sync::{Arc, RwLock};
+use crate::util::{ShiftRightCeil, SmallVec};
 
 #[cfg(test)]
 macro_rules! pipeline_mut {
@@ -101,18 +101,70 @@ macro_rules! pipeline {
 
 pub(super) use pipeline;
 
+#[cfg(test)]
+mod test;
+
 impl Frame {
+    pub(super) fn preferred_render_input_shift(&self, channel: usize) -> (usize, usize) {
+        let (x, y) = pipeline!(self, p, p.input_downsample(channel));
+        // Decoders use the upsampled frame grid, not the pipeline's virtual grid.
+        let grid_shift = self
+            .render_shift_info(RenderShiftInfoMode::FrameProcessing)
+            .shift;
+        (x as usize + grid_shift, y as usize + grid_shift)
+    }
+
     pub(super) fn set_render_input<T: ImageDataType>(
         &self,
         channel: usize,
         group: usize,
         complete: bool,
+        decoded_shift: (usize, usize),
         mut image: Image<T>,
         buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
-        let shift_info = self.render_shift_info(RenderShiftInfoMode::FirstPass);
-        if shift_info.output_shift(&self.header, channel) != 0 {
-            image = self.downsample_for_pipeline(channel, group, image)?;
+        if !pipeline!(self, p, p.used_channel_mask()[channel]) {
+            self.buffer_recycler.recycle_buffer(image);
+            return Ok(());
+        }
+        let preferred = self.preferred_render_input_shift(channel);
+        let reduction = match (
+            preferred.0.checked_sub(decoded_shift.0),
+            preferred.1.checked_sub(decoded_shift.1),
+        ) {
+            (Some(x), Some(y)) if x == y => x,
+            _ => panic!(
+                "Cannot adapt decoded input shift {decoded_shift:?} to preferred shift {preferred:?}: reductions must be nonnegative and equal on both axes"
+            ),
+        };
+        if reduction != 0 {
+            let mut destination = pipeline!(self, p, p.get_buffer(channel))?;
+            let size = self.header.size_upsampled();
+            let group_shift = self.header.log_group_dim() + self.header.upsampling.ilog2() as usize;
+            let gx = group % self.header.size_groups().0;
+            let gy = group / self.header.size_groups().0;
+            // Padding at the frame edge must not contribute to the average.
+            let valid_size = (
+                (size.0 - (gx << group_shift))
+                    .min(1 << group_shift)
+                    .shrc(decoded_shift.0),
+                (size.1 - (gy << group_shift))
+                    .min(1 << group_shift)
+                    .shrc(decoded_shift.1),
+            );
+            box_average(
+                &image,
+                Rect {
+                    origin: (0, 0),
+                    size: valid_size,
+                },
+                reduction,
+                None,
+                &mut destination,
+                |dest, y| dest.row_mut(y),
+            );
+            self.buffer_recycler.recycle_buffer(image);
+            image = destination;
         }
 
         pipeline!(
@@ -127,15 +179,16 @@ impl Frame {
         channel: usize,
         group: usize,
         complete: bool,
+        decoded_shift: (usize, usize),
         image: OwnedRawImage,
-        storage: ModularStorage,
         buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
-        match storage {
+        match self.lf_global.as_ref().unwrap().modular_global.storage() {
             ModularStorage::I16 => self.set_render_input(
                 channel,
                 group,
                 complete,
+                decoded_shift,
                 Image::<i16>::from_raw(image),
                 buffer_splitter,
             ),
@@ -143,6 +196,7 @@ impl Frame {
                 channel,
                 group,
                 complete,
+                decoded_shift,
                 Image::<i32>::from_raw(image),
                 buffer_splitter,
             ),
@@ -202,21 +256,8 @@ impl Frame {
         // rendering is done.
         let mut reference_frame_data = std::mem::take(&mut self.reference_frame_data);
         let mut lf_frame_data = std::mem::take(&mut self.lf_frame_data);
-        let mut blending_frame_data = std::mem::take(&mut self.blending_frame_data);
 
-        if let Some(images) = &mut blending_frame_data {
-            // Use blending buffer instead of reference frame buffer, if we need to save FG for
-            // downsampling. Reference frame output is handled by `output_downsampled`.
-            buffers.extend(images.iter_mut().map(|image| {
-                let rect = Rect {
-                    origin: (0, 0),
-                    size: image.size(),
-                };
-                Some(JxlOutputBuffer::from_image_rect_mut(
-                    image.get_rect_mut(rect).into_raw(),
-                ))
-            }));
-        } else if let Some(ref_images) = &mut reference_frame_data {
+        if let Some(ref_images) = &mut reference_frame_data {
             buffers.extend(ref_images.iter_mut().map(|img| {
                 let rect = Rect {
                     size: img.size(),
@@ -248,6 +289,9 @@ impl Frame {
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
+        let preferred_shifts: Vec<_> = (0..3 + self.header.num_extra_channels as usize)
+            .map(|c| self.preferred_render_input_shift(c))
+            .collect();
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
 
         modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
@@ -454,15 +498,13 @@ impl Frame {
 
         // STEP 4: actually run the steps.
 
-        let storage = self.lf_global.as_ref().unwrap().modular_global.storage();
-
-        let pass_to_pipeline = |chan, group, complete, raw_image| {
+        let pass_to_pipeline = |chan, group, complete, decoded_shift, raw_image| {
             self.set_modular_render_input(
                 chan,
                 group,
                 complete,
+                decoded_shift,
                 raw_image,
-                storage,
                 &buffer_splitter,
             )
         };
@@ -479,17 +521,24 @@ impl Frame {
                         &mut new_passes,
                         &buffer_splitter,
                         should_render_non_final,
+                        &preferred_shifts,
                     )?;
                 }
                 RenderStep::FlushVarDCT { group } => {
-                    self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
+                    self.decode_hf_group(
+                        *group,
+                        &mut [],
+                        &buffer_splitter,
+                        true,
+                        &preferred_shifts,
+                    )?;
                 }
                 RenderStep::RunTransformSteps => {
                     self.lf_global
                         .as_ref()
                         .unwrap()
                         .modular_global
-                        .run_transforms(&self.header, &pass_to_pipeline)?;
+                        .run_transforms(&self.header, &preferred_shifts, &pass_to_pipeline)?;
                 }
             }
             Ok(())
@@ -513,43 +562,9 @@ impl Frame {
 
         let regions = buffer_splitter.into_changed_regions();
         let rendered = !regions.is_empty() && self.header.frame_type == FrameType::RegularFrame;
-        drop(buffers);
 
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;
-        self.blending_frame_data = blending_frame_data;
-
-        if !regions.is_empty()
-            && self.header.is_visible()
-            && self.decoder_state.output_downsampling_shift != 0
-            && (self.blending_frame_data.is_some()
-                || (self.header.can_be_referenced && self.header.save_before_ct))
-        {
-            // Finish rendering at output resolution.
-            #[cfg(test)]
-            if self.use_simple_pipeline {
-                self.output_downsampled::<SimpleRenderPipeline>(
-                    api_buffers,
-                    pixel_format,
-                    output_profile,
-                    parallel_runner,
-                )?;
-            } else {
-                self.output_downsampled::<LowMemoryRenderPipeline>(
-                    api_buffers,
-                    pixel_format,
-                    output_profile,
-                    parallel_runner,
-                )?;
-            }
-            #[cfg(not(test))]
-            self.output_downsampled::<LowMemoryRenderPipeline>(
-                api_buffers,
-                pixel_format,
-                output_profile,
-                parallel_runner,
-            )?;
-        }
 
         if self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1 {
             let (gsx, gsy) = self.header.size_groups();
@@ -615,12 +630,17 @@ impl Frame {
         let shift_info = RenderShiftInfo::new(
             frame_header,
             decoder_state.output_downsampling_shift,
-            RenderShiftInfoMode::FirstPass,
+            RenderShiftInfoMode::FrameProcessing,
         );
         let render_noise = frame_header.has_noise() && shift_info.shift == 0;
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if render_noise { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
+        let output_orientation = if decoder_state.adjust_orientation {
+            metadata.orientation
+        } else {
+            Orientation::Identity
+        };
         let modular_ty = match decoder_state.modular_storage() {
             ModularStorage::I16 => DataTypeTag::I16,
             ModularStorage::I32 => DataTypeTag::I32,
@@ -646,13 +666,27 @@ impl Frame {
             channel_types.push((DataTypeTag::U16, None));
         }
 
+        // Input processing and final output may have different resolutions.
+        // Decode-side reductions (e.g. a future unsqueeze skip) belong in
+        // shift_info; only the remaining reduction is inserted below.
+        let output_shift = RenderShiftInfo::new(
+            frame_header,
+            decoder_state.output_downsampling_shift,
+            RenderShiftInfoMode::FinalOutput,
+        )
+        .shift;
+        let remaining_shift = output_shift - shift_info.shift;
+        let mut channel_output_downsamples = vec![remaining_shift as u8; num_channels];
+        // Noise scratch channels are consumed at full resolution, before reduction.
+        channel_output_downsamples.extend(std::iter::repeat_n(0, num_temp_channels));
         let mut pipeline = RenderPipelineBuilder::<T>::new(
             &channel_types,
             shift_info.downsampled_size(frame_header.size_upsampled()),
             shift_info.upsampling_shift as isize - shift_info.shift as isize,
             frame_header.log_group_dim(),
             buffer_recycler,
-        );
+        )
+        .with_channel_output_downsamples(channel_output_downsamples);
 
         if frame_header.encoding == Encoding::Modular
             && decoder_state.file_header.image_metadata.xyb_encoded
@@ -816,57 +850,17 @@ impl Frame {
             }
         }
 
-        // We need to save full resolution pre-CT frame, but API buffers expect downsampled frame.
-        // Render pipelines cannot handle this in single run, so we stop here and handle API buffer
-        // output in another pipeline run (see `output_downsampled`).
-        if frame_header.can_be_referenced
-            && frame_header.save_before_ct
-            && decoder_state.output_downsampling_shift != 0
-        {
-            return pipeline.build();
+        // Save the reference before reducing the same rows for API output.
+        if frame_header.can_be_referenced && frame_header.save_before_ct && remaining_shift != 0 {
+            pipeline = Self::add_downsampling_stage(
+                pipeline,
+                decoder_state,
+                frame_header,
+                shift_info.shift,
+                output_shift,
+            );
         }
 
-        pipeline = Self::add_stages_color_transform(
-            pipeline,
-            decoder_state,
-            frame_header,
-            output_profile,
-        )?;
-
-        // Save full resolution FG and perform blending in another pipeline run (see
-        // `output_downsampled`).
-        if frame_header.needs_full_resolution_blending()
-            && decoder_state.output_downsampling_shift != 0
-        {
-            for i in 0..num_channels {
-                pipeline = pipeline.add_save_stage(
-                    &[i],
-                    Orientation::Identity,
-                    num_api_buffers + i,
-                    JxlColorType::Grayscale,
-                    JxlDataFormat::f32(),
-                    false,
-                );
-            }
-            return pipeline.build();
-        }
-
-        pipeline = Self::add_stages_after_ct(
-            pipeline,
-            decoder_state,
-            frame_header,
-            pixel_format,
-            shift_info.shift,
-        )?;
-        pipeline.build()
-    }
-
-    fn add_stages_color_transform<T: RenderPipeline>(
-        mut pipeline: RenderPipelineBuilder<T>,
-        decoder_state: &DecoderState,
-        frame_header: &FrameHeader,
-        output_profile: &JxlColorProfile,
-    ) -> Result<RenderPipelineBuilder<T>> {
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
 
         // Determine output TF: use output profile's TF if available, else fall back to embedded profile's TF.
@@ -893,33 +887,25 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(XybColorConvertStage::new(0, stage_color_info));
         }
 
-        Ok(pipeline)
-    }
-
-    fn add_stages_after_ct<T: RenderPipeline>(
-        mut pipeline: RenderPipelineBuilder<T>,
-        decoder_state: &DecoderState,
-        frame_header: &FrameHeader,
-        pixel_format: &JxlPixelFormat,
-        output_downsampling_shift: usize,
-    ) -> Result<RenderPipelineBuilder<T>> {
-        let num_channels = 3 + frame_header.num_extra_channels as usize;
-        let num_api_buffers = std::iter::once(&pixel_format.color_data_format)
-            .chain(pixel_format.extra_channel_format.iter())
-            .filter(|x| x.is_some())
-            .count();
-        let output_orientation = if decoder_state.adjust_orientation {
-            decoder_state.file_header.image_metadata.orientation
-        } else {
-            Orientation::Identity
-        };
+        if frame_header.needs_full_resolution_blending()
+            && !(frame_header.can_be_referenced && frame_header.save_before_ct)
+            && remaining_shift != 0
+        {
+            pipeline = Self::add_downsampling_stage(
+                pipeline,
+                decoder_state,
+                frame_header,
+                shift_info.shift,
+                output_shift,
+            );
+        }
 
         if frame_header.needs_blending() {
             pipeline = pipeline.add_inplace_stage(BlendingStage::new(
                 frame_header,
                 &decoder_state.file_header,
                 decoder_state.reference_frames.clone(),
-                output_downsampling_shift,
+                output_shift,
             )?);
             // TODO(veluca): we might not need to add an extend stage if the image size is
             // compatible with the frame size.
@@ -927,7 +913,7 @@ impl Frame {
                 frame_header,
                 &decoder_state.file_header,
                 decoder_state.reference_frames.clone(),
-                output_downsampling_shift,
+                output_shift,
             )?);
         }
 
@@ -1070,161 +1056,50 @@ impl Frame {
                 }
             }
         }
-        Ok(pipeline)
+        pipeline.build()
     }
 
-    /// Finish rendering visible patch reference frame or alpha blended frame at output resolution,
-    /// by running rest of the pipeline.
-    fn output_downsampled<T: RenderPipeline + Sync>(
-        &mut self,
-        api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
-        pixel_format: &JxlPixelFormat,
-        output_profile: &JxlColorProfile,
-        parallel_runner: &mut dyn JxlParallelRunner,
-    ) -> Result<()> {
-        let needs_blending = self.blending_frame_data.is_some();
-        let no_output = api_buffers
-            .as_ref()
-            .is_none_or(|buffers| buffers.is_empty());
-        // Skip only when blending is not needed.
-        if !needs_blending && no_output {
-            return Ok(());
-        }
-
-        let images = if needs_blending {
-            self.blending_frame_data.take().unwrap()
-        } else {
-            self.reference_frame_data.take().unwrap()
-        };
-        let result = self.render_downsampled::<T>(
-            &images,
-            // Color transform is done if `needs_blending`.
-            needs_blending,
-            api_buffers,
-            pixel_format,
-            output_profile,
-            parallel_runner,
+    fn add_downsampling_stage<T: RenderPipeline>(
+        pipeline: RenderPipelineBuilder<T>,
+        decoder_state: &DecoderState,
+        header: &FrameHeader,
+        input_shift: usize,
+        output_shift: usize,
+    ) -> RenderPipelineBuilder<T> {
+        let size = header.size_upsampled();
+        let size = (
+            size.0.div_ceil(1 << input_shift),
+            size.1.div_ceil(1 << input_shift),
         );
-        if needs_blending {
-            self.blending_frame_data = Some(images);
-        } else {
-            self.reference_frame_data = Some(images);
-        }
-        result
-    }
-
-    fn render_downsampled<T: RenderPipeline + Sync>(
-        &mut self,
-        images: &[Image<f32>],
-        ct_done: bool,
-        api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
-        pixel_format: &JxlPixelFormat,
-        output_profile: &JxlColorProfile,
-        parallel_runner: &mut dyn JxlParallelRunner,
-    ) -> Result<()> {
-        let shift_info = self.render_shift_info(RenderShiftInfoMode::FinalOutput);
-        let size = self.header.size_upsampled();
-        let channel_types = vec![(DataTypeTag::F32, None); images.len()];
-        let mut builder = RenderPipelineBuilder::<T>::new(
-            &channel_types,
-            shift_info.downsampled_size(size),
-            shift_info.upsampling_shift as isize - shift_info.shift as isize,
-            self.header.log_group_dim(),
-            self.buffer_recycler.clone(),
-        );
-        if !ct_done {
-            builder = Self::add_stages_color_transform(
-                builder,
-                &self.decoder_state,
-                &self.header,
-                output_profile,
-            )?;
-        }
-        builder = Self::add_stages_after_ct(
-            builder,
-            &self.decoder_state,
-            &self.header,
-            pixel_format,
-            shift_info.shift,
-        )?;
-        let mut pipeline = builder.build()?;
-
-        let mut api_buffers_iter = api_buffers.as_deref_mut().unwrap_or(&mut []).iter_mut();
-        let mut buffers: Vec<_> = std::iter::once(&pixel_format.color_data_format)
-            .chain(pixel_format.extra_channel_format.iter())
-            .filter(|format| format.is_some())
-            .map(|_| api_buffers_iter.next().map(JxlOutputBuffer::reborrow))
-            .collect();
-        // Only add reference frame data, since we don't need LF image for this pipeline run.
-        if let Some(ref_images) = &mut self.reference_frame_data {
-            buffers.extend(ref_images.iter_mut().map(|image| {
-                let rect = Rect {
-                    origin: (0, 0),
-                    size: image.size(),
-                };
-                Some(JxlOutputBuffer::from_image_rect_mut(
-                    image.get_rect_mut(rect).into_raw(),
-                ))
-            }));
-        }
-        pipeline.check_buffer_sizes(&mut buffers)?;
-        let splitter = BufferSplitter::new(&mut buffers);
-        pipeline.render_outside_frame(&splitter)?;
-
-        let groups = self.header.size_groups();
-        let group_shift = self.header.log_group_dim() + shift_info.upsampling_shift;
-        parallel_runner.run_ordered(groups.0 * groups.1, None, &|group| {
-            let origin = (
-                (group % groups.0) << group_shift,
-                (group / groups.0) << group_shift,
-            );
-            let rect = Rect {
-                origin,
-                size: (
-                    (size.0 - origin.0).min(1 << group_shift),
-                    (size.1 - origin.1).min(1 << group_shift),
-                ),
-            };
-
-            for (channel, image) in images.iter().enumerate() {
-                if !pipeline.used_channel_mask()[channel] {
-                    continue;
-                }
-
-                let blending_info = if let Some(ec_idx) = channel.checked_sub(3) {
-                    &self.header.ec_blending_info[ec_idx]
+        let alpha = (0..3 + header.num_extra_channels as usize)
+            .map(|c| {
+                let info = if c < 3 {
+                    &header.blending_info
                 } else {
-                    &self.header.blending_info
+                    &header.ec_blending_info[c - 3]
                 };
-                let &BlendingInfo {
-                    mode,
-                    alpha_channel,
-                    ..
-                } = blending_info;
-                let ec_info = &self.decoder_state.extra_channel_info()[alpha_channel as usize];
-                let alpha_channel = 3 + alpha_channel as usize;
-
-                let needs_alpha = channel != alpha_channel
-                    && (mode == BlendingMode::Blend || mode == BlendingMode::AlphaWeightedAdd);
-                let alpha = needs_alpha.then(|| {
-                    // AlphaWeightedAdd always multiplies by alpha.
-                    let premultiplied = mode == BlendingMode::Blend && ec_info.alpha_associated();
-                    (&images[alpha_channel], premultiplied)
-                });
-
-                let mut reduced = pipeline.get_buffer::<f32>(channel)?;
-                box_average(
-                    image,
-                    rect,
-                    shift_info.shift,
-                    alpha,
-                    &mut reduced,
-                    |img, y| img.row_mut(y),
-                );
-                pipeline.set_buffer_for_group(channel, group, true, reduced, &splitter)?;
-            }
-            Ok(())
-        })
+                let ac = 3 + info.alpha_channel as usize;
+                if c != ac
+                    && matches!(
+                        info.mode,
+                        BlendingMode::Blend | BlendingMode::AlphaWeightedAdd
+                    )
+                {
+                    let associated = info.mode == BlendingMode::Blend
+                        && decoder_state.extra_channel_info()[info.alpha_channel as usize]
+                            .alpha_associated();
+                    Some((ac, associated))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        match output_shift - input_shift {
+            1 => pipeline.add_inout_stage(DownsampleFrame::<1>::new(size, alpha)),
+            2 => pipeline.add_inout_stage(DownsampleFrame::<2>::new(size, alpha)),
+            3 => pipeline.add_inout_stage(DownsampleFrame::<3>::new(size, alpha)),
+            _ => unreachable!("API downsampling is at most 8x"),
+        }
     }
 
     pub fn prepare_render_pipeline(

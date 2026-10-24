@@ -143,10 +143,16 @@ impl LowMemoryRenderPipeline {
 
         // Prepare output buffers for the group.
         let (origin, size) = if let Some(e) = self.shared.extend_stage_index {
+            let (dx, dy) = self.downsampling_for_stage[e];
             let Stage::Extend(e) = &self.shared.stages[e] else {
                 unreachable!("extend stage is not an extend stage");
             };
-            (e.frame_origin, e.image_size)
+            // BufferSplitter accepts virtual coordinates, while Extend works
+            // in the resolution at its position in the pipeline.
+            (
+                (e.frame_origin.0 << dx, e.frame_origin.1 << dy),
+                (e.image_size.0 << dx, e.image_size.1 << dy),
+            )
         } else {
             ((0, 0), self.shared.input_size)
         };

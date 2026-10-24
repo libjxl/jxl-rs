@@ -326,8 +326,6 @@ pub struct Frame {
     #[cfg(not(test))]
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
     reference_frame_data: Option<Vec<Image<f32>>>,
-    // Native post-CT foreground for the current frame only, not a reference slot.
-    blending_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
     section0_render_up_to_date: bool,
     group_status: GroupStatus,

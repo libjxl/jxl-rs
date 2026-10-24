@@ -30,6 +30,7 @@ pub struct ExtendToImageDimensionsStage {
 }
 
 impl ExtendToImageDimensionsStage {
+    // TODO(veluca): should this return a Result?
     pub fn new(
         frame_header: &FrameHeader,
         file_header: &FileHeader,

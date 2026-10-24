@@ -115,6 +115,8 @@ pub struct ChannelInfo {
 
 pub struct RenderPipelineShared<Buffer> {
     pub channel_info: Vec<Vec<ChannelInfo>>,
+    /// Resolution at the end of each channel's processing, relative to the virtual grid.
+    pub channel_output_downsamples: Vec<u8>,
     pub input_size: (usize, usize),
     pub log_group_size: usize,
     pub group_count: (usize, usize),

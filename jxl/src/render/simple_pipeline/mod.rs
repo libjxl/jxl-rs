@@ -149,6 +149,10 @@ impl RenderPipeline for SimpleRenderPipeline {
         })
     }
 
+    fn input_downsample(&self, channel: usize) -> (u8, u8) {
+        self.shared.channel_info[0][channel].downsample
+    }
+
     #[instrument(skip_all, err)]
     fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
         let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);

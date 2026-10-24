@@ -273,22 +273,6 @@ impl Frame {
             None
         };
 
-        let blending_frame_data = if decoder_state.output_downsampling_shift != 0
-            && frame_header.needs_full_resolution_blending()
-            && !frame_header.save_before_ct
-        {
-            // TODO(tirr-c): Pick only the extra channel used for blending.
-            let num_channels = 3 + image_metadata.extra_channel_info.len();
-            let sz = frame_header.size_upsampled();
-            Some(
-                (0..num_channels)
-                    .map(|_| Image::new(sz))
-                    .collect::<Result<Vec<_>>>()?,
-            )
-        } else {
-            None
-        };
-
         let lf_frame_data = if frame_header.lf_level != 0 {
             Some(
                 (0..3)
@@ -318,7 +302,6 @@ impl Frame {
             frame_counters,
             render_pipeline: None,
             reference_frame_data,
-            blending_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
             patches: Arc::new(RwLock::new(PatchesDictionary::new(num_extra_channels))),
@@ -357,7 +340,7 @@ impl Frame {
             br.skip_bits(lfg.total_bits_read)?;
         } else {
             trace!(pos = br.total_bits_read());
-            let shift_info = self.render_shift_info(RenderShiftInfoMode::FirstPass);
+            let shift_info = self.render_shift_info(RenderShiftInfoMode::FrameProcessing);
 
             if self.header.has_patches() {
                 info!("decoding patches");
@@ -544,6 +527,7 @@ impl Frame {
             header,
             &lf_global.tree,
             br,
+            &[],
             None,
         )?;
         if header.encoding == Encoding::VarDCT {
@@ -655,7 +639,7 @@ impl Frame {
             });
         }
         // Set EPF sigma values to the correct values if we are doing EPF.
-        let shift_info = self.render_shift_info(RenderShiftInfoMode::FirstPass);
+        let shift_info = self.render_shift_info(RenderShiftInfoMode::FrameProcessing);
         if self.header.restoration_filter.epf_iters > 0 && shift_info.shift == 0 {
             *self.epf_sigma.try_write().unwrap() = SigmaSource::new(
                 &self.header,
@@ -735,23 +719,16 @@ impl Frame {
             }
         }
 
-        // Set all buffers after filling
-        let [buf0, buf1, buf2] = bufs;
-        pipeline!(
-            self,
-            p,
-            p.set_buffer_for_group(num_channels, group, complete, buf0, buffer_splitter)?
-        );
-        pipeline!(
-            self,
-            p,
-            p.set_buffer_for_group(num_channels + 1, group, complete, buf1, buffer_splitter)?
-        );
-        pipeline!(
-            self,
-            p,
-            p.set_buffer_for_group(num_channels + 2, group, complete, buf2, buffer_splitter)?
-        );
+        for (c, buffer) in bufs.into_iter().enumerate() {
+            self.set_render_input(
+                num_channels + c,
+                group,
+                complete,
+                (0, 0),
+                buffer,
+                buffer_splitter,
+            )?;
+        }
         Ok(())
     }
 
@@ -762,6 +739,7 @@ impl Frame {
         passes: &mut [(usize, BitReader)],
         buffer_splitter: &BufferSplitter,
         force_render: bool,
+        preferred_shifts: &[(usize, usize)],
     ) -> Result<()> {
         // Group was fully rendered already, nothing to do.
         if self.group_status.final_vardct_render_done.contains(&group) {
@@ -782,7 +760,7 @@ impl Frame {
             return Ok(());
         }
 
-        let shift_info = self.render_shift_info(RenderShiftInfoMode::FirstPass);
+        let shift_info = self.render_shift_info(RenderShiftInfoMode::FrameProcessing);
         if self.header.has_noise() && shift_info.shift == 0 && render_vardct {
             self.render_noise_for_group(group, complete, buffer_splitter)?;
         }
@@ -792,14 +770,19 @@ impl Frame {
         }
 
         let lf_global = self.lf_global.as_ref().unwrap();
-        let fullres_buffer = |c| {
-            if shift_info.output_shift(&self.header, c) == 0 {
+        let upsampling_shift = self.header.upsampling.ilog2() as usize;
+        let decoded_shifts: [_; 3] = std::array::from_fn(|c| {
+            (
+                upsampling_shift + self.header.hshift(c),
+                upsampling_shift + self.header.vshift(c),
+            )
+        });
+        let decoded_buffer = |c: usize| {
+            if preferred_shifts[c] == decoded_shifts[c] {
                 return pipeline!(self, p, p.get_buffer(c));
             }
 
-            // `p.get_buffer(c)` returns final downsampled buffer, which is too small for raw
-            // outputs. Allocate larger buffers that can be used to output preliminary decoding
-            // results.
+            // The pipeline's input buffer may be too small for signalled-resolution decoding.
             let size = self.header.size();
             let group_dim = self.header.group_dim();
             self.buffer_recycler.get_buffer::<f32>((
@@ -814,7 +797,7 @@ impl Frame {
             ))
         };
         let mut pixels = if render_vardct {
-            Some([fullres_buffer(0)?, fullres_buffer(1)?, fullres_buffer(2)?])
+            Some([decoded_buffer(0)?, decoded_buffer(1)?, decoded_buffer(2)?])
         } else {
             None
         };
@@ -864,7 +847,7 @@ impl Frame {
 
         if let Some(pixels) = pixels {
             for (c, img) in pixels.into_iter().enumerate() {
-                self.set_render_input(c, group, complete, img, buffer_splitter)?;
+                self.set_render_input(c, group, complete, decoded_shifts[c], img, buffer_splitter)?;
             }
         }
 
@@ -878,22 +861,28 @@ impl Frame {
         passes: &mut [(usize, BitReader)],
         buffer_splitter: &BufferSplitter,
         force_render: bool,
+        preferred_shifts: &[(usize, usize)],
     ) -> Result<()> {
         if passes.is_empty() {
             assert!(force_render);
         }
 
-        self.decode_and_render_varct_and_noise(group, passes, buffer_splitter, force_render)?;
+        self.decode_and_render_varct_and_noise(
+            group,
+            passes,
+            buffer_splitter,
+            force_render,
+            preferred_shifts,
+        )?;
 
         let lf_global = self.lf_global.as_ref().unwrap();
-        let storage = lf_global.modular_global.storage();
-        let pass_to_pipeline = |chan, group, complete, raw_image| {
+        let pass_to_pipeline = |chan, group, complete, decoded_shift, raw_image| {
             self.set_modular_render_input(
                 chan,
                 group,
                 complete,
+                decoded_shift,
                 raw_image,
-                storage,
                 buffer_splitter,
             )
         };
@@ -904,6 +893,7 @@ impl Frame {
                 &self.header,
                 &lf_global.tree,
                 br,
+                preferred_shifts,
                 Some(&pass_to_pipeline),
             )?;
         }

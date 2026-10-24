@@ -447,7 +447,11 @@ impl LowMemoryRenderPipeline {
                             (xsize.shrc(dx), num_rows.shrc(dy)),
                             y,
                             (x0 >> dx, y0 >> dy),
-                            current_size,
+                            if self.shared.extend_stage_index.is_some_and(|e| i > e) {
+                                current_size
+                            } else {
+                                (current_size.0.shrc(dx), current_size.1.shrc(dy))
+                            },
                             current_origin,
                         )?;
                     }
@@ -557,7 +561,10 @@ impl LowMemoryRenderPipeline {
             }
             // Step 2: go through remaining stages one by one.
             for (i, stage) in self.shared.stages.iter().enumerate().skip(extend + 1) {
-                assert_eq!(self.downsampling_for_stage[i], (0, 0));
+                assert_eq!(
+                    self.downsampling_for_stage[i],
+                    self.downsampling_for_stage[extend]
+                );
 
                 match stage {
                     Stage::InPlace(s) => {
@@ -595,7 +602,7 @@ impl LowMemoryRenderPipeline {
                             (xsize, ysize),
                             y,
                             (x0, y0),
-                            (xrange.end, yrange.end), // this is not true, but works out correctly.
+                            extend_stage.image_size,
                             (0, 0),
                         )?;
                     }
