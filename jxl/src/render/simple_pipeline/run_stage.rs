@@ -93,8 +93,18 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
             BORDER = ?Self::BORDER,
             numc
         );
-        assert_eq!(input_size.0, output_size.0.div_ceil(1 << Self::SHIFT.0));
-        assert_eq!(input_size.1, output_size.1.div_ceil(1 << Self::SHIFT.1));
+        use crate::render::internal::{scale_position, scale_size};
+        for (input, output, shift) in [
+            (input_size.0, output_size.0, Self::SHIFT.0),
+            (input_size.1, output_size.1, Self::SHIFT.1),
+        ] {
+            if shift >= 0 {
+                assert_eq!(input, scale_size(output, -shift));
+            } else {
+                assert_eq!(output, scale_size(input, shift));
+            }
+        }
+        let chunk_size = chunk_size.next_multiple_of(1 << (-Self::SHIFT.0).max(0));
 
         let border_x = Self::BORDER.0 as usize;
         let border_y = Self::BORDER.1 as usize;
@@ -115,9 +125,9 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                 RowBuffer::new(
                     T::OutputT::DATA_TYPE_ID,
                     0,
-                    Self::SHIFT.1 as usize,
-                    Self::SHIFT.0 as usize,
-                    chunk_size << Self::SHIFT.0,
+                    Self::SHIFT.1.max(0) as usize,
+                    Self::SHIFT.0.max(0) as usize,
+                    scale_size(chunk_size, Self::SHIFT.0),
                 )
                 .unwrap()
             })
@@ -126,8 +136,8 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
         let x0_in = RowBuffer::x0_offset::<T::InputT>();
         let x0_out = RowBuffer::x0_offset::<T::OutputT>();
 
-        for y in 0..input_size.1 {
-            for x in (0..input_size.0).step_by(chunk_size) {
+        for x in (0..input_size.0).step_by(chunk_size) {
+            for y in 0..input_size.1 {
                 let iborder_x = border_x as isize;
                 let iborder_y = border_y as isize;
                 let xsize = input_size.0.min(x + chunk_size) - x;
@@ -163,7 +173,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                         &mut buffer_out,
                         x0_out,
                         0,
-                        1 << Self::SHIFT.1,
+                        1 << Self::SHIFT.1.max(0),
                     );
 
                     self.process_row_chunk(
@@ -176,16 +186,16 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                     );
                 }
 
-                let stripe_xsize =
-                    (xsize << Self::SHIFT.0).min(output_size.0 - (x << Self::SHIFT.0));
-                let stripe_ysize =
-                    (1usize << Self::SHIFT.1).min(output_size.1 - (y << Self::SHIFT.1));
+                let output_x = scale_position(x, Self::SHIFT.0);
+                let output_y = scale_position(y, Self::SHIFT.1);
+                let stripe_xsize = scale_size(xsize, Self::SHIFT.0).min(output_size.0 - output_x);
+                let stripe_ysize = (1usize << Self::SHIFT.1.max(0)).min(output_size.1 - output_y);
                 for c in 0..numc {
                     for iy in 0..stripe_ysize {
-                        let out_row = output_buffers[c].row_mut((y << Self::SHIFT.1) + iy);
+                        let out_row = output_buffers[c].row_mut(output_y + iy);
                         let buf_out_row = buffer_out[c].get_row::<T::OutputT>(iy);
                         for ix in 0..stripe_xsize {
-                            out_row[(x << Self::SHIFT.0) + ix] = buf_out_row[x0_out + ix].to_f64();
+                            out_row[output_x + ix] = buf_out_row[x0_out + ix].to_f64();
                         }
                     }
                 }

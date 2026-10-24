@@ -23,15 +23,15 @@ use crate::frame::{DataStatus, DecoderState, Frame};
 use crate::headers::Orientation;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::extra_channels::ExtraChannel;
-use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
-use crate::image::{DataTypeTag, Image, OwnedRawImage, Rect};
+use crate::headers::frame_header::{BlendingMode, Encoding, FrameHeader, FrameType};
+use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect, box_average};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::stages::*;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
-use crate::util::SmallVec;
 use crate::util::sync::{Arc, RwLock};
+use crate::util::{ShiftRightCeil, SmallVec};
 
 #[cfg(test)]
 macro_rules! pipeline_mut {
@@ -69,6 +69,7 @@ macro_rules! pipeline_mut {
 macro_rules! pipeline {
     ($frame: expr, $pipeline: ident, $op: expr) => {
         if $frame.use_simple_pipeline {
+            use crate::render::SimpleRenderPipeline;
             let $pipeline = $frame
                 .render_pipeline
                 .as_ref()
@@ -100,6 +101,100 @@ macro_rules! pipeline {
 pub(super) use pipeline;
 
 impl Frame {
+    pub(super) fn preferred_render_input_shift(&self, channel: usize) -> (usize, usize) {
+        let (x, y) = pipeline!(self, p, p.input_downsample(channel));
+        (x as usize, y as usize)
+    }
+
+    pub(super) fn set_render_input<T: ImageDataType>(
+        &self,
+        channel: usize,
+        group: usize,
+        complete: bool,
+        decoded_shift: (usize, usize),
+        mut image: Image<T>,
+        buffer_splitter: &BufferSplitter,
+    ) -> Result<()> {
+        if !pipeline!(self, p, p.used_channel_mask()[channel]) {
+            self.buffer_recycler.recycle_buffer(image);
+            return Ok(());
+        }
+        let preferred = self.preferred_render_input_shift(channel);
+        let reduction = match (
+            preferred.0.checked_sub(decoded_shift.0),
+            preferred.1.checked_sub(decoded_shift.1),
+        ) {
+            (Some(x), Some(y)) if x == y => x,
+            _ => panic!(
+                "Cannot adapt decoded input shift {decoded_shift:?} to preferred shift {preferred:?}: reductions must be nonnegative and equal on both axes"
+            ),
+        };
+        if reduction != 0 {
+            let mut destination = pipeline!(self, p, p.get_buffer(channel))?;
+            let size = self.header.size_upsampled();
+            let group_shift = self.header.log_group_dim() + self.header.upsampling.ilog2() as usize;
+            let gx = group % self.header.size_groups().0;
+            let gy = group / self.header.size_groups().0;
+            // Padding at the frame edge must not contribute to the average.
+            let valid_size = (
+                (size.0 - (gx << group_shift))
+                    .min(1 << group_shift)
+                    .shrc(decoded_shift.0),
+                (size.1 - (gy << group_shift))
+                    .min(1 << group_shift)
+                    .shrc(decoded_shift.1),
+            );
+            box_average(
+                &image,
+                Rect {
+                    origin: (0, 0),
+                    size: valid_size,
+                },
+                reduction,
+                None,
+                &mut destination,
+                |dest, y| dest.row_mut(y),
+            );
+            self.buffer_recycler.recycle_buffer(image);
+            image = destination;
+        }
+
+        pipeline!(
+            self,
+            p,
+            p.set_buffer_for_group(channel, group, complete, image, buffer_splitter)
+        )
+    }
+
+    pub(super) fn set_modular_render_input(
+        &self,
+        channel: usize,
+        group: usize,
+        complete: bool,
+        decoded_shift: (usize, usize),
+        image: OwnedRawImage,
+        buffer_splitter: &BufferSplitter,
+    ) -> Result<()> {
+        match self.lf_global.as_ref().unwrap().modular_global.storage() {
+            ModularStorage::I16 => self.set_render_input(
+                channel,
+                group,
+                complete,
+                decoded_shift,
+                Image::<i16>::from_raw(image),
+                buffer_splitter,
+            ),
+            ModularStorage::I32 => self.set_render_input(
+                channel,
+                group,
+                complete,
+                decoded_shift,
+                Image::<i32>::from_raw(image),
+                buffer_splitter,
+            ),
+        }
+    }
+
     /// Returns `true` if any pixels were written to the output buffers during
     /// this call, `false` if the call was a no-op for the buffers (e.g. no new
     /// HF groups, no flush work, or the render pipeline was not yet ready).
@@ -186,6 +281,9 @@ impl Frame {
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
+        let preferred_shifts: Vec<_> = (0..3 + self.header.num_extra_channels as usize)
+            .map(|c| self.preferred_render_input_shift(c))
+            .collect();
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
 
         modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
@@ -392,28 +490,15 @@ impl Frame {
 
         // STEP 4: actually run the steps.
 
-        let storage = self.lf_global.as_ref().unwrap().modular_global.storage();
-
-        let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
-            match storage {
-                ModularStorage::I16 => {
-                    let image = Image::<i16>::from_raw(raw_image);
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
-                    );
-                }
-                ModularStorage::I32 => {
-                    let image = Image::<i32>::from_raw(raw_image);
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
-                    );
-                }
-            }
-            Ok(())
+        let pass_to_pipeline = |chan, group, complete, decoded_shift, raw_image| {
+            self.set_modular_render_input(
+                chan,
+                group,
+                complete,
+                decoded_shift,
+                raw_image,
+                &buffer_splitter,
+            )
         };
 
         // Avoid significantly more than one thread per largest-group worth of work.
@@ -428,17 +513,24 @@ impl Frame {
                         &mut new_passes,
                         &buffer_splitter,
                         should_render_non_final,
+                        &preferred_shifts,
                     )?;
                 }
                 RenderStep::FlushVarDCT { group } => {
-                    self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
+                    self.decode_hf_group(
+                        *group,
+                        &mut [],
+                        &buffer_splitter,
+                        true,
+                        &preferred_shifts,
+                    )?;
                 }
                 RenderStep::RunTransformSteps => {
                     self.lf_global
                         .as_ref()
                         .unwrap()
                         .modular_global
-                        .run_transforms(&self.header, &pass_to_pipeline)?;
+                        .run_transforms(&self.header, &preferred_shifts, &pass_to_pipeline)?;
                 }
             }
             Ok(())
@@ -527,8 +619,12 @@ impl Frame {
         output_profile: &JxlColorProfile,
         buffer_recycler: Arc<crate::image::BufferRecycler>,
     ) -> Result<Box<T>> {
+        let feature_rendering_shift =
+            frame_header.feature_rendering_shift(decoder_state.output_downsampling_shift);
+        let upsampling_shift = frame_header.upsampling.ilog2() as usize;
+        let render_noise = frame_header.has_noise() && feature_rendering_shift == 0;
         let num_channels = frame_header.num_extra_channels as usize + 3;
-        let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
+        let num_temp_channels = if render_noise { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
         let output_orientation = if decoder_state.adjust_orientation {
             metadata.orientation
@@ -560,13 +656,24 @@ impl Frame {
             channel_types.push((DataTypeTag::U16, None));
         }
 
+        // Decode-side reductions are reported separately as actual decoded input shifts.
+        let output_shift = if frame_header.frame_type == FrameType::LFFrame {
+            0
+        } else {
+            decoder_state.output_downsampling_shift
+        };
+        let remaining_shift = output_shift - feature_rendering_shift;
+        let mut channel_output_downsamples = vec![output_shift as u8; num_channels];
+        // Noise scratch channels are consumed at full resolution, before reduction.
+        channel_output_downsamples.extend(std::iter::repeat_n(0, num_temp_channels));
         let mut pipeline = RenderPipelineBuilder::<T>::new(
             &channel_types,
             frame_header.size_upsampled(),
-            frame_header.upsampling.ilog2() as usize,
+            upsampling_shift,
             frame_header.log_group_dim(),
             buffer_recycler,
-        );
+        )
+        .with_channel_output_downsamples(channel_output_downsamples);
 
         if frame_header.encoding == Encoding::Modular
             && decoder_state.file_header.image_metadata.xyb_encoded
@@ -589,7 +696,7 @@ impl Frame {
         }
 
         let filters = &frame_header.restoration_filter;
-        if filters.gab {
+        if filters.gab && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(GaborishStage::new(
                 [
                     filters.gab_x_weight1,
@@ -605,7 +712,7 @@ impl Frame {
         }
 
         let rf = &frame_header.restoration_filter;
-        if rf.epf_iters >= 3 {
+        if rf.epf_iters >= 3 && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(Epf0Stage::new(
                 rf.epf_pass0_sigma_scale,
                 rf.epf_border_sad_mul,
@@ -613,7 +720,7 @@ impl Frame {
                 epf_sigma.clone(),
             ))
         }
-        if rf.epf_iters >= 1 {
+        if rf.epf_iters >= 1 && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(Epf1Stage::new(
                 1.0,
                 rf.epf_border_sad_mul,
@@ -621,7 +728,7 @@ impl Frame {
                 epf_sigma.clone(),
             ))
         }
-        if rf.epf_iters >= 2 {
+        if rf.epf_iters >= 2 && feature_rendering_shift == 0 {
             pipeline = pipeline.add_inout_stage(Epf2Stage::new(
                 rf.epf_pass2_sigma_scale,
                 rf.epf_border_sad_mul,
@@ -639,11 +746,12 @@ impl Frame {
         if !late_ec_upsample {
             let transform_data = &decoder_state.file_header.transform_data;
             for (ec, ec_up) in frame_header.ec_upsampling.iter().enumerate() {
-                if *ec_up > 1 {
-                    pipeline = match *ec_up {
-                        2 => pipeline.add_inout_stage(Upsample2x::new(transform_data, 3 + ec)),
-                        4 => pipeline.add_inout_stage(Upsample4x::new(transform_data, 3 + ec)),
-                        8 => pipeline.add_inout_stage(Upsample8x::new(transform_data, 3 + ec)),
+                let upsample = (ec_up.ilog2() as usize).saturating_sub(feature_rendering_shift);
+                if upsample > 0 {
+                    pipeline = match upsample {
+                        1 => pipeline.add_inout_stage(Upsample2x::new(transform_data, 3 + ec)),
+                        2 => pipeline.add_inout_stage(Upsample4x::new(transform_data, 3 + ec)),
+                        3 => pipeline.add_inout_stage(Upsample8x::new(transform_data, 3 + ec)),
                         _ => unreachable!(),
                     };
                 }
@@ -662,7 +770,8 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(SplinesStage::new(splines))
         }
 
-        if frame_header.upsampling > 1 {
+        let color_upsample = upsampling_shift.saturating_sub(feature_rendering_shift);
+        if color_upsample > 0 {
             let transform_data = &decoder_state.file_header.transform_data;
             let nb_channels = if late_ec_upsample {
                 3 + frame_header.ec_upsampling.len()
@@ -670,16 +779,16 @@ impl Frame {
                 3
             };
             for c in 0..nb_channels {
-                pipeline = match frame_header.upsampling {
-                    2 => pipeline.add_inout_stage(Upsample2x::new(transform_data, c)),
-                    4 => pipeline.add_inout_stage(Upsample4x::new(transform_data, c)),
-                    8 => pipeline.add_inout_stage(Upsample8x::new(transform_data, c)),
+                pipeline = match color_upsample {
+                    1 => pipeline.add_inout_stage(Upsample2x::new(transform_data, c)),
+                    2 => pipeline.add_inout_stage(Upsample4x::new(transform_data, c)),
+                    3 => pipeline.add_inout_stage(Upsample8x::new(transform_data, c)),
                     _ => unreachable!(),
                 };
             }
         }
 
-        if frame_header.has_noise() {
+        if render_noise {
             pipeline = pipeline
                 .add_inout_stage(ConvolveNoiseStage::new(num_channels))
                 .add_inplace_stage(AddNoiseStage::new(
@@ -728,6 +837,18 @@ impl Frame {
             }
         }
 
+        // Save the reference before reducing the same rows for API output.
+        let downsample_before_ct = frame_header.can_be_referenced && frame_header.save_before_ct;
+        if downsample_before_ct && remaining_shift != 0 {
+            pipeline = Self::add_downsampling_stage(
+                pipeline,
+                decoder_state,
+                frame_header,
+                feature_rendering_shift,
+                output_shift,
+            );
+        }
+
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
 
         // Determine output TF: use output profile's TF if available, else fall back to embedded profile's TF.
@@ -754,11 +875,22 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(XybColorConvertStage::new(0, stage_color_info));
         }
 
+        if !downsample_before_ct && remaining_shift != 0 {
+            pipeline = Self::add_downsampling_stage(
+                pipeline,
+                decoder_state,
+                frame_header,
+                feature_rendering_shift,
+                output_shift,
+            );
+        }
+
         if frame_header.needs_blending() {
             pipeline = pipeline.add_inplace_stage(BlendingStage::new(
                 frame_header,
                 &decoder_state.file_header,
                 decoder_state.reference_frames.clone(),
+                output_shift,
             )?);
             // TODO(veluca): we might not need to add an extend stage if the image size is
             // compatible with the frame size.
@@ -766,6 +898,7 @@ impl Frame {
                 frame_header,
                 &decoder_state.file_header,
                 decoder_state.reference_frames.clone(),
+                output_shift,
             )?);
         }
 
@@ -909,6 +1042,45 @@ impl Frame {
             }
         }
         pipeline.build()
+    }
+
+    fn add_downsampling_stage<T: RenderPipeline>(
+        pipeline: RenderPipelineBuilder<T>,
+        decoder_state: &DecoderState,
+        header: &FrameHeader,
+        input_shift: usize,
+        output_shift: usize,
+    ) -> RenderPipelineBuilder<T> {
+        let size = header.size_upsampled();
+        let size = (size.0.shrc(input_shift), size.1.shrc(input_shift));
+        let alpha = (0..3 + header.num_extra_channels as usize)
+            .map(|c| {
+                let info = if c < 3 {
+                    &header.blending_info
+                } else {
+                    &header.ec_blending_info[c - 3]
+                };
+                let ac = 3 + info.alpha_channel as usize;
+                let associated = header.num_extra_channels != 0
+                    && info.mode == BlendingMode::Blend
+                    && decoder_state.extra_channel_info()[info.alpha_channel as usize]
+                        .alpha_associated();
+                (header.num_extra_channels != 0
+                    && c != ac
+                    && !associated
+                    && matches!(
+                        info.mode,
+                        BlendingMode::Blend | BlendingMode::AlphaWeightedAdd
+                    ))
+                .then_some(ac)
+            })
+            .collect();
+        match output_shift - input_shift {
+            1 => pipeline.add_inout_stage(DownsampleFrame::<1>::new(size, alpha)),
+            2 => pipeline.add_inout_stage(DownsampleFrame::<2>::new(size, alpha)),
+            3 => pipeline.add_inout_stage(DownsampleFrame::<3>::new(size, alpha)),
+            _ => unreachable!("API downsampling is at most 8x"),
+        }
     }
 
     pub fn prepare_render_pipeline(

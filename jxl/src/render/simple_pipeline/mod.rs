@@ -52,13 +52,18 @@ impl SimpleRenderPipeline {
         for (i, stage) in self.shared.stages.iter().enumerate() {
             debug!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
-            if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
-                // Replace buffers of different sizes.
+            if stage.shift() != (0, 0) || matches!(stage, Stage::Extend(_)) {
+                // Extend's size is already in its actual pixel grid.
                 current_size = stage.new_size(current_size);
                 for (c, info) in self.shared.channel_info[i + 1].iter().enumerate() {
                     if stage.uses_channel(c) {
-                        let xsize = current_size.0.shrc(info.downsample.0);
-                        let ysize = current_size.1.shrc(info.downsample.1);
+                        let (dx, dy) = if matches!(stage, Stage::Extend(_)) {
+                            (0, 0)
+                        } else {
+                            info.downsample
+                        };
+                        let xsize = current_size.0.shrc(dx);
+                        let ysize = current_size.1.shrc(dy);
                         debug!("reallocating channel {c} to new size {xsize}x{ysize}");
                         output_buffers[c] = Image::new((xsize, ysize))?;
                     }
@@ -147,6 +152,10 @@ impl RenderPipeline for SimpleRenderPipeline {
             shared,
             input_buffers: Mutex::new(input_buffers),
         })
+    }
+
+    fn input_downsample(&self, channel: usize) -> (u8, u8) {
+        self.shared.channel_info[0][channel].downsample
     }
 
     #[instrument(skip_all, err)]

@@ -560,6 +560,31 @@ impl FrameHeader {
         self.have_crop || !replace_all
     }
 
+    /// Feature resolution relative to `size_upsampled()`, before late output reduction.
+    pub fn feature_rendering_shift(&self, requested_shift: usize) -> usize {
+        if self.frame_type == FrameType::LFFrame
+            || (self.can_be_referenced && self.save_before_ct)
+            || self.needs_full_resolution_blending()
+        {
+            0
+        } else {
+            requested_shift
+        }
+    }
+
+    pub fn needs_full_resolution_blending(&self) -> bool {
+        self.num_extra_channels != 0
+            && self.needs_blending()
+            && std::iter::once(&self.blending_info)
+                .chain(self.ec_blending_info.iter())
+                .any(|info| {
+                    matches!(
+                        info.mode,
+                        BlendingMode::Blend | BlendingMode::AlphaWeightedAdd
+                    )
+                })
+    }
+
     /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.
     pub fn size(&self) -> (usize, usize) {
         let (width, height) = self.size_upsampled();

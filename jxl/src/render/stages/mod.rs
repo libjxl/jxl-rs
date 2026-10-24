@@ -6,6 +6,7 @@
 mod blending;
 mod chroma_upsample;
 mod convert;
+mod downsample;
 mod epf;
 mod extend;
 mod gaborish;
@@ -21,6 +22,7 @@ mod ycbcr;
 pub use blending::*;
 pub use chroma_upsample::*;
 pub use convert::*;
+pub use downsample::*;
 pub use epf::*;
 pub use extend::*;
 pub use gaborish::*;

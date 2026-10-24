@@ -121,6 +121,9 @@ pub struct LowMemoryRenderPipeline {
     // For every stage, the downsampling level of *any* channel that the stage uses at that point.
     // Note that this must be equal across all the used channels.
     downsampling_for_stage: Vec<(usize, usize)>,
+    // Additional virtual-row delay relative to the border-based schedule.
+    stage_y_delays: Vec<usize>,
+    max_stage_y_delay: usize,
     // Sorted indices to call get_distinct_indices.
     sorted_buffer_indices: Vec<Vec<(usize, usize, usize)>>,
 }
@@ -199,14 +202,20 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 stage_max.0 = stage_max.0.max(bp.0);
                 stage_max.1 = stage_max.1.max(bp.1);
 
-                bp.0 = bp.0.shrc(s.shift().0) + s.border().0 as usize;
-                bp.1 = bp.1.shrc(s.shift().1) + s.border().1 as usize;
+                bp.0 = super::internal::scale_size(bp.0, -s.shift().0) + s.border().0 as usize;
+                bp.1 = super::internal::scale_size(bp.1, -s.shift().1) + s.border().1 as usize;
             }
             border_pixels_per_stage.push(stage_max);
         }
         border_pixels_per_stage.reverse();
 
-        assert!(border_pixels_per_stage[0].0 <= MAX_BORDER);
+        let has_downsampling = shared
+            .stages
+            .iter()
+            .any(|s| s.shift().0 < 0 || s.shift().1 < 0);
+        if !has_downsampling {
+            assert!(border_pixels_per_stage[0].0 <= MAX_BORDER);
+        }
 
         let downsampling_for_stage: Vec<_> = shared
             .stages
@@ -228,6 +237,68 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 (dowsamplings[0].0 as usize, dowsamplings[0].1 as usize)
             })
             .collect();
+
+        if has_downsampling {
+            // RowBuffer currently reserves one cache line to the left of x=0.
+            // Back-propagating a filter through a 64x reduction can exceed it.
+            let capacity = RowBuffer::x0_byte_offset();
+            if border_pixels
+                .iter()
+                .zip(&shared.channel_info[0])
+                .any(|(border, info)| border.0 * info.ty.size() > capacity)
+                || shared.stages.iter().enumerate().any(|(i, stage)| {
+                    let output_border = border_pixels_per_stage[i].0;
+                    let input_border = super::internal::scale_size(output_border, -stage.shift().0)
+                        + stage.border().0 as usize;
+                    (0..nc).filter(|&c| stage.uses_channel(c)).any(|c| {
+                        input_border * stage.input_type(c).size() > capacity
+                            || output_border
+                                * stage.output_type().unwrap_or(stage.input_type(c)).size()
+                                > capacity
+                    })
+                })
+            {
+                return Err(crate::error::Error::PipelineDownsampleBorderTooLarge);
+            }
+        }
+        // Keep render_group's border-based schedule. Times here omit its common
+        // `num_extra_rows` offset: an input row y is filled at
+        // (y << level) - scaled_input_border. Delay a consumer only when that
+        // schedule would read a producer's row before it is complete.
+        let input_ready: Vec<isize> = border_pixels
+            .iter()
+            .zip(&shared.channel_info[0])
+            .map(|(border, info)| -((border.1 << info.downsample.1) as isize))
+            .collect();
+        let mut ready = input_ready.clone();
+        let mut stage_y_delays = Vec::new();
+        let mut stage_read_times = Vec::new();
+        let mut stage_ready_times = Vec::new();
+        for (i, stage) in shared.stages.iter().enumerate() {
+            let dy = downsampling_for_stage[i].1;
+            let output_dy = (dy as isize - stage.shift().1 as isize) as usize;
+            let scaled_border = border_pixels_per_stage[i].1 << dy.max(output_dy);
+            let scheduled = -(scaled_border as isize);
+            let required = (0..nc)
+                .filter(|&c| stage.uses_channel(c))
+                .map(|c| ready[c])
+                .max()
+                .unwrap_or(scheduled)
+                + ((stage.border().1 as usize) << dy) as isize;
+            let delay = (required - scheduled).max(0) as usize;
+            let read_time = scheduled + delay as isize;
+            let completion = (1usize << output_dy).saturating_sub(1 << dy);
+            let ready_time = read_time + completion as isize;
+            for (c, r) in ready.iter_mut().enumerate() {
+                if stage.uses_channel(c) {
+                    *r = ready_time;
+                }
+            }
+            stage_y_delays.push(delay);
+            stage_read_times.push(read_time);
+            stage_ready_times.push(ready_time);
+        }
+        let max_stage_y_delay = stage_y_delays.iter().copied().max().unwrap_or(0);
 
         let default_channels: Vec<usize> = (0..nc).collect();
         for (s, ibi) in stage_input_buffer_index.iter_mut().enumerate() {
@@ -276,6 +347,27 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 .max(border_pixels_per_stage[s].1 << downsampling_for_stage[s].1);
         }
 
+        // Align all scheduler sub-rect boundaries to every stage's pixel grid.
+        // The final image edge may be unaligned and is handled with ceil sizes.
+        if has_downsampling {
+            let max_dx = shared
+                .channel_info
+                .iter()
+                .flatten()
+                .map(|c| c.downsample.0)
+                .max()
+                .unwrap_or(0);
+            let max_dy = shared
+                .channel_info
+                .iter()
+                .flatten()
+                .map(|c| c.downsample.1)
+                .max()
+                .unwrap_or(0);
+            border_size.0 = border_size.0.next_multiple_of(1 << max_dx);
+            border_size.1 = border_size.1.next_multiple_of(1 << max_dy);
+        }
+
         let mut row_buffer_configs = vec![];
         let mut initial_configs = vec![];
         for chan in 0..nc {
@@ -296,12 +388,29 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 stage_configs.push(RowBufferConfig {
                     data_type: stage.output_type().unwrap(),
                     next_y_border: next_y_border as usize,
-                    y_shift: stage.shift().1 as usize,
-                    x_shift: stage.shift().0 as usize,
+                    y_shift: stage.shift().1.max(0) as usize,
+                    x_shift: stage.shift().0.max(0) as usize,
                     row_len: (shared.chunk_size + 2 * border_size.0) >> dsx,
                 });
             }
             row_buffer_configs.push(stage_configs);
+        }
+
+        // Retain faster inputs until all of a consumer's channels are ready.
+        // Express the scheduling difference in this buffer's own row units,
+        // rather than allocating virtual rows at every resolution.
+        for (i, inputs) in stage_input_buffer_index.iter().enumerate() {
+            for &(producer, channel) in inputs {
+                let level = next_border_and_cur_downsample[producer][channel].1.1;
+                let ready = if producer == 0 {
+                    input_ready[channel]
+                } else {
+                    stage_ready_times[producer - 1]
+                };
+                let retention = ((stage_read_times[i] - ready).max(0) as usize).shrc(level);
+                let config = &mut row_buffer_configs[producer][channel];
+                config.next_y_border = config.next_y_border.max(retention);
+            }
         }
 
         // Unify buffer configurations for each InOut stage across all its channels to a fixed point.
@@ -357,8 +466,14 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             input_border_pixels: border_pixels,
             shared,
             downsampling_for_stage,
+            stage_y_delays,
+            max_stage_y_delay,
             sorted_buffer_indices,
         })
+    }
+
+    fn input_downsample(&self, channel: usize) -> (u8, u8) {
+        self.shared.channel_info[0][channel].downsample
     }
 
     #[instrument(skip_all, err)]
@@ -409,7 +524,11 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 Stage::Save(s) => {
                     let (dx, dy) = self.downsampling_for_stage[i];
                     s.check_buffer_size(
-                        (size.0 >> dx, size.1 >> dy),
+                        if self.shared.extend_stage_index.is_some_and(|e| i > e) {
+                            size
+                        } else {
+                            (size.0.shrc(dx), size.1.shrc(dy))
+                        },
                         buffers[s.output_buffer_index].as_ref(),
                     )?
                 }
@@ -427,22 +546,24 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         // TODO(veluca): consider pre-computing those strips at pipeline construction and making
         // smaller strips.
         let e = self.shared.extend_stage_index.unwrap();
+        let (dx, dy) = self.downsampling_for_stage[e];
+        let chunk_size = self.shared.chunk_size.shrc(dx);
         let Stage::Extend(e) = &self.shared.stages[e] else {
             unreachable!("extend stage is not an extend stage");
         };
         let frame_end = (
-            e.frame_origin.0 + self.shared.input_size.0 as isize,
-            e.frame_origin.1 + self.shared.input_size.1 as isize,
+            e.frame_origin.0 + self.shared.input_size.0.shrc(dx) as isize,
+            e.frame_origin.1 + self.shared.input_size.1.shrc(dy) as isize,
         );
         // Split the full image area in 4 strips: left and right of the frame, and above and below.
-        // We divide each part further in strips of width self.shared.chunk_size.
+        // Use the row-buffer width at Extend's resolution.
         let mut strips = vec![];
         // Above (including left and right)
         if e.frame_origin.1 > 0 {
             let xend = e.image_size.0;
             let yend = (e.frame_origin.1 as usize).min(e.image_size.1);
-            for x in (0..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (0..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, 0..yend));
             }
         }
@@ -451,8 +572,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             let ystart = frame_end.1.max(0) as usize;
             let yend = e.image_size.1;
             let xend = e.image_size.0;
-            for x in (0..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (0..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
             }
         }
@@ -461,8 +582,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             let ystart = e.frame_origin.1.max(0) as usize;
             let yend = (frame_end.1 as usize).min(e.image_size.1);
             let xend = (e.frame_origin.0 as usize).min(e.image_size.0);
-            for x in (0..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (0..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
             }
         }
@@ -472,8 +593,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             let xend = e.image_size.0;
             let ystart = e.frame_origin.1.max(0) as usize;
             let yend = (frame_end.1 as usize).min(e.image_size.1);
-            for x in (xstart..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
+            for x in (xstart..xend).step_by(chunk_size) {
+                let xe = (x + chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
             }
         }
@@ -493,10 +614,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
             let mut local_buffers = buffer_splitter.get_local_buffers(
                 &self.save_buffer_info,
-                rect_to_render,
+                Rect {
+                    origin: (rect_to_render.origin.0 << dx, rect_to_render.origin.1 << dy),
+                    size: (rect_to_render.size.0 << dx, rect_to_render.size.1 << dy),
+                },
                 true,
-                full_image_size,
-                full_image_size,
+                (full_image_size.0 << dx, full_image_size.1 << dy),
+                (full_image_size.0 << dx, full_image_size.1 << dy),
                 (0, 0),
             );
             self.render_outside_frame_internal(&mut data, xrange, yrange, &mut local_buffers)?;

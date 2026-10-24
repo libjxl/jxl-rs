@@ -69,7 +69,7 @@ simd_function!(
 impl RenderPipelineInOutStage for HorizontalChromaUpsample {
     type InputT = f32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (1, 0);
+    const SHIFT: (i8, i8) = (1, 0);
     const BORDER: (u8, u8) = (1, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -145,7 +145,7 @@ simd_function!(
 impl RenderPipelineInOutStage for VerticalChromaUpsample {
     type InputT = f32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 1);
+    const SHIFT: (i8, i8) = (0, 1);
     const BORDER: (u8, u8) = (0, 1);
 
     fn uses_channel(&self, c: usize) -> bool {
