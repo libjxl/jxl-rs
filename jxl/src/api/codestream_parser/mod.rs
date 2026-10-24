@@ -374,8 +374,8 @@ impl CodestreamParser {
                     if !is_preview {
                         self.next_frame_index += 1;
                     }
-                    if decode_options.scan_frames_only && process_mode == ProcessMode::Process {
-                        process_mode = ProcessMode::Skip(true);
+                    if decode_options.scan_frames_only {
+                        process_mode = ProcessMode::Skip(process_mode.notify_user());
                     }
                     #[cfg(test)]
                     if !matches!(process_mode, ProcessMode::Skip(_)) {
