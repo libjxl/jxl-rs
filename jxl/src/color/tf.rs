@@ -6,7 +6,7 @@
 use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask};
 
 use crate::headers::color_encoding::CustomTransferFunction;
-use crate::util::eval_rational_poly_simd;
+use crate::util::{eval_rational_poly, eval_rational_poly_simd};
 
 /// Converts a single SIMD vector of linear samples to sRGB transfer curve.
 // Max error ~5e-7
@@ -98,6 +98,38 @@ pub fn pq_to_linear_precise(intensity_target: f32, samples: &mut [f32]) {
         let den = PQ_C2 - PQ_C3 * xp;
         let y = (num / den).powf(PQ_M1.recip());
         *s = ((y * mult) as f32).copysign(*s);
+    }
+}
+
+const PQ_EOTF_P: [f32; 5] = [
+    2.6297566e-4,
+    -6.235531e-3,
+    7.386023e-1,
+    2.6455317,
+    5.500349e-1,
+];
+const PQ_EOTF_Q: [f32; 5] = [
+    4.213501e2,
+    -4.2873682e2,
+    1.7436467e2,
+    -3.3907887e1,
+    2.6771877,
+];
+
+/// Converts PQ signal to linear sample using PQ EOTF, where linear sample value of 1.0 represents
+/// `intensity_target` display nits.
+///
+/// This version uses a rational polynomial approximation (max absolute error ~3e-6 relative to
+/// 10000 nits).
+pub fn pq_to_linear(intensity_target: f32, samples: &mut [f32]) {
+    let y_mult = 10000.0 / intensity_target;
+
+    for s in samples {
+        let a = s.abs();
+        // a + a * a
+        let x = a.mul_add(a, a);
+        let y = eval_rational_poly(x, PQ_EOTF_P, PQ_EOTF_Q);
+        *s = (y * y_mult).copysign(*s);
     }
 }
 
@@ -292,21 +324,6 @@ mod test {
     use crate::tests::assert_close;
     use crate::util::eval_rational_poly;
 
-    const PQ_EOTF_P: [f32; 5] = [
-        2.6297566e-4,
-        -6.235531e-3,
-        7.386023e-1,
-        2.6455317,
-        5.500349e-1,
-    ];
-    const PQ_EOTF_Q: [f32; 5] = [
-        4.213501e2,
-        -4.2873682e2,
-        1.7436467e2,
-        -3.3907887e1,
-        2.6771877,
-    ];
-
     fn srgb_to_linear(samples: &mut [f32]) {
         #[allow(clippy::excessive_precision)]
         const P: [f32; 5] = [
@@ -405,18 +422,6 @@ mod test {
             };
 
             *s = y.copysign(*s).clamp(0.0, 1.0);
-        }
-    }
-
-    fn pq_to_linear(intensity_target: f32, samples: &mut [f32]) {
-        let y_mult = 10000.0 / intensity_target;
-
-        for s in samples {
-            let a = s.abs();
-            // a + a * a
-            let x = a.mul_add(a, a);
-            let y = eval_rational_poly(x, PQ_EOTF_P, PQ_EOTF_Q);
-            *s = (y * y_mult).copysign(*s);
         }
     }
 
