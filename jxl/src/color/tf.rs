@@ -575,7 +575,8 @@ mod test {
             for s in &mut simd {
                 *s = pq_to_linear_simd_vec(d, y_mult, *s);
             }
-            assert_close!(all, &samples, &simd, 3e-6);
+            // Up to 3.1e-6 with ScalarDescriptor's unfused mul_add.
+            assert_close!(all, &samples, &simd, 3.2e-6);
             Ok(())
         });
     }
