@@ -717,6 +717,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jxl-libjxl-c-api"
+version = "0.8.0"
+dependencies = [
+ "jxl",
+ "rayon",
+]
+
+[[package]]
 name = "jxl_cli"
 version = "0.8.0"
 dependencies = [
