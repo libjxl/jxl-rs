@@ -385,34 +385,21 @@ mod test {
         }
     }
 
-    fn hlg_ootf_inner_precise(exp: f64, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut [f32]; 3]) {
-        if exp.abs() < 0.1 {
-            return;
-        }
-
-        let lr = lr as f64;
-        let lg = lg as f64;
-        let lb = lb as f64;
-        for ((r, g), b) in std::iter::zip(sr, sg).zip(sb) {
-            let dr = *r as f64;
-            let dg = *g as f64;
-            let db = *b as f64;
-            let mixed = dr.mul_add(lr, dg.mul_add(lg, db * lb));
-            let mult = if mixed == 0.0 { mixed } else { mixed.powf(exp) };
-            *r = (dr * mult) as f32;
-            *g = (dg * mult) as f32;
-            *b = (db * mult) as f32;
-        }
-    }
-
     fn hlg_display_to_scene_precise(
         intensity_display: f32,
         luminance_rgb: [f32; 3],
-        samples_rgb: [&mut [f32]; 3],
-    ) {
+        rgb: [f32; 3],
+    ) -> [f32; 3] {
         let system_gamma = hlg_system_gamma(intensity_display) as f64;
-        let one_sub_gamma = 1.0 - system_gamma;
-        hlg_ootf_inner_precise(one_sub_gamma / system_gamma, luminance_rgb, samples_rgb);
+        let exp = (1.0 - system_gamma) / system_gamma;
+        if exp.abs() < 0.1 {
+            return rgb;
+        }
+        let [lr, lg, lb] = luminance_rgb.map(f64::from);
+        let [r, g, b] = rgb.map(f64::from);
+        let mixed = r.mul_add(lr, g.mul_add(lg, b * lb));
+        let mult = if mixed == 0.0 { mixed } else { mixed.powf(exp) };
+        [r, g, b].map(|c| (c * mult) as f32)
     }
 
     fn scene_to_hlg_precise(samples: &mut [f32]) {
@@ -620,17 +607,8 @@ mod test {
             let system_gamma = hlg_system_gamma(intensity_target);
             let simd = hlg_display_to_scene_vec(d, system_gamma, luminance_rgb, [r, g, b]);
 
-            let mut precise_r = r;
-            let mut precise_g = g;
-            let mut precise_b = b;
-            let precise = [
-                std::slice::from_mut(&mut precise_r),
-                std::slice::from_mut(&mut precise_g),
-                std::slice::from_mut(&mut precise_b),
-            ];
-            hlg_display_to_scene_precise(intensity_target, luminance_rgb, precise);
-
-            assert_close!(all, &simd, &[precise_r, precise_g, precise_b], 7.2e-7);
+            let precise = hlg_display_to_scene_precise(intensity_target, luminance_rgb, [r, g, b]);
+            assert_close!(all, &simd, &precise, 7.2e-7);
 
             Ok(())
         });
