@@ -7,12 +7,14 @@
 
 mod conversions;
 mod decode;
+mod encode;
 mod parallel_runner;
 mod pixel_buffer;
 mod state_machine;
 mod types;
 
 pub use decode::*;
+pub use encode::*;
 pub use parallel_runner::{
     JxlResizableParallelRunner, JxlResizableParallelRunnerCreate,
     JxlResizableParallelRunnerDestroy, JxlResizableParallelRunnerSetThreads,
