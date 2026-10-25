@@ -405,7 +405,7 @@ pub struct FrameHeader {
     #[default(0)]
     #[condition((frame_type == FrameType::RegularFrame ||
         frame_type == FrameType::SkipProgressive) && nonserialized.have_timecode)]
-    timecode: u32,
+    pub timecode: u32,
 
     #[default(frame_type == FrameType::RegularFrame)]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]

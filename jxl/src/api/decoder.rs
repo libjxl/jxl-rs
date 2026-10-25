@@ -33,6 +33,8 @@ pub struct VisibleFrameInfo {
     pub duration_ms: f64,
     /// Duration in raw ticks from the animation header.
     pub duration_ticks: u32,
+    /// Timecode from the frame header (0 if `have_timecodes` is false).
+    pub timecode: u32,
     /// Byte offset of this frame's header in the input file.
     pub file_offset: u64,
     /// Whether this is the last frame in the codestream.

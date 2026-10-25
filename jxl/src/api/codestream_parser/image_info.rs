@@ -5,8 +5,8 @@
 
 use crate::api::codestream_parser::{CodestreamParser, check_size_limit};
 use crate::api::{
-    Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
-    JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, ToneMapping,
+    Endianness, JxlBasicInfo, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
+    JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, ToneMapping,
 };
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
@@ -98,22 +98,20 @@ impl ImageInfo {
             )?;
         }
         let data = &file_header.image_metadata;
+        let orient_size = |w: usize, h: usize| -> (usize, usize) {
+            if decode_options.adjust_orientation && data.orientation.is_transposing() {
+                (h, w)
+            } else {
+                (w, h)
+            }
+        };
+        let size = orient_size(xsize, ysize);
+        let intrinsic_size = data.intrinsic_size.as_ref().map_or(size, |s| {
+            orient_size(s.xsize() as usize, s.ysize() as usize)
+        });
         self.basic_info = Some(JxlBasicInfo {
-            size: if decode_options.adjust_orientation && data.orientation.is_transposing() {
-                (ysize, xsize)
-            } else {
-                (xsize, ysize)
-            },
-            bit_depth: if data.bit_depth.floating_point_sample() {
-                JxlBitDepth::Float {
-                    bits_per_sample: data.bit_depth.bits_per_sample(),
-                    exponent_bits_per_sample: data.bit_depth.exponent_bits_per_sample(),
-                }
-            } else {
-                JxlBitDepth::Int {
-                    bits_per_sample: data.bit_depth.bits_per_sample(),
-                }
-            },
+            size,
+            bit_depth: data.bit_depth.to_api(),
             orientation: data.orientation,
             extra_channels: data
                 .extra_channel_info
@@ -121,6 +119,11 @@ impl ImageInfo {
                 .map(|info| JxlExtraChannel {
                     ec_type: info.ec_type,
                     alpha_associated: info.alpha_associated(),
+                    bit_depth: info.bit_depth().to_api(),
+                    dim_shift: info.dim_shift(),
+                    name: info.name.clone(),
+                    spot_color: info.spot_color,
+                    cfa_channel: info.cfa_channel,
                 })
                 .collect(),
             animation: data
@@ -142,7 +145,8 @@ impl ImageInfo {
             preview_size: data
                 .preview
                 .as_ref()
-                .map(|p| (p.xsize() as usize, p.ysize() as usize)),
+                .map(|p| orient_size(p.xsize() as usize, p.ysize() as usize)),
+            intrinsic_size,
         });
         self.file_header = Some(file_header);
         *bits = br.total_bits_read();

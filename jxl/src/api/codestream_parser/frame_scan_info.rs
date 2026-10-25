@@ -126,6 +126,7 @@ impl FrameScanInfo {
                 index: self.visible_frame_index,
                 duration_ms,
                 duration_ticks,
+                timecode: header.timecode,
                 file_offset: box_parser_checkpoint.file_position,
                 is_last: header.is_last,
                 is_keyframe,
