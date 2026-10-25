@@ -1844,9 +1844,10 @@ simd_function!(
                         let spline = (two * t3 - three * t2 + one) * ks
                             + (t3 - two * t2 + t) * one_minus_ks
                             + (three * t2 - two * t3) * D::F32Vec::splat(d, MAX_LUM);
+                        // The spline rises from KS to MAX_LUM, so lin is within (0, 1).
                         let lin = pq_to_linear_simd_vec(d, scale, spline);
                         // The curve is the identity below the knee.
-                        ks.gt(q).if_then_else_f32(scale, lin.max(zero).min(one) / y)
+                        ks.gt(q).if_then_else_f32(scale, lin / y)
                     }
                 });
             }
