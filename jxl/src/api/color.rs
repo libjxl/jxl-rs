@@ -2007,18 +2007,6 @@ fn create_icc_noop_btoa_tag(tags: &mut Vec<u8>) -> Result<(), Error> {
 mod test {
     use super::*;
 
-    /// Offset and size of the tag with `signature` in `profile`.
-    fn find_tag(profile: &[u8], signature: &[u8; 4]) -> Option<(usize, usize)> {
-        let count = u32::from_be_bytes(profile[128..132].try_into().unwrap()) as usize;
-        let field = |entry: &[u8], i: usize| {
-            u32::from_be_bytes(entry[i..i + 4].try_into().unwrap()) as usize
-        };
-        profile[132..132 + 12 * count]
-            .chunks_exact(12)
-            .find(|entry| entry[..4] == *signature)
-            .map(|entry| (field(entry, 4), field(entry, 8)))
-    }
-
     #[test]
     fn test_md5() {
         // Test vectors
@@ -2126,26 +2114,38 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_hdr_icc_lut_size() {
-        for transfer_function in [JxlTransferFunction::PQ, JxlTransferFunction::HLG] {
-            let profile = JxlColorEncoding::RgbColorSpace {
-                white_point: JxlWhitePoint::D65,
-                primaries: JxlPrimaries::BT2100,
-                transfer_function,
-                rendering_intent: RenderingIntent::Relative,
-            }
-            .maybe_create_profile()
-            .unwrap()
-            .unwrap();
-            let (offset, size) = find_tag(&profile, b"A2B0").unwrap();
-            let grid_points = profile[offset + 10] as usize;
-            assert_eq!(grid_points, 17);
-            // mft1: 48-byte header, 256-entry input and output tables, 3 bytes per grid point.
-            let data_size = 48 + 2 * 3 * 256 + 3 * grid_points.pow(3);
-            assert_eq!(size.next_multiple_of(4), data_size.next_multiple_of(4));
+    /// The HDR CLUT on every instruction set: within 1 of scalar, and exact at a few points.
+    fn test_hdr_icc_lut<D: SimdDescriptor>(d: D) {
+        const WHITE_D50: [f64; 3] = [0.964212, 1.0, 0.825188];
+        let [(rx, ry), (gx, gy), (bx, by)] = JxlPrimaries::BT2100.to_xy_coords();
+        let (wx, wy) = JxlWhitePoint::D65.to_xy_coords();
+        let to_xyz = primaries_to_xyz(rx, ry, gx, gy, bx, by, wx, wy).unwrap();
+        let to_xyzd50 = primaries_to_xyz_d50(rx, ry, gx, gy, bx, by, wx, wy).unwrap();
+        let luminances = to_xyz[1].map(|v| v as f32);
+        let to_xyzd50 = std::array::from_fn(|r| to_xyzd50[r].map(|v| (v / WHITE_D50[r]) as f32));
+        let scalar_d = jxl_simd::ScalarDescriptor::new().unwrap();
+        let [pq, hlg] = [JxlTransferFunction::PQ, JxlTransferFunction::HLG].map(|tf| {
+            let (mut clut, mut scalar) = (Vec::new(), Vec::new());
+            create_hdr_clut_simd(d, &tf, luminances, to_xyzd50, &mut clut).unwrap();
+            create_hdr_clut_simd(scalar_d, &tf, luminances, to_xyzd50, &mut scalar).unwrap();
+            assert_eq!(clut.len(), 3 * 17 * 17 * 17);
+            assert!(clut.iter().zip(&scalar).all(|(a, b)| a.abs_diff(*b) <= 1));
+            clut
+        });
+        // Grays 1 and 12, white and yellow, and their PQ and HLG Lab from an f64 reference.
+        for ([r, g, b], pq_lab, hlg_lab) in [
+            ([1, 1, 1], [1, 128, 128], [10, 128, 128]),
+            ([12, 12, 12], [239, 128, 128], [165, 128, 128]),
+            ([16, 16, 16], [252, 128, 128], [255, 128, 128]),
+            ([16, 16, 0], [252, 118, 186], [251, 115, 218]),
+        ] {
+            let i = 3 * ((r * 17 + g) * 17 + b);
+            assert_eq!(pq[i..i + 3], pq_lab);
+            assert_eq!(hlg[i..i + 3], hlg_lab);
         }
     }
+
+    jxl_simd::test_all_instruction_sets!(test_hdr_icc_lut);
 
     #[test]
     fn test_hdr_icc_profile_generation_hlg() {
