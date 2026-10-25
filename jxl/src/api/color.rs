@@ -1875,7 +1875,8 @@ fn append_hdr_clut<D: SimdDescriptor>(
     // Steps run over BATCH vectors at a time, so the CPU overlaps their long dependency chains.
     const BATCH: usize = 4;
     const DELTA: f32 = 6.0 / 29.0;
-    // A vector spans at most two (r, g) rows and fits the Lab staging buffers below.
+    // Rows a vector of up to 16 lanes can span: 2 at 17 grid points, 3 at 9.
+    const ROWS: usize = 1 + 15usize.div_ceil(HDR_LUT_DIM);
     const { assert!(D::F32Vec::LEN <= 16) }
     const { assert!((BATCH * D::F32Vec::LEN).is_multiple_of(D::U8Vec::LEN)) }
     let len = D::F32Vec::LEN;
@@ -1883,9 +1884,11 @@ fn append_hdr_clut<D: SimdDescriptor>(
     let one = D::F32Vec::splat(d, 1.0);
     let [lum_r, lum_g, lum_b] = luminances.map(|v| D::F32Vec::splat(d, v));
     let to_xyzd50 = to_xyzd50.map(|row| row.map(|v| D::F32Vec::splat(d, v)));
-    // Doubled, so a vector of consecutive b can load from any start b.
-    let grid: [f32; 2 * HDR_LUT_DIM] = std::array::from_fn(|i| eotf_lut[i % HDR_LUT_DIM]);
-    let next_row: [f32; 2 * HDR_LUT_DIM] = std::array::from_fn(|i| (i / HDR_LUT_DIM) as f32);
+    // Repeated per row, so a vector of consecutive b can load from any start b.
+    let grid: [f32; ROWS * HDR_LUT_DIM] = std::array::from_fn(|i| eotf_lut[i % HDR_LUT_DIM]);
+    let row_offset: [f32; ROWS * HDR_LUT_DIM] = std::array::from_fn(|i| (i / HDR_LUT_DIM) as f32);
+    let splat_rg =
+        |rg: usize| [rg / HDR_LUT_DIM, rg % HDR_LUT_DIM].map(|i| D::F32Vec::splat(d, grid[i]));
 
     // Lanes are consecutive points in the CLUT (b fastest); the last batch is partly padding.
     let start = tags.len();
@@ -1894,15 +1897,19 @@ fn append_hdr_clut<D: SimdDescriptor>(
         let rgb: [[D::F32Vec; 3]; BATCH] = std::array::from_fn(|v| {
             let point = (batch * BATCH + v) * len;
             let (rg, b) = (point / HDR_LUT_DIM, point % HDR_LUT_DIM);
-            let [[r0, g0], [r1, g1]] = [rg, rg + 1].map(|rg| {
-                [rg / HDR_LUT_DIM, rg % HDR_LUT_DIM].map(|i| D::F32Vec::splat(d, grid[i]))
-            });
-            let next = D::F32Vec::load(d, &next_row[b..]).gt(zero);
-            [
-                next.if_then_else_f32(r1, r0),
-                next.if_then_else_f32(g1, g0),
-                D::F32Vec::load(d, &grid[b..]),
-            ]
+            let [[r0, g0], [r1, g1]] = [rg, rg + 1].map(splat_rg);
+            let offset = D::F32Vec::load(d, &row_offset[b..]);
+            let next = offset.gt(zero);
+            // Grids under 15 points only; fold, as an empty `for` changes the code at 17.
+            let [r, g] = (2..ROWS).fold(
+                [next.if_then_else_f32(r1, r0), next.if_then_else_f32(g1, g0)],
+                |[r, g], k| {
+                    let next = offset.gt(D::F32Vec::splat(d, (k - 1) as f32));
+                    let [rk, gk] = splat_rg(rg + k);
+                    [next.if_then_else_f32(rk, r), next.if_then_else_f32(gk, g)]
+                },
+            );
+            [r, g, D::F32Vec::load(d, &grid[b..])]
         });
 
         let lum = rgb.map(|[r, g, b]| r.mul_add(lum_r, g.mul_add(lum_g, b * lum_b)));
