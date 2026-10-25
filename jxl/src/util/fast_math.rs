@@ -9,8 +9,6 @@ use std::f32::consts::{PI, SQRT_2};
 
 use jxl_simd::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask, shl, shr};
 
-#[cfg(test)]
-use super::eval_rational_poly;
 use super::eval_rational_poly_simd;
 
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
@@ -127,19 +125,6 @@ const LOG2F_Q: [f32; 3] = [
     1.7409343003366853e-1,
 ];
 
-#[cfg(test)]
-#[inline(always)]
-pub fn fast_log2f(x: f32) -> f32 {
-    let x_bits = x.to_bits() as i32;
-    let exp_bits = x_bits.wrapping_sub(0x3f2aaaab);
-    let exp_shifted = exp_bits >> 23;
-    let mantissa = f32::from_bits((x_bits.wrapping_sub(exp_shifted << 23)) as u32);
-    let exp_val = exp_shifted as f32;
-
-    let x = mantissa - 1.0;
-    eval_rational_poly(x, LOG2F_P, LOG2F_Q) + exp_val
-}
-
 #[inline(always)]
 pub fn fast_log2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     let x_bits = x.bitcast_to_i32();
@@ -153,12 +138,6 @@ pub fn fast_log2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
 }
 
 // Max relative error: ~3e-5
-#[cfg(test)]
-#[inline(always)]
-pub fn fast_powf(base: f32, exp: f32) -> f32 {
-    fast_pow2f(fast_log2f(base) * exp)
-}
-
 #[inline(always)]
 pub fn fast_powf_simd<D: SimdDescriptor>(d: D, base: D::F32Vec, exp: D::F32Vec) -> D::F32Vec {
     fast_pow2f_simd(d, fast_log2f_simd(d, base) * exp)
@@ -285,7 +264,7 @@ mod test {
             let exp = u.int_in_range(-(1i32 << 22)..=1 << 22)? as f32 / (1 << 20) as f32;
 
             let expected = base.powf(exp);
-            let actual = fast_powf(base, exp);
+            let actual = fast_powf_simd(ScalarDescriptor::new().unwrap(), base, exp);
             let abs_error = (actual - expected).abs();
             let rel_error = abs_error / expected;
             assert!(
