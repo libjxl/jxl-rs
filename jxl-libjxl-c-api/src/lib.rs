@@ -13,5 +13,12 @@ mod state_machine;
 mod types;
 
 pub use decode::*;
+pub use parallel_runner::{
+    JxlResizableParallelRunner, JxlResizableParallelRunnerCreate,
+    JxlResizableParallelRunnerDestroy, JxlResizableParallelRunnerSetThreads,
+    JxlResizableParallelRunnerSuggestThreads, JxlThreadParallelRunner,
+    JxlThreadParallelRunnerCreate, JxlThreadParallelRunnerDefaultNumWorkerThreads,
+    JxlThreadParallelRunnerDestroy,
+};
 pub use state_machine::JxlDecoder;
 pub use types::*;
