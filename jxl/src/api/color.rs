@@ -6,9 +6,12 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask, simd_function};
+
 use crate::bit_reader::BitReader;
 use crate::color::tf::{
-    hlg_system_gamma, hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear, pq_to_linear_precise,
+    hlg_system_gamma, hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear_precise,
+    pq_to_linear_simd_vec,
 };
 use crate::error::{Error, Result};
 pub use crate::headers::color_encoding::RenderingIntent;
@@ -17,7 +20,10 @@ use crate::headers::color_encoding::{
 };
 use crate::headers::encodings::{Empty, UnconditionalCoder};
 use crate::icc::IncrementalIccReader;
-use crate::util::{Matrix3x3, Vector3, inv_3x3_matrix, mul_3x3_matrix, mul_3x3_vector};
+use crate::util::{
+    Matrix3x3, Vector3, fast_cbrtf_simd, fast_powf_simd, inv_3x3_matrix, mul_3x3_matrix,
+    mul_3x3_vector,
+};
 
 // Bradford matrices for chromatic adaptation
 const K_BRADFORD: Matrix3x3<f64> = [
@@ -1744,6 +1750,11 @@ fn create_icc_lut_atob_tag_for_xyb(tags: &mut Vec<u8>) -> Result<(), Error> {
     Ok(())
 }
 
+// libjxl uses 9: CMSs interpolate between points, and 9 gives ~3x the error and tints grays.
+const HDR_LUT_DIM: usize = 17;
+// A grid row padded to whole vectors of up to 16 lanes.
+const HDR_LUT_PADDED_DIM: usize = HDR_LUT_DIM.next_multiple_of(16);
+
 /// Create mft1 (8-bit LUT) A2B0 tag for HDR tone mapping.
 fn create_icc_lut_atob_tag_for_hdr(
     transfer_function: &JxlTransferFunction,
@@ -1751,15 +1762,12 @@ fn create_icc_lut_atob_tag_for_hdr(
     white_point: &JxlWhitePoint,
     tags: &mut Vec<u8>,
 ) -> Result<(), Error> {
-    // libjxl uses 9: CMSs interpolate between points, and 9 gives ~3x the error and tints grays.
-    const LUT_DIM: usize = 17;
-
     // Tag signature: 'mft1'
     tags.extend_from_slice(b"mft1");
     // Reserved
     tags.extend_from_slice(&0u32.to_be_bytes());
     // Number of input channels, output channels, CLUT grid points, padding
-    tags.extend_from_slice(&[3, 3, LUT_DIM as u8, 0]);
+    tags.extend_from_slice(&[3, 3, HDR_LUT_DIM as u8, 0]);
 
     // Identity matrix (3x3, s15Fixed16)
     for i in 0..3 {
@@ -1786,122 +1794,7 @@ fn create_icc_lut_atob_tag_for_hdr(
     let to_xyzd50: [[f32; 3]; 3] =
         std::array::from_fn(|r| std::array::from_fn(|c| to_xyzd50[r][c] as f32));
 
-    // Precompute 1D EOTF on the grid coordinates.
-    let mut eotf_lut: [f32; LUT_DIM] = std::array::from_fn(|i| i as f32 / (LUT_DIM - 1) as f32);
-    match transfer_function {
-        JxlTransferFunction::PQ => pq_to_linear_precise(10000.0, &mut eotf_lut),
-        JxlTransferFunction::HLG => hlg_to_scene(&mut eotf_lut),
-        _ => return Err(Error::IccUnsupportedTransferFunction),
-    }
-
-    // Luminance of each grid point, in CLUT order.
-    let mut lums = Vec::with_capacity(LUT_DIM * LUT_DIM * LUT_DIM);
-    for &r in &eotf_lut {
-        for &g in &eotf_lut {
-            let rg = luminances[0] * r + luminances[1] * g;
-            lums.extend(eotf_lut.iter().map(|&b| rg + luminances[2] * b));
-        }
-    }
-
-    // Tone map (BT.2408 10000 -> 250 nits for PQ, 80-nit OOTF for HLG): the factor scaling each
-    // grid point's RGB. One step at a time over all points, so that the CPU can overlap points
-    // instead of waiting on each point's chain of transcendental functions.
-    let mults: Vec<f32> = match transfer_function {
-        JxlTransferFunction::PQ => {
-            // PQ(250 nits) = 0.5991247
-            const MAX_LUM: f32 = 0.599_124_7;
-            const KS: f32 = 1.5 * MAX_LUM - 0.5;
-            let mut lin: Vec<f32> = lums
-                .iter()
-                .map(|&y| {
-                    let q =
-                        linear_to_pq_simd_vec(jxl_simd::ScalarDescriptor, 1.0, 1e-4, y).min(1.0);
-                    if q < KS {
-                        return q;
-                    }
-                    let t = (q - KS) / (1.0 - KS);
-                    let t2 = t * t;
-                    let t3 = t2 * t;
-                    (2.0 * t3 - 3.0 * t2 + 1.0) * KS
-                        + (t3 - 2.0 * t2 + t) * (1.0 - KS)
-                        + (-2.0 * t3 + 3.0 * t2) * MAX_LUM
-                })
-                .collect();
-            pq_to_linear(250.0, &mut lin);
-            lin.iter()
-                .zip(&lums)
-                .map(|(&lin, &y)| {
-                    if y > 1e-10 {
-                        lin.clamp(0.0, 1.0) / y
-                    } else {
-                        0.0
-                    }
-                })
-                .collect()
-        }
-        JxlTransferFunction::HLG => {
-            let hlg_exp = hlg_system_gamma(80.0) - 1.0;
-            lums.iter()
-                .map(|&y| crate::util::fast_powf(y, hlg_exp))
-                .collect()
-        }
-        _ => unreachable!(),
-    };
-
-    // Gamut map, then linear RGB -> XYZ D50 relative to the white point.
-    const WHITE_D50: [f32; 3] = [0.964212, 1.0, 0.825188];
-    let mut lab_f: Vec<[f32; 3]> = Vec::with_capacity(lums.len());
-    let mut points = lums.iter().zip(&mults);
-    for &r in &eotf_lut {
-        for &g in &eotf_lut {
-            for &b in &eotf_lut {
-                let mut rgb = [r, g, b];
-                let (&y, &mult) = points.next().unwrap();
-                for v in &mut rgb {
-                    *v *= mult;
-                }
-
-                // Gamut map (desaturate out-of-gamut > 1.0 channels with preserve_saturation = 0.3)
-                let lum = y * mult;
-                let max_clr = rgb[0].max(rgb[1]).max(rgb[2]);
-                if max_clr > 1.0 {
-                    let gray_mix = (0.7 * (max_clr - 1.0) / (max_clr - lum)).clamp(0.0, 1.0);
-                    for v in &mut rgb {
-                        *v += gray_mix * (lum - *v);
-                    }
-                    let norm = 1.0 / rgb[0].max(rgb[1]).max(rgb[2]).max(1.0);
-                    for v in &mut rgb {
-                        *v *= norm;
-                    }
-                }
-
-                lab_f.push(std::array::from_fn(|c| {
-                    (rgb[0] * to_xyzd50[c][0] + rgb[1] * to_xyzd50[c][1] + rgb[2] * to_xyzd50[c][2])
-                        / WHITE_D50[c]
-                }));
-            }
-        }
-    }
-
-    // Lab's f(t), over all values at once so that it vectorizes.
-    const DELTA: f32 = 6.0 / 29.0;
-    for v in lab_f.as_flattened_mut() {
-        *v = if *v <= DELTA * DELTA * DELTA {
-            *v * (1.0 / (3.0 * DELTA * DELTA)) + 4.0 / 29.0
-        } else {
-            crate::util::fast_cbrtf(*v)
-        };
-    }
-
-    // 3D CLUT in 8-bit PCS Lab
-    tags.reserve(3 * lab_f.len());
-    for [f_x, f_y, f_z] in lab_f {
-        tags.extend_from_slice(&[
-            (255.0 * (1.16 * f_y - 0.16).clamp(0.0, 1.0)).round() as u8,
-            (128.0 + (500.0 * (f_x - f_y)).clamp(-128.0, 127.0)).round() as u8,
-            (128.0 + (200.0 * (f_y - f_z)).clamp(-128.0, 127.0)).round() as u8,
-        ]);
-    }
+    create_hdr_clut(transfer_function, luminances, to_xyzd50, tags)?;
 
     // Output tables (identity, 256 entries per channel)
     for _ in 0..3 {
@@ -1909,6 +1802,173 @@ fn create_icc_lut_atob_tag_for_hdr(
     }
 
     Ok(())
+}
+
+simd_function!(
+    create_hdr_clut,
+    d: D,
+    /// Appends the 3D CLUT of the HDR tone-mapping A2B0 tag.
+    fn create_hdr_clut_simd(
+        transfer_function: &JxlTransferFunction,
+        luminances: [f32; 3],
+        to_xyzd50: [[f32; 3]; 3],
+        tags: &mut Vec<u8>,
+    ) -> Result<(), Error> {
+        // Precompute 1D EOTF on the grid coordinates, zero-padded to whole vectors.
+        let mut eotf_lut = [0.0; HDR_LUT_PADDED_DIM];
+        let grid = &mut eotf_lut[..HDR_LUT_DIM];
+        for (i, v) in grid.iter_mut().enumerate() {
+            *v = i as f32 / (HDR_LUT_DIM - 1) as f32;
+        }
+
+        // Tone map (BT.2408 10000 -> 250 nits for PQ, 80-nit OOTF for HLG)
+        match transfer_function {
+            JxlTransferFunction::PQ => {
+                pq_to_linear_precise(10000.0, grid);
+                // PQ(250 nits) = 0.5991247
+                const MAX_LUM: f32 = 0.599_124_7;
+                const KS: f32 = 1.5 * MAX_LUM - 0.5;
+                let zero = D::F32Vec::zero(d);
+                let one = D::F32Vec::splat(d, 1.0);
+                let two = D::F32Vec::splat(d, 2.0);
+                let three = D::F32Vec::splat(d, 3.0);
+                let ks = D::F32Vec::splat(d, KS);
+                let one_minus_ks = D::F32Vec::splat(d, 1.0 - KS);
+                append_hdr_clut(d, &eotf_lut, luminances, to_xyzd50, tags, {
+                    #[inline(always)]
+                    |y| {
+                        let q = linear_to_pq_simd_vec(d, one, D::F32Vec::splat(d, 1e-4), y);
+                        let t = (q - ks) / one_minus_ks;
+                        let t2 = t * t;
+                        let t3 = t2 * t;
+                        let spline = (two * t3 - three * t2 + one) * ks
+                            + (t3 - two * t2 + t) * one_minus_ks
+                            + (three * t2 - two * t3) * D::F32Vec::splat(d, MAX_LUM);
+                        let q = ks.gt(q).if_then_else_f32(q, spline);
+                        let lin =
+                            pq_to_linear_simd_vec(d, D::F32Vec::splat(d, 10000.0 / 250.0), q);
+                        y.gt(D::F32Vec::splat(d, 1e-10))
+                            .if_then_else_f32(lin.max(zero).min(one) / y, zero)
+                    }
+                });
+            }
+            JxlTransferFunction::HLG => {
+                hlg_to_scene(grid);
+                let hlg_exp = D::F32Vec::splat(d, hlg_system_gamma(80.0) - 1.0);
+                append_hdr_clut(d, &eotf_lut, luminances, to_xyzd50, tags, {
+                    #[inline(always)]
+                    |y| fast_powf_simd(d, y, hlg_exp)
+                });
+            }
+            _ => return Err(Error::IccUnsupportedTransferFunction),
+        }
+        Ok(())
+    }
+);
+
+/// Appends the CLUT in 8-bit PCS Lab. Grid point (r, g, b) has linear RGB from `eotf_lut`,
+/// scaled by `tone_map` of its luminance.
+#[inline(always)]
+fn append_hdr_clut<D: SimdDescriptor>(
+    d: D,
+    eotf_lut: &[f32; HDR_LUT_PADDED_DIM],
+    luminances: [f32; 3],
+    to_xyzd50: [[f32; 3]; 3],
+    tags: &mut Vec<u8>,
+    tone_map: impl Fn(D::F32Vec) -> D::F32Vec,
+) {
+    const WHITE_D50: [f32; 3] = [0.964212, 1.0, 0.825188];
+    const DELTA: f32 = 6.0 / 29.0;
+    let len = D::F32Vec::LEN;
+    let zero = D::F32Vec::zero(d);
+    let one = D::F32Vec::splat(d, 1.0);
+    let lum_b = D::F32Vec::splat(d, luminances[2]);
+    let to_xyzd50 = to_xyzd50.map(|row| row.map(|v| D::F32Vec::splat(d, v)));
+    let vec_starts = (0..HDR_LUT_DIM).step_by(len);
+
+    tags.reserve(3 * HDR_LUT_DIM.pow(3));
+    // Lanes are consecutive b values, which are consecutive points in the CLUT. Each step runs
+    // over all vectors of a row before the next, so that the CPU overlaps their long chains of
+    // dependent operations.
+    for &r in &eotf_lut[..HDR_LUT_DIM] {
+        for &g in &eotf_lut[..HDR_LUT_DIM] {
+            let rg = D::F32Vec::splat(d, luminances[0] * r + luminances[1] * g);
+            let [r, g] = [r, g].map(|v| D::F32Vec::splat(d, v));
+
+            let mut mults = [0.0; HDR_LUT_PADDED_DIM];
+            for i in vec_starts.clone() {
+                let b = D::F32Vec::load(d, &eotf_lut[i..]);
+                tone_map(b.mul_add(lum_b, rg)).store(&mut mults[i..]);
+            }
+
+            let mut xyz = [[0.0; HDR_LUT_PADDED_DIM]; 3];
+            for i in vec_starts.clone() {
+                let b = D::F32Vec::load(d, &eotf_lut[i..]);
+                let mult = D::F32Vec::load(d, &mults[i..]);
+                let rgb = [r, g, b].map(|v| v * mult);
+
+                // Gamut map (desaturate out-of-gamut > 1.0 channels with preserve_saturation = 0.3)
+                let lum = b.mul_add(lum_b, rg) * mult;
+                let max_clr = rgb[0].max(rgb[1]).max(rgb[2]);
+                let gray_mix = (D::F32Vec::splat(d, 0.7) * (max_clr - one) / (max_clr - lum))
+                    .max(zero)
+                    .min(one);
+                let gray_mix = max_clr.gt(one).if_then_else_f32(gray_mix, zero);
+                let rgb = rgb.map(|v| gray_mix.mul_add(lum - v, v));
+                // 1 for points within the gamut.
+                let norm = one / rgb[0].max(rgb[1]).max(rgb[2]).max(one);
+                let [r, g, b] = rgb.map(|v| v * norm);
+
+                // Linear RGB -> XYZ D50 relative to the white point
+                for ((v, [m_r, m_g, m_b]), white) in xyz.iter_mut().zip(to_xyzd50).zip(WHITE_D50) {
+                    (b.mul_add(m_b, g.mul_add(m_g, r * m_r)) / D::F32Vec::splat(d, white))
+                        .store(&mut v[i..]);
+                }
+            }
+
+            let mut lab = [0.0; 3 * HDR_LUT_PADDED_DIM];
+            for i in vec_starts.clone() {
+                // Lab's f(t)
+                let [f_x, f_y, f_z] = xyz.each_ref().map(|v| {
+                    let v = D::F32Vec::load(d, &v[i..]);
+                    v.gt(D::F32Vec::splat(d, DELTA * DELTA * DELTA))
+                        .if_then_else_f32(
+                            fast_cbrtf_simd(d, v),
+                            v.mul_add(
+                                D::F32Vec::splat(d, 1.0 / (3.0 * DELTA * DELTA)),
+                                D::F32Vec::splat(d, 4.0 / 29.0),
+                            ),
+                        )
+                });
+
+                // 8-bit PCS Lab
+                let l = f_y
+                    .mul_add(D::F32Vec::splat(d, 1.16), D::F32Vec::splat(d, -0.16))
+                    .max(zero)
+                    .min(one)
+                    * D::F32Vec::splat(d, 255.0);
+                let [a, b] = [
+                    (f_x - f_y) * D::F32Vec::splat(d, 500.0),
+                    (f_y - f_z) * D::F32Vec::splat(d, 200.0),
+                ]
+                .map(|v| {
+                    v.max(D::F32Vec::splat(d, -128.0))
+                        .min(D::F32Vec::splat(d, 127.0))
+                        + D::F32Vec::splat(d, 128.0)
+                });
+                D::F32Vec::store_interleaved_3(l, a, b, &mut lab[3 * i..]);
+            }
+            let mut row = [0u8; 3 * HDR_LUT_PADDED_DIM];
+            for (v, out) in lab
+                .chunks_exact(len)
+                .zip(row.chunks_exact_mut(len))
+                .take((3 * HDR_LUT_DIM).div_ceil(len))
+            {
+                D::F32Vec::load(d, v).round_store_u8(out);
+            }
+            tags.extend_from_slice(&row[..3 * HDR_LUT_DIM]);
+        }
+    }
 }
 
 /// Create mBA B2A0 tag (no-op, required by some software like Safari).

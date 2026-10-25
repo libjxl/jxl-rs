@@ -9,7 +9,9 @@ use std::f32::consts::{PI, SQRT_2};
 
 use jxl_simd::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask, shl, shr};
 
-use super::{eval_rational_poly, eval_rational_poly_simd};
+#[cfg(test)]
+use super::eval_rational_poly;
+use super::eval_rational_poly_simd;
 
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
 const POW2F_DENOM_COEFFS: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
@@ -125,6 +127,7 @@ const LOG2F_Q: [f32; 3] = [
     1.7409343003366853e-1,
 ];
 
+#[cfg(test)]
 #[inline(always)]
 pub fn fast_log2f(x: f32) -> f32 {
     let x_bits = x.to_bits() as i32;
@@ -150,6 +153,7 @@ pub fn fast_log2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
 }
 
 // Max relative error: ~3e-5
+#[cfg(test)]
 #[inline(always)]
 pub fn fast_powf(base: f32, exp: f32) -> f32 {
     fast_pow2f(fast_log2f(base) * exp)
@@ -163,10 +167,17 @@ pub fn fast_powf_simd<D: SimdDescriptor>(d: D, base: D::F32Vec, exp: D::F32Vec) 
 /// Cube root of a positive normal `x`: a bit-level first guess, refined by three Newton steps.
 // Max relative error: ~1.4e-7
 #[inline(always)]
-pub fn fast_cbrtf(x: f32) -> f32 {
-    let mut y = f32::from_bits(x.to_bits() / 3 + 0x2a51_4067);
+pub fn fast_cbrtf_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
+    // The high half of bits * ((2^32 + 2) / 3) is bits / 3 for bits < 2^31.
+    let bits_div_3 = x
+        .bitcast_to_i32()
+        .mul_wide_take_high(D::I32Vec::splat(d, 0x5555_5556));
+    let mut y = (bits_div_3 + D::I32Vec::splat(d, 0x2a51_4067)).bitcast_to_f32();
     for _ in 0..3 {
-        y = (2.0 / 3.0) * y + x / (3.0 * y * y);
+        y = y.mul_add(
+            D::F32Vec::splat(d, 2.0 / 3.0),
+            x / (D::F32Vec::splat(d, 3.0) * y * y),
+        );
     }
     y
 }
@@ -286,16 +297,24 @@ mod test {
         });
     }
 
-    #[test]
-    fn fast_cbrtf_arb() {
+    fn fast_cbrtf_simd_arb<D: SimdDescriptor>(d: D) {
+        let mut input = vec![0.0f32; D::F32Vec::LEN];
+        let mut output = vec![0.0f32; D::F32Vec::LEN];
         arbtest::arbtest(|u| {
-            let x =
-                f32::from_bits(u.int_in_range(f32::MIN_POSITIVE.to_bits()..=f32::MAX.to_bits())?);
-            let rel_error = (fast_cbrtf(x) as f64 / (x as f64).cbrt() - 1.0).abs();
-            assert!(rel_error < 1.5e-7, "x: {x}, rel_error: {rel_error}");
+            for v in &mut input {
+                let bits = u.int_in_range(f32::MIN_POSITIVE.to_bits()..=f32::MAX.to_bits())?;
+                *v = f32::from_bits(bits);
+            }
+            fast_cbrtf_simd(d, D::F32Vec::load(d, &input)).store(&mut output);
+            for (&x, &y) in input.iter().zip(&output) {
+                let rel_error = (y as f64 / (x as f64).cbrt() - 1.0).abs();
+                assert!(rel_error < 1.5e-7, "x: {x}, rel_error: {rel_error}");
+            }
             Ok(())
         });
     }
+
+    jxl_simd::test_all_instruction_sets!(fast_cbrtf_simd_arb);
 
     fn bessel_j1(x: f64) -> f64 {
         if x == 0.0 {
