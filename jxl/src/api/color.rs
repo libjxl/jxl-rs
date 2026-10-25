@@ -1832,6 +1832,7 @@ simd_function!(
                 let ks = D::F32Vec::splat(d, KS);
                 let one_minus_ks = D::F32Vec::splat(d, 1.0 - KS);
                 let inv_one_minus_ks = D::F32Vec::splat(d, 1.0 / (1.0 - KS));
+                let max_lum = D::F32Vec::splat(d, MAX_LUM);
                 let scale = D::F32Vec::splat(d, 10000.0 / 250.0);
                 append_hdr_clut(d, &eotf_lut, luminances, to_xyzd50, tags, {
                     #[inline(always)]
@@ -1843,7 +1844,7 @@ simd_function!(
                         let t3 = t2 * t;
                         let spline = (two * t3 - three * t2 + one) * ks
                             + (t3 - two * t2 + t) * one_minus_ks
-                            + (three * t2 - two * t3) * D::F32Vec::splat(d, MAX_LUM);
+                            + (three * t2 - two * t3) * max_lum;
                         // The spline rises from KS to MAX_LUM, so lin is within (0, 1).
                         let lin = pq_to_linear_simd_vec(d, scale, spline);
                         // The curve is the identity below the knee.
@@ -1880,7 +1881,7 @@ fn append_hdr_clut<D: SimdDescriptor>(
     // Steps run over BATCH vectors at a time, so the CPU overlaps their long dependency chains.
     const BATCH: usize = 4;
     const DELTA: f32 = 6.0 / 29.0;
-    // For the Lab staging buffers below.
+    // A vector spans at most two (r, g) rows and fits the Lab staging buffers below.
     const { assert!(D::F32Vec::LEN <= 16) }
     const { assert!((BATCH * D::F32Vec::LEN).is_multiple_of(D::U8Vec::LEN)) }
     let len = D::F32Vec::LEN;
@@ -1895,9 +1896,9 @@ fn append_hdr_clut<D: SimdDescriptor>(
     // Lanes are consecutive points in the CLUT (b fastest); the last batch is partly padding.
     let start = tags.len();
     tags.resize(start + 3 * POINTS.next_multiple_of(BATCH * len), 0);
-    for (i, out) in tags[start..].chunks_exact_mut(3 * BATCH * len).enumerate() {
+    for (batch, out) in tags[start..].chunks_exact_mut(3 * BATCH * len).enumerate() {
         let rgb: [[D::F32Vec; 3]; BATCH] = std::array::from_fn(|v| {
-            let point = (i * BATCH + v) * len;
+            let point = (batch * BATCH + v) * len;
             let (rg, b) = (point / HDR_LUT_DIM, point % HDR_LUT_DIM);
             let [[r0, g0], [r1, g1]] = [rg, rg + 1].map(|rg| {
                 [rg / HDR_LUT_DIM, rg % HDR_LUT_DIM].map(|i| D::F32Vec::splat(d, grid[i]))
@@ -1955,18 +1956,18 @@ fn append_hdr_clut<D: SimdDescriptor>(
                 (f_x - f_y, 500.0, 128.0),
                 (f_y - f_z, 200.0, 128.0),
             ];
-            for ((c, mul, add), lab) in channels.into_iter().zip(&mut lab) {
+            for ((c, mul, add), buf) in channels.into_iter().zip(&mut lab) {
                 c.mul_add(D::F32Vec::splat(d, mul), D::F32Vec::splat(d, add))
                     .max(zero)
                     .min(D::F32Vec::splat(d, 255.0))
-                    .round_store_u8(&mut lab[v * len..]);
+                    .round_store_u8(&mut buf[v * len..]);
             }
         }
-        for (i, out) in out.chunks_exact_mut(3 * D::U8Vec::LEN).enumerate() {
+        for (i, chunk) in out.chunks_exact_mut(3 * D::U8Vec::LEN).enumerate() {
             let [l, a, b] = lab
                 .each_ref()
                 .map(|c| D::U8Vec::load(d, &c[i * D::U8Vec::LEN..]));
-            D::U8Vec::store_interleaved_3(l, a, b, out);
+            D::U8Vec::store_interleaved_3(l, a, b, chunk);
         }
     }
     tags.truncate(start + 3 * POINTS);
