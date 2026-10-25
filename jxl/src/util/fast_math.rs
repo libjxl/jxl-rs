@@ -160,6 +160,17 @@ pub fn fast_powf_simd<D: SimdDescriptor>(d: D, base: D::F32Vec, exp: D::F32Vec) 
     fast_pow2f_simd(d, fast_log2f_simd(d, base) * exp)
 }
 
+/// Cube root of a positive normal `x`: a bit-level first guess, refined by three Newton steps.
+// Max relative error: ~1.4e-7
+#[inline(always)]
+pub fn fast_cbrtf(x: f32) -> f32 {
+    let mut y = f32::from_bits(x.to_bits() / 3 + 0x2a51_4067);
+    for _ in 0..3 {
+        y = (2.0 / 3.0) * y + x / (3.0 * y * y);
+    }
+    y
+}
+
 #[inline(always)]
 pub fn floor_log2_nonzero(x: u64) -> u32 {
     (u64::BITS as usize - 1) as u32 ^ x.leading_zeros()
@@ -271,6 +282,17 @@ mod test {
                 "base: {base}, exp: {exp}, rel_error: {rel_error}, expected: {expected}, \
 		 actual: {actual}",
             );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn fast_cbrtf_arb() {
+        arbtest::arbtest(|u| {
+            let x =
+                f32::from_bits(u.int_in_range(f32::MIN_POSITIVE.to_bits()..=f32::MAX.to_bits())?);
+            let rel_error = (fast_cbrtf(x) as f64 / (x as f64).cbrt() - 1.0).abs();
+            assert!(rel_error < 1.5e-7, "x: {x}, rel_error: {rel_error}");
             Ok(())
         });
     }

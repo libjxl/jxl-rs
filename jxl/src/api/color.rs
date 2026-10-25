@@ -8,7 +8,7 @@ use std::fmt;
 
 use crate::bit_reader::BitReader;
 use crate::color::tf::{
-    hlg_system_gamma, hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear_precise,
+    hlg_system_gamma, hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear, pq_to_linear_precise,
 };
 use crate::error::{Error, Result};
 pub use crate::headers::color_encoding::RenderingIntent;
@@ -71,35 +71,34 @@ pub fn compute_md5(data: &[u8]) -> [u8; 16] {
     let mut c0: u32 = 0x98badcfe;
     let mut d0: u32 = 0x10325476;
 
-    for i in (0..data64.len()).step_by(64) {
+    for block in data64.chunks_exact(64) {
+        let words: [u32; 16] = std::array::from_fn(|i| {
+            u32::from_le_bytes(block[i * 4..i * 4 + 4].try_into().unwrap())
+        });
         let mut a = a0;
         let mut b = b0;
         let mut c = c0;
         let mut d = d0;
 
-        for j in 0..64 {
-            let (f, g) = if j < 16 {
-                ((b & c) | ((!b) & d), j)
-            } else if j < 32 {
-                ((d & b) | ((!d) & c), (5 * j + 1) & 0xf)
-            } else if j < 48 {
-                (b ^ c ^ d, (3 * j + 5) & 0xf)
-            } else {
-                (c ^ (b | (!d)), (7 * j) & 0xf)
+        // One loop per round, so that each loop has a fixed function and unrolls.
+        macro_rules! round {
+            ($j:ident in $steps:expr, $f:expr, $g:expr) => {
+                for $j in $steps {
+                    let f = ($f)
+                        .wrapping_add(a)
+                        .wrapping_add(SINEPARTS[$j])
+                        .wrapping_add(words[$g]);
+                    a = d;
+                    d = c;
+                    c = b;
+                    b = b.wrapping_add(f.rotate_left(SHIFT[$j]));
+                }
             };
-
-            let dg0 = data64[i + g * 4] as u32;
-            let dg1 = data64[i + g * 4 + 1] as u32;
-            let dg2 = data64[i + g * 4 + 2] as u32;
-            let dg3 = data64[i + g * 4 + 3] as u32;
-            let u = dg0 | (dg1 << 8) | (dg2 << 16) | (dg3 << 24);
-
-            let f = f.wrapping_add(a).wrapping_add(SINEPARTS[j]).wrapping_add(u);
-            a = d;
-            d = c;
-            c = b;
-            b = b.wrapping_add(f.rotate_left(SHIFT[j]));
         }
+        round!(j in 0..16, (b & c) | (!b & d), j);
+        round!(j in 16..32, (d & b) | (!d & c), (5 * j + 1) & 0xf);
+        round!(j in 32..48, b ^ c ^ d, (3 * j + 5) & 0xf);
+        round!(j in 48..64, c ^ (b | !d), (7 * j) & 0xf);
 
         a0 = a0.wrapping_add(a);
         b0 = b0.wrapping_add(b);
@@ -1752,7 +1751,8 @@ fn create_icc_lut_atob_tag_for_hdr(
     white_point: &JxlWhitePoint,
     tags: &mut Vec<u8>,
 ) -> Result<(), Error> {
-    const LUT_DIM: usize = 9; // 9x9x9 3D LUT
+    // libjxl uses 9: CMSs interpolate between points, and 9 gives ~3x the error and tints grays.
+    const LUT_DIM: usize = 17;
 
     // Tag signature: 'mft1'
     tags.extend_from_slice(b"mft1");
@@ -1786,7 +1786,7 @@ fn create_icc_lut_atob_tag_for_hdr(
     let to_xyzd50: [[f32; 3]; 3] =
         std::array::from_fn(|r| std::array::from_fn(|c| to_xyzd50[r][c] as f32));
 
-    // Precompute 1D EOTF on the 9 grid coordinates.
+    // Precompute 1D EOTF on the grid coordinates.
     let mut eotf_lut: [f32; LUT_DIM] = std::array::from_fn(|i| i as f32 / (LUT_DIM - 1) as f32);
     match transfer_function {
         JxlTransferFunction::PQ => pq_to_linear_precise(10000.0, &mut eotf_lut),
@@ -1794,39 +1794,69 @@ fn create_icc_lut_atob_tag_for_hdr(
         _ => return Err(Error::IccUnsupportedTransferFunction),
     }
 
-    let hlg_exp = hlg_system_gamma(80.0) - 1.0;
+    // Luminance of each grid point, in CLUT order.
+    let mut lums = Vec::with_capacity(LUT_DIM * LUT_DIM * LUT_DIM);
+    for &r in &eotf_lut {
+        for &g in &eotf_lut {
+            let rg = luminances[0] * r + luminances[1] * g;
+            lums.extend(eotf_lut.iter().map(|&b| rg + luminances[2] * b));
+        }
+    }
 
-    // 3D CLUT
+    // Tone map (BT.2408 10000 -> 250 nits for PQ, 80-nit OOTF for HLG): the factor scaling each
+    // grid point's RGB. One step at a time over all points, so that the CPU can overlap points
+    // instead of waiting on each point's chain of transcendental functions.
+    let mults: Vec<f32> = match transfer_function {
+        JxlTransferFunction::PQ => {
+            // PQ(250 nits) = 0.5991247
+            const MAX_LUM: f32 = 0.599_124_7;
+            const KS: f32 = 1.5 * MAX_LUM - 0.5;
+            let mut lin: Vec<f32> = lums
+                .iter()
+                .map(|&y| {
+                    let q =
+                        linear_to_pq_simd_vec(jxl_simd::ScalarDescriptor, 1.0, 1e-4, y).min(1.0);
+                    if q < KS {
+                        return q;
+                    }
+                    let t = (q - KS) / (1.0 - KS);
+                    let t2 = t * t;
+                    let t3 = t2 * t;
+                    (2.0 * t3 - 3.0 * t2 + 1.0) * KS
+                        + (t3 - 2.0 * t2 + t) * (1.0 - KS)
+                        + (-2.0 * t3 + 3.0 * t2) * MAX_LUM
+                })
+                .collect();
+            pq_to_linear(250.0, &mut lin);
+            lin.iter()
+                .zip(&lums)
+                .map(|(&lin, &y)| {
+                    if y > 1e-10 {
+                        lin.clamp(0.0, 1.0) / y
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        }
+        JxlTransferFunction::HLG => {
+            let hlg_exp = hlg_system_gamma(80.0) - 1.0;
+            lums.iter()
+                .map(|&y| crate::util::fast_powf(y, hlg_exp))
+                .collect()
+        }
+        _ => unreachable!(),
+    };
+
+    // Gamut map, then linear RGB -> XYZ D50 relative to the white point.
+    const WHITE_D50: [f32; 3] = [0.964212, 1.0, 0.825188];
+    let mut lab_f: Vec<[f32; 3]> = Vec::with_capacity(lums.len());
+    let mut points = lums.iter().zip(&mults);
     for &r in &eotf_lut {
         for &g in &eotf_lut {
             for &b in &eotf_lut {
                 let mut rgb = [r, g, b];
-                let y = luminances[0] * r + luminances[1] * g + luminances[2] * b;
-
-                // Tone map (BT.2408 10000 -> 250 nits for PQ, 80-nit OOTF for HLG)
-                let mult = match transfer_function {
-                    JxlTransferFunction::PQ if y > 1e-10 => {
-                        // PQ(250 nits) = 0.5991247
-                        const MAX_LUM: f32 = 0.599_124_7;
-                        const KS: f32 = 1.5 * MAX_LUM - 0.5;
-                        let mut q = linear_to_pq_simd_vec(jxl_simd::ScalarDescriptor, 1.0, 1e-4, y)
-                            .min(1.0);
-                        if q >= KS {
-                            let t = (q - KS) / (1.0 - KS);
-                            let t2 = t * t;
-                            let t3 = t2 * t;
-                            q = (2.0 * t3 - 3.0 * t2 + 1.0) * KS
-                                + (t3 - 2.0 * t2 + t) * (1.0 - KS)
-                                + (-2.0 * t3 + 3.0 * t2) * MAX_LUM;
-                        }
-                        let mut lin = [q];
-                        pq_to_linear_precise(250.0, &mut lin);
-                        lin[0].clamp(0.0, 1.0) / y
-                    }
-                    JxlTransferFunction::PQ => 0.0,
-                    JxlTransferFunction::HLG => crate::util::fast_powf(y, hlg_exp),
-                    _ => unreachable!(),
-                };
+                let (&y, &mult) = points.next().unwrap();
                 for v in &mut rgb {
                     *v *= mult;
                 }
@@ -1845,27 +1875,32 @@ fn create_icc_lut_atob_tag_for_hdr(
                     }
                 }
 
-                // Convert linear RGB -> XYZ D50 -> 8-bit PCS Lab
-                const WHITE_D50: [f32; 3] = [0.964212, 1.0, 0.825188];
-                const DELTA: f32 = 6.0 / 29.0;
-                let [f_x, f_y, f_z] = std::array::from_fn(|c| {
-                    let v = (rgb[0] * to_xyzd50[c][0]
-                        + rgb[1] * to_xyzd50[c][1]
-                        + rgb[2] * to_xyzd50[c][2])
-                        / WHITE_D50[c];
-                    if v <= DELTA * DELTA * DELTA {
-                        v * (1.0 / (3.0 * DELTA * DELTA)) + 4.0 / 29.0
-                    } else {
-                        v.cbrt()
-                    }
-                });
-                tags.extend_from_slice(&[
-                    (255.0 * (1.16 * f_y - 0.16).clamp(0.0, 1.0)).round() as u8,
-                    (128.0 + (500.0 * (f_x - f_y)).clamp(-128.0, 127.0)).round() as u8,
-                    (128.0 + (200.0 * (f_y - f_z)).clamp(-128.0, 127.0)).round() as u8,
-                ]);
+                lab_f.push(std::array::from_fn(|c| {
+                    (rgb[0] * to_xyzd50[c][0] + rgb[1] * to_xyzd50[c][1] + rgb[2] * to_xyzd50[c][2])
+                        / WHITE_D50[c]
+                }));
             }
         }
+    }
+
+    // Lab's f(t), over all values at once so that it vectorizes.
+    const DELTA: f32 = 6.0 / 29.0;
+    for v in lab_f.as_flattened_mut() {
+        *v = if *v <= DELTA * DELTA * DELTA {
+            *v * (1.0 / (3.0 * DELTA * DELTA)) + 4.0 / 29.0
+        } else {
+            crate::util::fast_cbrtf(*v)
+        };
+    }
+
+    // 3D CLUT in 8-bit PCS Lab
+    tags.reserve(3 * lab_f.len());
+    for [f_x, f_y, f_z] in lab_f {
+        tags.extend_from_slice(&[
+            (255.0 * (1.16 * f_y - 0.16).clamp(0.0, 1.0)).round() as u8,
+            (128.0 + (500.0 * (f_x - f_y)).clamp(-128.0, 127.0)).round() as u8,
+            (128.0 + (200.0 * (f_y - f_z)).clamp(-128.0, 127.0)).round() as u8,
+        ]);
     }
 
     // Output tables (identity, 256 entries per channel)
@@ -1911,6 +1946,18 @@ fn create_icc_noop_btoa_tag(tags: &mut Vec<u8>) -> Result<(), Error> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// Offset and size of the tag with `signature` in `profile`.
+    fn find_tag(profile: &[u8], signature: &[u8; 4]) -> Option<(usize, usize)> {
+        let count = u32::from_be_bytes(profile[128..132].try_into().unwrap()) as usize;
+        let field = |entry: &[u8], i: usize| {
+            u32::from_be_bytes(entry[i..i + 4].try_into().unwrap()) as usize
+        };
+        profile[132..132 + 12 * count]
+            .chunks_exact(12)
+            .find(|entry| entry[..4] == *signature)
+            .map(|entry| (field(entry, 4), field(entry, 8)))
+    }
 
     #[test]
     fn test_md5() {
@@ -2017,6 +2064,27 @@ mod test {
             profile.windows(4).any(|w| w == b"cicp"),
             "Profile should contain cicp tag"
         );
+    }
+
+    #[test]
+    fn test_hdr_icc_lut_size() {
+        for transfer_function in [JxlTransferFunction::PQ, JxlTransferFunction::HLG] {
+            let profile = JxlColorEncoding::RgbColorSpace {
+                white_point: JxlWhitePoint::D65,
+                primaries: JxlPrimaries::BT2100,
+                transfer_function,
+                rendering_intent: RenderingIntent::Relative,
+            }
+            .maybe_create_profile()
+            .unwrap()
+            .unwrap();
+            let (offset, size) = find_tag(&profile, b"A2B0").unwrap();
+            let grid_points = profile[offset + 10] as usize;
+            assert_eq!(grid_points, 17);
+            // mft1: 48-byte header, 256-entry input and output tables, 3 bytes per grid point.
+            let data_size = 48 + 2 * 3 * 256 + 3 * grid_points.pow(3);
+            assert_eq!(size.next_multiple_of(4), data_size.next_multiple_of(4));
+        }
     }
 
     #[test]
