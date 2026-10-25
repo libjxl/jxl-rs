@@ -401,8 +401,6 @@ impl CodestreamParser {
                         toc,
                         self.image_info.file_header(),
                         decode_options,
-                        self.pixel_format.as_ref().unwrap(),
-                        self.output_color_profile.as_ref().unwrap(),
                         process_mode,
                         level5_limits,
                     )?;

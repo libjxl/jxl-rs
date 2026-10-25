@@ -350,6 +350,10 @@ impl Frame {
         &self.header
     }
 
+    pub fn has_render_pipeline(&self) -> bool {
+        self.render_pipeline.is_some()
+    }
+
     #[instrument(level = "debug", skip(self), ret)]
     pub fn get_section_idx(&self, section: Section) -> usize {
         if self.header.num_toc_entries() == 1 {

@@ -143,13 +143,9 @@ impl JxlDecoder {
 
     /// Specifies the pixel format for output buffers.
     ///
-    /// Setting this may also change the output color profile if it was not set
-    /// manually before.
-    ///
-    /// Frame render pipelines are built for the pixel format that is current
-    /// when the frame's TOC is parsed, so the format can only be changed after
-    /// [`Event::BasicInfo`](crate::api::Event::BasicInfo) and before the first
-    /// frame header is decoded.
+    /// Setting this may also change the output color profile. Can only be
+    /// called after [`Event::BasicInfo`](crate::api::Event::BasicInfo), and not
+    /// while a frame is being rendered.
     pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) -> Result<()> {
         // TODO(veluca): return an error if we are asking for both planar and
         // interleaved-in-color alpha.
@@ -158,17 +154,11 @@ impl JxlDecoder {
                 "cannot set pixel format before BasicInfo",
             ));
         }
-        let frame_header_was_decoded = self
-            .codestream_parser
-            .frame_info
-            .current_frame_header()
-            .is_some()
-            || !self.codestream_parser.scanned_frames().is_empty();
-        if frame_header_was_decoded
+        if self.codestream_parser.frame_info.has_render_pipeline()
             && self.codestream_parser.pixel_format.as_ref() != Some(&pixel_format)
         {
             return Err(Error::ApiUsageError(
-                "cannot change pixel format after first frame header",
+                "cannot change pixel format during frame decoding",
             ));
         }
         self.codestream_parser.pixel_format = Some(pixel_format);
