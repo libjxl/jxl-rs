@@ -6,7 +6,7 @@
 use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask};
 
 use crate::headers::color_encoding::CustomTransferFunction;
-use crate::util::{eval_rational_poly, eval_rational_poly_simd};
+use crate::util::eval_rational_poly_simd;
 
 /// Converts a single SIMD vector of linear samples to sRGB transfer curve.
 // Max error ~5e-7
@@ -116,21 +116,18 @@ const PQ_EOTF_Q: [f32; 5] = [
     2.6771877,
 ];
 
-/// Converts PQ signal to linear sample using PQ EOTF, where linear sample value of 1.0 represents
-/// `intensity_target` display nits.
-///
-/// This version uses a rational polynomial approximation (max absolute error ~3e-6 relative to
-/// 10000 nits).
-pub fn pq_to_linear(intensity_target: f32, samples: &mut [f32]) {
-    let y_mult = 10000.0 / intensity_target;
-
-    for s in samples {
-        let a = s.abs();
-        // a + a * a
-        let x = a.mul_add(a, a);
-        let y = eval_rational_poly(x, PQ_EOTF_P, PQ_EOTF_Q);
-        *s = (y * y_mult).copysign(*s);
-    }
+/// PQ EOTF of a vector, linear 1.0 being 10000 / `y_mult` nits; rational, max error ~3e-6.
+#[inline(always)]
+pub fn pq_to_linear_simd_vec<D: SimdDescriptor>(
+    d: D,
+    y_mult: D::F32Vec,
+    s: D::F32Vec,
+) -> D::F32Vec {
+    let a = s.abs();
+    // a + a * a
+    let x = a.mul_add(a, a);
+    let y = eval_rational_poly_simd(d, x, PQ_EOTF_P, PQ_EOTF_Q);
+    (y * y_mult).copysign(s)
 }
 
 const PQ_INV_EOTF_P: [f32; 5] = [1.351392e-2, -1.095778, 5.522776e1, 1.492516e2, 4.838434e1];
@@ -425,25 +422,15 @@ mod test {
         }
     }
 
-    #[inline(always)]
-    fn pq_to_linear_simd<D: SimdDescriptor>(
-        d: D,
-        intensity_target: f32,
-        xsize: usize,
-        samples: &mut [f32],
-    ) {
-        let y_mult = D::F32Vec::splat(d, 10000.0 / intensity_target);
+    fn pq_to_linear(intensity_target: f32, samples: &mut [f32]) {
+        let y_mult = 10000.0 / intensity_target;
 
-        for vec in samples
-            .chunks_exact_mut(D::F32Vec::LEN)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let s = D::F32Vec::load(d, vec);
+        for s in samples {
             let a = s.abs();
             // a + a * a
             let x = a.mul_add(a, a);
-            let y = eval_rational_poly_simd(d, x, PQ_EOTF_P, PQ_EOTF_Q);
-            (y * y_mult).copysign(s).store(vec);
+            let y = eval_rational_poly(x, PQ_EOTF_P, PQ_EOTF_Q);
+            *s = (y * y_mult).copysign(*s);
         }
     }
 
@@ -718,15 +705,13 @@ mod test {
             let intensity_target = u.int_in_range(9900..=10100)? as f32;
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
-            let xsize = samples.len();
 
             pq_to_linear(intensity_target, &mut samples);
-            pq_to_linear_simd(
-                jxl_simd::ScalarDescriptor::new().unwrap(),
-                intensity_target,
-                xsize,
-                &mut simd,
-            );
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            let y_mult = jxl_simd::F32SimdVec::splat(d, 10000.0 / intensity_target);
+            for s in &mut simd {
+                *s = pq_to_linear_simd_vec(d, y_mult, *s);
+            }
             assert_close!(all, &samples, &simd, 2e-5);
             Ok(())
         });

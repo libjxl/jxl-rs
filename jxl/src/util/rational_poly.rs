@@ -9,6 +9,7 @@ use jxl_simd::{F32SimdVec, SimdDescriptor};
 ///
 /// # Panics
 /// Panics if either `P` or `Q` is zero.
+#[cfg(test)]
 #[inline(always)]
 pub fn eval_rational_poly<const P: usize, const Q: usize>(x: f32, p: [f32; P], q: [f32; Q]) -> f32 {
     let yp = p.into_iter().rev().reduce(|yp, p| yp * x + p).unwrap();
