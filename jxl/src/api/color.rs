@@ -10,8 +10,7 @@ use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, simd_function};
 
 use crate::bit_reader::BitReader;
 use crate::color::tf::{
-    hlg_system_gamma, hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear_precise,
-    pq_to_linear_simd_vec,
+    hlg_to_scene, linear_to_pq_simd_vec, pq_to_linear_precise, pq_to_linear_simd_vec,
 };
 use crate::error::{Error, Result};
 pub use crate::headers::color_encoding::RenderingIntent;
@@ -1818,12 +1817,12 @@ simd_function!(
         let mut eotf_lut: [f32; HDR_LUT_DIM] =
             std::array::from_fn(|i| i as f32 / (HDR_LUT_DIM - 1) as f32);
 
-        // Tone map (BT.2408 10000 -> 250 nits for PQ, 80-nit OOTF for HLG)
+        // Tone map as libjxl (BT.2408 10000 -> 250 nits for PQ, HLG OOTF from 300 to 80 nits)
         match transfer_function {
             JxlTransferFunction::PQ => {
                 pq_to_linear_precise(10000.0, &mut eotf_lut);
-                // PQ(250 nits) = 0.5991247
-                const MAX_LUM: f32 = 0.599_124_7;
+                // PQ(250 nits)
+                const MAX_LUM: f32 = 0.602_559_15;
                 const KS: f32 = 1.5 * MAX_LUM - 0.5;
                 // BT.2408's spline is MAX_LUM - SPLINE_K (1 - q)^3, as KS = 1.5 MAX_LUM - 0.5.
                 const SPLINE_K: f32 = 4.0 / (27.0 * (1.0 - MAX_LUM) * (1.0 - MAX_LUM));
@@ -1849,7 +1848,7 @@ simd_function!(
             }
             JxlTransferFunction::HLG => {
                 hlg_to_scene(&mut eotf_lut);
-                let hlg_exp = D::F32Vec::splat(d, hlg_system_gamma(80.0) - 1.0);
+                let hlg_exp = D::F32Vec::splat(d, 1.111f32.powf((80.0f32 / 300.0).log2()) - 1.0);
                 append_hdr_clut(d, &eotf_lut, luminances, to_xyzd50, tags, {
                     #[inline(always)]
                     |y| fast_powf_simd(d, y, hlg_exp)
@@ -2130,12 +2129,12 @@ mod test {
             assert!(clut.iter().zip(&scalar).all(|(a, b)| a.abs_diff(*b) <= 1));
             clut
         });
-        // Grays 1 and 12, white and yellow, and their PQ and HLG Lab from an f64 reference.
+        // Grays 1 and 11, white and violet, and their PQ and HLG Lab from an f64 reference.
         for ([r, g, b], pq_lab, hlg_lab) in [
             ([1, 1, 1], [1, 128, 128], [10, 128, 128]),
-            ([12, 12, 12], [239, 128, 128], [165, 128, 128]),
-            ([16, 16, 16], [252, 128, 128], [255, 128, 128]),
-            ([16, 16, 0], [252, 118, 186], [251, 115, 218]),
+            ([11, 11, 11], [229, 128, 128], [148, 128, 128]),
+            ([16, 16, 16], [255, 128, 128], [255, 128, 128]),
+            ([10, 0, 16], [125, 167, 42], [104, 201, 28]),
         ] {
             let i = 3 * ((r * 17 + g) * 17 + b);
             assert_eq!(pq[i..i + 3], pq_lab);
