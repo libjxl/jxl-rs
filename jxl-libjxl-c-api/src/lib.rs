@@ -5,6 +5,13 @@
 
 #![allow(non_camel_case_types)]
 
+mod conversions;
+mod decode;
+mod parallel_runner;
+mod pixel_buffer;
+mod state_machine;
 mod types;
 
+pub use decode::*;
+pub use state_machine::JxlDecoder;
 pub use types::*;
