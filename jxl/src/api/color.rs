@@ -1935,16 +1935,17 @@ fn append_hdr_clut<D: SimdDescriptor>(
         let xyz = rgb.map(|[r, g, b]| {
             to_xyzd50.map(|[m_r, m_g, m_b]| b.mul_add(m_b, g.mul_add(m_g, r * m_r)))
         });
+        let delta3 = D::F32Vec::splat(d, DELTA * DELTA * DELTA);
         let f = xyz.map(|xyz| {
             xyz.map(|v| {
-                v.gt(D::F32Vec::splat(d, DELTA * DELTA * DELTA))
-                    .if_then_else_f32(
-                        fast_cbrtf_simd(d, v),
-                        v.mul_add(
-                            D::F32Vec::splat(d, 1.0 / (3.0 * DELTA * DELTA)),
-                            D::F32Vec::splat(d, 4.0 / 29.0),
-                        ),
-                    )
+                v.gt(delta3).if_then_else_f32(
+                    // Clamped also where unused: XYZ <= 0 would go through subnormals.
+                    fast_cbrtf_simd(d, v.max(delta3)),
+                    v.mul_add(
+                        D::F32Vec::splat(d, 1.0 / (3.0 * DELTA * DELTA)),
+                        D::F32Vec::splat(d, 4.0 / 29.0),
+                    ),
+                )
             })
         });
 
