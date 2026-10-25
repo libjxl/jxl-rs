@@ -1825,13 +1825,12 @@ simd_function!(
                 // PQ(250 nits) = 0.5991247
                 const MAX_LUM: f32 = 0.599_124_7;
                 const KS: f32 = 1.5 * MAX_LUM - 0.5;
+                // BT.2408's spline is MAX_LUM - SPLINE_K (1 - q)^3, as KS = 1.5 MAX_LUM - 0.5.
+                const SPLINE_K: f32 = 4.0 / (27.0 * (1.0 - MAX_LUM) * (1.0 - MAX_LUM));
                 let zero = D::F32Vec::zero(d);
                 let one = D::F32Vec::splat(d, 1.0);
-                let two = D::F32Vec::splat(d, 2.0);
-                let three = D::F32Vec::splat(d, 3.0);
                 let ks = D::F32Vec::splat(d, KS);
-                let one_minus_ks = D::F32Vec::splat(d, 1.0 - KS);
-                let inv_one_minus_ks = D::F32Vec::splat(d, 1.0 / (1.0 - KS));
+                let spline_k = D::F32Vec::splat(d, SPLINE_K);
                 let max_lum = D::F32Vec::splat(d, MAX_LUM);
                 let scale = D::F32Vec::splat(d, 10000.0 / 250.0);
                 append_hdr_clut(d, &eotf_lut, luminances, to_xyzd50, tags, {
@@ -1839,12 +1838,8 @@ simd_function!(
                     |y| {
                         // q only matters above KS, far above PQ(1e-4): no small-input polynomial.
                         let q = linear_to_pq_simd_vec(d, one, zero, y);
-                        let t = (q - ks) * inv_one_minus_ks;
-                        let t2 = t * t;
-                        let t3 = t2 * t;
-                        let spline = (two * t3 - three * t2 + one) * ks
-                            + (t3 - two * t2 + t) * one_minus_ks
-                            + (three * t2 - two * t3) * max_lum;
+                        let w = one - q;
+                        let spline = (w * w * w).neg_mul_add(spline_k, max_lum);
                         // The spline rises from KS to MAX_LUM, so lin is within (0, 1).
                         let lin = pq_to_linear_simd_vec(d, scale, spline);
                         // The curve is the identity below the knee.
