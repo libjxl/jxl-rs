@@ -89,6 +89,25 @@ impl JxlDecoder {
         self.codestream_parser.reset();
     }
 
+    /// Updates the decoder options.
+    ///
+    /// Should only be called before decoding starts (or after [`Self::reset`]).
+    pub fn set_options(&mut self, options: JxlDecoderOptions) {
+        self.box_parser
+            .set_aux_boxes(options.request_aux_boxes.iter().copied());
+        self.options = options;
+    }
+
+    /// Skips the next `count` visible frames.
+    ///
+    /// If the decoder is currently in the middle of a visible frame (after
+    /// [`Event::FrameHeader`] and before [`Event::FrameComplete`]), skipping starts from the
+    /// following visible frame. Calling this multiple times accumulates the number of frames to
+    /// skip.
+    pub fn skip_frames(&mut self, count: usize) {
+        self.codestream_parser.skip_frames(count);
+    }
+
     #[cfg(test)]
     pub(crate) fn file_header(&self) -> Option<&crate::headers::FileHeader> {
         if self.codestream_parser.image_info.is_complete() {

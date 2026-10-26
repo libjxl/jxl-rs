@@ -183,6 +183,10 @@ impl BoxParser {
         }
     }
 
+    pub(super) fn set_aux_boxes(&mut self, box_types: impl IntoIterator<Item = JxlAuxBoxType>) {
+        self.aux.boxes_to_extract = box_types.into_iter().collect();
+    }
+
     fn start_aux_box(&mut self, box_type: JxlAuxBoxType, brotli: bool, content_len: Option<u64>) {
         let box_idx = self.aux.next_box_idx;
         self.aux.next_box_idx += 1;
