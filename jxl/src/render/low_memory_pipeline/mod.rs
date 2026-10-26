@@ -122,6 +122,7 @@ pub struct LowMemoryRenderPipeline {
     // For every stage, the downsampling level of *any* channel that the stage uses at that point.
     // Note that this must be equal across all the used channels.
     downsampling_for_stage: Vec<(usize, usize)>,
+    downsample_align: (usize, usize),
     // Additional virtual-row delay relative to the border-based schedule.
     stage_y_delays: Vec<usize>,
     max_stage_y_delay: usize,
@@ -210,14 +211,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         }
         border_pixels_per_stage.reverse();
 
-        let has_downsampling = shared
-            .stages
-            .iter()
-            .any(|s| s.shift().0 < 0 || s.shift().1 < 0);
-        if !has_downsampling {
-            assert!(border_pixels_per_stage[0].0 <= MAX_BORDER);
-        }
-
         let downsampling_for_stage: Vec<_> = shared
             .stages
             .iter()
@@ -239,7 +232,33 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             })
             .collect();
 
+        let mut downsample_align = shared.stages.iter().zip(&downsampling_for_stage).fold(
+            (0, 0),
+            |acc, (s, &(dx, dy))| {
+                let (sx, sy) = s.shift();
+                let x = if sx < 0 { dx + (-sx) as usize } else { 0 };
+                let y = if sy < 0 { dy + (-sy) as usize } else { 0 };
+                (acc.0.max(x), acc.1.max(y))
+            },
+        );
+
+        let has_downsampling = downsample_align.0 > 0 || downsample_align.1 > 0;
+        if !has_downsampling {
+            assert!(border_pixels_per_stage[0].0 <= MAX_BORDER);
+        }
+
         if has_downsampling {
+            downsample_align = shared.channel_info[0]
+                .iter()
+                .zip(&shared.channel_is_used)
+                .filter_map(|(info, &used)| used.then_some(info))
+                .fold(downsample_align, |acc, info| {
+                    (
+                        acc.0.max(info.downsample.0 as usize),
+                        acc.1.max(info.downsample.1 as usize),
+                    )
+                });
+
             // RowBuffer currently reserves one cache line to the left of x=0.
             // Back-propagating a filter through a 64x reduction can exceed it.
             let capacity = RowBuffer::x0_byte_offset();
@@ -262,10 +281,9 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 return Err(crate::error::Error::PipelineDownsampleBorderTooLarge);
             }
         }
-        // Keep render_group's border-based schedule. Times here omit its common
-        // `num_extra_rows` offset: an input row y is filled at
-        // (y << level) - scaled_input_border. Delay a consumer only when that
-        // schedule would read a producer's row before it is complete.
+
+        // Compute the input row delay for each stage, to align the consumer of downsampled output
+        // row. The delay will increase after each downsampling stage.
         let input_ready: Vec<isize> = border_pixels
             .iter()
             .zip(&shared.channel_info[0])
@@ -348,26 +366,11 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 .max(border_pixels_per_stage[s].1 << downsampling_for_stage[s].1);
         }
 
-        // Align all scheduler sub-rect boundaries to every stage's pixel grid.
-        // The final image edge may be unaligned and is handled with ceil sizes.
-        if has_downsampling {
-            let max_dx = shared
-                .channel_info
-                .iter()
-                .flatten()
-                .map(|c| c.downsample.0)
-                .max()
-                .unwrap_or(0);
-            let max_dy = shared
-                .channel_info
-                .iter()
-                .flatten()
-                .map(|c| c.downsample.1)
-                .max()
-                .unwrap_or(0);
-            border_size.0 = border_size.0.next_multiple_of(1 << max_dx);
-            border_size.1 = border_size.1.next_multiple_of(1 << max_dy);
-        }
+        // Align required border to max downsampling level if there is a downsampling stage.
+        // Downsampling stages require input image area to be aligned, so that the stage can
+        // receive complete block of rows and accumulate output correctly.
+        border_size.0 = border_size.0.next_multiple_of(1 << downsample_align.0);
+        border_size.1 = border_size.1.next_multiple_of(1 << downsample_align.1);
 
         let mut row_buffer_configs = vec![];
         let mut initial_configs = vec![];
@@ -467,6 +470,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             input_border_pixels: border_pixels,
             shared,
             downsampling_for_stage,
+            downsample_align,
             stage_y_delays,
             max_stage_y_delay,
             sorted_buffer_indices,

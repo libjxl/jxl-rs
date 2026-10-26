@@ -78,14 +78,24 @@ fn boundary_points(
     is_last: bool,
     border: usize,
     input_size: usize,
+    alignment_shift: usize,
 ) -> [usize; 4] {
+    let alignment = 1usize << alignment_shift;
+    debug_assert!(border.is_multiple_of(alignment));
+    debug_assert!(origin.is_multiple_of(alignment));
+
     let p0 = if is_first {
         origin
     } else {
         origin.saturating_sub(border)
     };
     let p1 = (origin + border).min(end);
-    let p2 = end.saturating_sub(border).max(p1);
+    // `end` might not be aligned.
+    let p2 = end
+        .saturating_sub(border)
+        .next_multiple_of(alignment)
+        .min(end)
+        .max(p1);
     let p3 = if is_last {
         end
     } else {
@@ -94,12 +104,14 @@ fn boundary_points(
     [p0, p1, p2, p3]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ready_image_area(
     group_rect: Rect,
     group_position: (usize, usize),
     group_count: (usize, usize),
     input_size: (usize, usize),
     border_size: (usize, usize),
+    downsample_align: (usize, usize),
     xrange: Range<u8>,
     yrange: Range<u8>,
 ) -> Option<Rect> {
@@ -111,6 +123,7 @@ fn ready_image_area(
         gx + 1 == group_count.0,
         border_size.0,
         input_size.0,
+        downsample_align.0,
     );
     let ys = boundary_points(
         group_rect.origin.1,
@@ -119,6 +132,7 @@ fn ready_image_area(
         gy + 1 == group_count.1,
         border_size.1,
         input_size.1,
+        downsample_align.1,
     );
 
     let x0 = xs[xrange.start as usize];
@@ -241,6 +255,7 @@ impl LowMemoryRenderPipeline {
                 self.shared.group_count,
                 self.shared.input_size,
                 self.border_size,
+                self.downsample_align,
                 xrange,
                 yrange,
             ) else {
@@ -330,6 +345,7 @@ mod tests {
             (2, 2),
             (520, 520),
             (18, 18),
+            (0, 0),
             0..1,
             0..1,
         );
@@ -355,6 +371,7 @@ mod tests {
             (3, 2),
             (513, 321),
             (3, 3),
+            (0, 0),
             1..3,
             0..2,
         );
