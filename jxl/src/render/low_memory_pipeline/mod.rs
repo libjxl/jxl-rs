@@ -59,6 +59,12 @@ impl RowBufferConfig {
     }
 }
 
+struct StageRowSchedule {
+    lead: usize,
+    // Additional virtual-row delay relative to the border-based schedule.
+    delay: usize,
+}
+
 struct LowMemoryRenderPipelinePerThread {
     row_buffers: Vec<Vec<RowBuffer>>,
     save_scratch: Option<[RowBuffer; 4]>,
@@ -122,8 +128,7 @@ pub struct LowMemoryRenderPipeline {
     // Note that this must be equal across all the used channels.
     downsampling_for_stage: Vec<(usize, usize)>,
     downsample_align: (usize, usize),
-    // Additional virtual-row delay relative to the border-based schedule.
-    stage_y_delays: Vec<usize>,
+    stage_row_schedules: Vec<StageRowSchedule>,
     max_stage_y_delay: usize,
     // Sorted indices to call get_distinct_indices.
     sorted_buffer_indices: Vec<Vec<(usize, usize, usize)>>,
@@ -196,15 +201,20 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         let mut border_pixels_per_stage = vec![];
         for s in shared.stages.iter().rev() {
             let mut stage_max = (0, 0);
+            for (c, bp) in border_pixels.iter().enumerate() {
+                if s.uses_channel(c) {
+                    stage_max.0 = stage_max.0.max(bp.0);
+                    stage_max.1 = stage_max.1.max(bp.1);
+                }
+            }
             for (c, bp) in border_pixels.iter_mut().enumerate() {
                 if !s.uses_channel(c) {
                     continue;
                 }
-                stage_max.0 = stage_max.0.max(bp.0);
-                stage_max.1 = stage_max.1.max(bp.1);
-
-                bp.0 = super::internal::scale_size(bp.0, -s.shift().0) + s.border().0 as usize;
-                bp.1 = super::internal::scale_size(bp.1, -s.shift().1) + s.border().1 as usize;
+                bp.0 =
+                    super::internal::scale_size(stage_max.0, -s.shift().0) + s.border().0 as usize;
+                bp.1 =
+                    super::internal::scale_size(stage_max.1, -s.shift().1) + s.border().1 as usize;
             }
             border_pixels_per_stage.push(stage_max);
         }
@@ -282,41 +292,39 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         }
 
         // Compute the input row delay for each stage, to align the consumer of downsampled output
-        // row. The delay will increase after each downsampling stage.
-        let input_ready: Vec<isize> = border_pixels
-            .iter()
-            .zip(&shared.channel_info[0])
-            .map(|(border, info)| -((border.1 << info.downsample.1) as isize))
-            .collect();
-        let mut ready = input_ready.clone();
-        let mut stage_y_delays = Vec::new();
-        let mut stage_read_times = Vec::new();
-        let mut stage_ready_times = Vec::new();
+        // row.
+        let mut channel_delays = vec![0usize; nc];
+        let mut stage_row_schedules = Vec::new();
+        let mut stage_output_delays = Vec::new();
         for (i, stage) in shared.stages.iter().enumerate() {
             let dy = downsampling_for_stage[i].1;
             let output_dy = (dy as isize - stage.shift().1 as isize) as usize;
-            let scaled_border = border_pixels_per_stage[i].1 << dy.max(output_dy);
-            let scheduled = -(scaled_border as isize);
-            let required = (0..nc)
+
+            // Align all input channels, and add delay introduced by the downsample stage.
+            let max_input_delay = (0..nc)
                 .filter(|&c| stage.uses_channel(c))
-                .map(|c| ready[c])
+                .map(|c| channel_delays[c])
                 .max()
-                .unwrap_or(scheduled)
-                + ((stage.border().1 as usize) << dy) as isize;
-            let delay = (required - scheduled).max(0) as usize;
-            let read_time = scheduled + delay as isize;
-            let completion = (1usize << output_dy).saturating_sub(1 << dy);
-            let ready_time = read_time + completion as isize;
-            for (c, r) in ready.iter_mut().enumerate() {
+                .unwrap_or(0);
+            let downsample_delay = (1usize << output_dy).saturating_sub(1 << dy);
+            let output_delay = max_input_delay + downsample_delay;
+            for (c, channel_delay) in channel_delays.iter_mut().enumerate() {
                 if stage.uses_channel(c) {
-                    *r = ready_time;
+                    *channel_delay = output_delay;
                 }
             }
-            stage_y_delays.push(delay);
-            stage_read_times.push(read_time);
-            stage_ready_times.push(ready_time);
+
+            stage_row_schedules.push(StageRowSchedule {
+                lead: border_pixels_per_stage[i].1 << output_dy,
+                delay: max_input_delay,
+            });
+            stage_output_delays.push(output_delay);
         }
-        let max_stage_y_delay = stage_y_delays.iter().copied().max().unwrap_or(0);
+        let max_stage_y_delay = stage_row_schedules
+            .iter()
+            .map(|s| s.delay)
+            .max()
+            .unwrap_or(0);
 
         let default_channels: Vec<usize> = (0..nc).collect();
         for (s, ibi) in stage_input_buffer_index.iter_mut().enumerate() {
@@ -356,15 +364,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 .1
                 .max(border_pixels[c].1 << shared.channel_info[0][c].downsample.1);
         }
-        for s in 0..shared.stages.len() {
-            border_size.0 = border_size
-                .0
-                .max(border_pixels_per_stage[s].0 << downsampling_for_stage[s].0);
-            border_size.1 = border_size
-                .1
-                .max(border_pixels_per_stage[s].1 << downsampling_for_stage[s].1);
-        }
-
         // Align required border to max downsampling level if there is a downsampling stage.
         // Downsampling stages require input image area to be aligned, so that the stage can
         // receive complete block of rows and accumulate output correctly.
@@ -399,20 +398,27 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             row_buffer_configs.push(stage_configs);
         }
 
-        // Retain faster inputs until all of a consumer's channels are ready.
-        // Express the scheduling difference in this buffer's own row units,
-        // rather than allocating virtual rows at every resolution.
-        for (i, inputs) in stage_input_buffer_index.iter().enumerate() {
+        // Extend the required border of producers, if the consumer requires more.
+        // This happens for downsampling stages.
+        for (inputs, consumer) in stage_input_buffer_index.iter().zip(&stage_row_schedules) {
             for &(producer, channel) in inputs {
-                let level = next_border_and_cur_downsample[producer][channel].1.1;
-                let ready = if producer == 0 {
-                    input_ready[channel]
+                let shift = next_border_and_cur_downsample[producer][channel].1.1;
+
+                // These offsets are in virtual rows.
+                let (producer_lead, producer_delay) = if producer == 0 {
+                    (border_pixels[channel].1 << shift, 0)
                 } else {
-                    stage_ready_times[producer - 1]
+                    (
+                        stage_row_schedules[producer - 1].lead,
+                        stage_output_delays[producer - 1],
+                    )
                 };
-                let retention = ((stage_read_times[i] - ready).max(0) as usize).shrc(level);
+                let baseline_gap = producer_lead.saturating_sub(consumer.lead);
+                let extra_delay = consumer.delay.saturating_sub(producer_delay);
+
+                let buffer_retention = (baseline_gap + extra_delay).shrc(shift);
                 let config = &mut row_buffer_configs[producer][channel];
-                config.next_y_border = config.next_y_border.max(retention);
+                config.next_y_border = config.next_y_border.max(buffer_retention);
             }
         }
 
@@ -470,7 +476,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             shared,
             downsampling_for_stage,
             downsample_align,
-            stage_y_delays,
+            stage_row_schedules,
             max_stage_y_delay,
             sorted_buffer_indices,
         })

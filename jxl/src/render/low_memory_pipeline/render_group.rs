@@ -374,10 +374,10 @@ impl LowMemoryRenderPipeline {
                 let (dx, dy) = self.downsampling_for_stage[i];
                 // The logic below uses *virtual* y coordinates, so we need to convert the border
                 // amount appropriately.
-                let output_dy = (dy as isize - stage.shift().1 as isize) as usize;
-                let scaled_y_border = self.stage_output_border_pixels[i].1 << dy.max(output_dy);
+                let schedule = &self.stage_row_schedules[i];
+                let scaled_y_border = schedule.lead;
                 let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize
-                    - self.stage_y_delays[i] as isize;
+                    - schedule.delay as isize;
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
@@ -389,7 +389,7 @@ impl LowMemoryRenderPipeline {
                 if matches!(stage, Stage::Save(_)) {
                     // Save stages write to shared output buffers, so they must only
                     // process rows owned by this rect; keep ceil semantics for them.
-                    if stage_vy - (y0 as isize) < -(scaled_y_border as isize) {
+                    if stage_vy < y0 as isize || stage_vy >= image_y_end as isize {
                         continue;
                     }
                 } else if y < (y0 as isize - scaled_y_border as isize) >> dy {
