@@ -358,7 +358,7 @@ impl Frame {
                 info!("decoding splines");
                 let s = Splines::read(
                     br,
-                    self.header.width * self.header.height,
+                    (self.header.width as u64) * (self.header.height as u64),
                     &mut self.buffer_recycler.modular_scratch.get().lz77_window,
                 )?;
                 *self.splines.try_write().unwrap() = s;
@@ -416,12 +416,14 @@ impl Frame {
             }
 
             let tree = if br.read(1)? == 1 {
+                let channels =
+                    (self.color_channels + self.decoder_state.extra_channel_info().len()) as u64;
                 let size_limit = (1024
-                    + self.header.width as usize
-                        * self.header.height as usize
-                        * (self.color_channels + self.decoder_state.extra_channel_info().len())
+                    + (self.header.width as u64)
+                        .saturating_mul(self.header.height as u64)
+                        .saturating_mul(channels)
                         / 16)
-                    .min(1 << 22);
+                    .min(1 << 22) as usize;
                 Some(Tree::read(
                     br,
                     size_limit,

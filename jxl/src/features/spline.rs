@@ -781,7 +781,10 @@ impl Splines {
         }
 
         if total_estimated_area_reached
-            > (8 * image_xsize * image_ysize + (1u64 << 25)).min(1u64 << 30)
+            > 8u64
+                .saturating_mul(image_area)
+                .saturating_add(1u64 << 25)
+                .min(1u64 << 30)
         {
             warn!(
                 "Large total_estimated_area_reached, expect slower decoding:{}",
@@ -842,7 +845,7 @@ impl Splines {
     #[instrument(level = "debug", skip(br, lz77_scratch), ret, err)]
     pub fn read(
         br: &mut BitReader,
-        num_pixels: u32,
+        num_pixels: u64,
         lz77_scratch: &mut Vec<u32>,
     ) -> Result<Splines> {
         trace!(pos = br.total_bits_read());
@@ -851,8 +854,9 @@ impl Splines {
         let num_splines = splines_reader
             .read_unsigned(&splines_histograms, br, NUM_SPLINES_CONTEXT)
             .saturating_add(1);
-        let max_control_points =
-            MAX_NUM_CONTROL_POINTS.min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO);
+        let max_control_points = (MAX_NUM_CONTROL_POINTS as u64)
+            .min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO as u64)
+            as u32;
         if num_splines > max_control_points {
             return Err(Error::SplinesTooMany(num_splines, max_control_points));
         }
