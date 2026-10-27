@@ -279,6 +279,7 @@ impl SqueezeInfo {
             in_res: borrow_channel(buffers, in_res),
             in_next_border: in_next_avg.map(|x| borrow_border(buffers, x)),
             out_prev_border: out_prev.map(|x| borrow_border(buffers, x)),
+            vertical,
         }
     }
 
@@ -362,6 +363,7 @@ struct SqueezeInputs<'a> {
     in_res: RwLockReadGuard<'a, Option<ModularChannel>>,
     in_next_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
     out_prev_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
+    vertical: bool,
 }
 
 impl<'a> SqueezeInputs<'a> {
@@ -383,11 +385,31 @@ impl<'a> SqueezeInputs<'a> {
             .rect(rect.to_byte_rect_sz(storage.sample_size()))
     }
 
-    fn in_next_border(&self) -> Option<RawImageRect<'_>> {
+    fn in_next_border(&self, rect: Rect, storage: ModularStorage) -> Option<RawImageRect<'_>> {
         self.in_next_border
             .as_ref()
             .and_then(|g| g.as_ref())
-            .map(|img| img.as_rect())
+            .map(|img| {
+                // The border is indexed by the average channel cell's
+                // coordinates; when the average channel has a coarser grid
+                // than the output, the used region starts at a non-zero
+                // offset within the cell. Re-slice the border so that it can
+                // be indexed by the used region's coordinates.
+                let sz = storage.sample_size();
+                let (w, h) = img.as_rect().byte_size();
+                let rect = if self.vertical {
+                    Rect {
+                        origin: (rect.origin.0, 0),
+                        size: (w / sz - rect.origin.0, h),
+                    }
+                } else {
+                    Rect {
+                        origin: (0, rect.origin.1),
+                        size: (w / sz, h - rect.origin.1),
+                    }
+                };
+                img.as_rect().rect(rect.to_byte_rect_sz(sz))
+            })
     }
 
     fn out_prev_border(&self) -> Option<RawImageRect<'_>> {
@@ -981,28 +1003,7 @@ impl TransformStepChunk {
                                 )?;
                             }
                             let inputs = info.borrow_inputs(buffers, vertical);
-                            // The in_next_avg border is indexed by the average
-                            // channel cell's coordinates; when the average
-                            // channel has a coarser grid than the output, the
-                            // used region starts at a non-zero offset within
-                            // the cell. Re-slice the border so that it can be
-                            // indexed by the used region's coordinates.
-                            let in_next = inputs.in_next_border().map(|r| {
-                                let sz = storage.sample_size();
-                                let (w, h) = r.byte_size();
-                                let rect = if vertical {
-                                    Rect {
-                                        origin: (avg_rect.origin.0, 0),
-                                        size: (w / sz - avg_rect.origin.0, h),
-                                    }
-                                } else {
-                                    Rect {
-                                        origin: (0, avg_rect.origin.1),
-                                        size: (w / sz, h - avg_rect.origin.1),
-                                    }
-                                };
-                                r.rect(rect.to_byte_rect_sz(sz))
-                            });
+                            let in_next = inputs.in_next_border(avg_rect, storage);
                             let out_prev = inputs.out_prev_border();
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(
