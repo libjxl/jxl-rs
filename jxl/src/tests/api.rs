@@ -72,6 +72,37 @@ fn test_set_pixel_format() {
     };
     decoder.set_pixel_format(new_format.clone()).unwrap();
     assert_eq!(decoder.current_pixel_format().unwrap(), &new_format);
+
+    let endianness = crate::api::Endianness::native();
+    for invalid in [
+        JxlDataFormat::U8 { bit_depth: 0 },
+        JxlDataFormat::U8 { bit_depth: 9 },
+        JxlDataFormat::U16 {
+            endianness,
+            bit_depth: 0,
+        },
+        JxlDataFormat::U16 {
+            endianness,
+            bit_depth: 17,
+        },
+    ] {
+        assert!(matches!(
+            decoder.set_pixel_format(JxlPixelFormat {
+                color_type: JxlColorType::Rgb,
+                color_data_format: Some(invalid),
+                extra_channel_format: vec![],
+            }),
+            Err(Error::ApiUsageError(_))
+        ));
+        assert!(matches!(
+            decoder.set_pixel_format(JxlPixelFormat {
+                color_type: JxlColorType::Rgb,
+                color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+                extra_channel_format: vec![Some(invalid)],
+            }),
+            Err(Error::ApiUsageError(_))
+        ));
+    }
 }
 
 #[test]
