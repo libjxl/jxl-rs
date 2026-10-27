@@ -348,14 +348,14 @@ pub fn meta_apply_transforms(
     Ok((buffer_info, transform_steps))
 }
 
-#[instrument(level = "trace", skip_all, ret)]
+#[instrument(level = "trace", skip_all, ret, err)]
 pub fn make_grids(
     frame_header: &FrameHeader,
     transform_steps: Vec<TransformStep>,
     section_buffer_indices: &[Vec<usize>],
     buffer_info: &mut Vec<ModularBufferInfo>,
     color_channels: usize,
-) -> Vec<TransformStepChunk> {
+) -> Result<Vec<TransformStepChunk>> {
     // Initialize grid sizes, starting from coded channels.
     for i in section_buffer_indices[1].iter() {
         buffer_info[*i].grid_kind = ModularGridKind::Lf;
@@ -412,6 +412,17 @@ pub fn make_grids(
             }
             TransformStep::Output { .. } => {
                 unreachable!()
+            }
+        }
+    }
+
+    for buf in buffer_info.iter() {
+        if buf.grid_kind != ModularGridKind::None && buf.info.size.0 > 0 && buf.info.size.1 > 0 {
+            let dim = buf
+                .grid_kind
+                .grid_dim(frame_header, buf.info.shift.unwrap());
+            if dim.0 == 0 || dim.1 == 0 {
+                return Err(Error::TooManySqueezes);
             }
         }
     }
@@ -779,5 +790,5 @@ pub fn make_grids(
 
     trace!(?grid_transform_steps, ?buffer_info);
 
-    grid_transform_steps
+    Ok(grid_transform_steps)
 }
