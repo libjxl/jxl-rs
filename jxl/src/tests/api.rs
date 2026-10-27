@@ -675,12 +675,13 @@ fn flush_truncated_squeeze_missing_avg() {
 }
 
 /// Regression test: flushing a truncated image with tiled channels whose tile
-/// dimension is <= 1 used to panic during smooth-squeeze upsampling.
+/// dimension is 0 used to panic during smooth-squeeze upsampling; non-empty
+/// channels with zero-sized grid tiles are now rejected.
 #[test]
 fn flush_truncated_squeeze_small_tiles() {
     let data = include_bytes!("../../tests/testdata/truncated_squeeze_flush_small_tiles.jxl");
     for chunk_size in [64, 256, usize::MAX] {
-        decode::<f32>(
+        let res = decode::<f32>(
             data,
             DecodeParams {
                 chunk_size,
@@ -688,8 +689,8 @@ fn flush_truncated_squeeze_small_tiles() {
                 allow_partial: true,
                 ..Default::default()
             },
-        )
-        .unwrap();
+        );
+        assert!(matches!(res, Err(Error::TooManySqueezes)), "{res:?}");
     }
 }
 
