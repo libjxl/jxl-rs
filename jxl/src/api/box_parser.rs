@@ -68,6 +68,7 @@ pub struct JxlAuxBox {
     ty: JxlAuxBoxType,
     data: Vec<u8>,
     brotli: bool,
+    has_xlbox: bool,
 }
 
 impl std::fmt::Debug for JxlAuxBox {
@@ -80,6 +81,7 @@ impl std::fmt::Debug for JxlAuxBox {
                 &format_args!("({len} byte{})", if len == 1 { "" } else { "s" }),
             )
             .field("brotli", &self.brotli)
+            .field("has_xlbox", &self.has_xlbox)
             .finish()
     }
 }
@@ -97,6 +99,11 @@ impl JxlAuxBox {
     /// Returns if the raw data is Brotli-compressed.
     pub fn is_compressed(&self) -> bool {
         self.brotli
+    }
+
+    /// Returns whether the box header used the 64-bit extended length field (`XLBox`).
+    pub fn has_xlbox(&self) -> bool {
+        self.has_xlbox
     }
 
     #[cfg(feature = "brotli")]
@@ -187,7 +194,13 @@ impl BoxParser {
         self.aux.boxes_to_extract = box_types.into_iter().collect();
     }
 
-    fn start_aux_box(&mut self, box_type: JxlAuxBoxType, brotli: bool, content_len: Option<u64>) {
+    fn start_aux_box(
+        &mut self,
+        box_type: JxlAuxBoxType,
+        brotli: bool,
+        has_xlbox: bool,
+        content_len: Option<u64>,
+    ) {
         let box_idx = self.aux.next_box_idx;
         self.aux.next_box_idx += 1;
         let is_new = box_idx >= self.aux.seen_box_count;
@@ -197,6 +210,7 @@ impl BoxParser {
             self.aux.box_buffer = Some(JxlAuxBox {
                 ty: box_type,
                 brotli,
+                has_xlbox,
                 data: Vec::new(),
             });
             self.state = ParseState::Aux(content_len);
@@ -665,10 +679,8 @@ impl BoxParser {
             res => res?,
         }
 
-        let min_len = match &self.local_buffer[..] {
-            [0, 0, 0, 1, ..] => 16,
-            _ => 8,
-        };
+        let has_xlbox = matches!(&self.local_buffer[..], [0, 0, 0, 1, ..]);
+        let min_len = if has_xlbox { 16 } else { 8 };
 
         let ty: [_; 4] = self.local_buffer[4..8].try_into().unwrap();
         if &ty != b"ftyp" && self.version.is_none() {
@@ -785,7 +797,7 @@ impl BoxParser {
                 let inner_type = JxlAuxBoxType(inner_type.try_into().unwrap());
                 self.local_buffer.consume(4);
 
-                self.start_aux_box(inner_type, true, content_len);
+                self.start_aux_box(inner_type, true, has_xlbox, content_len);
             }
             b"jxll" => {
                 if self.version.is_none() || self.latest_codestream_box != CodestreamBoxType::None {
@@ -808,7 +820,7 @@ impl BoxParser {
             }
             code => {
                 let ty = JxlAuxBoxType(*code);
-                self.start_aux_box(ty, false, content_len);
+                self.start_aux_box(ty, false, has_xlbox, content_len);
             }
         }
         Ok(())
