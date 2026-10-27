@@ -376,12 +376,13 @@ pub fn make_grids(
             TransformStep::Rct {
                 buf_in, buf_out, ..
             } => {
-                let grid_in = buffer_info[buf_in[0]].grid_kind;
-                for i in 0..3 {
-                    assert_eq!(grid_in, buffer_info[buf_in[i]].grid_kind);
-                }
-                for i in 0..3 {
-                    buffer_info[buf_out[i]].grid_kind = grid_in;
+                let grid_out = buf_in
+                    .iter()
+                    .map(|&b| buffer_info[b].grid_kind)
+                    .max()
+                    .unwrap();
+                for &b in buf_out {
+                    buffer_info[b].grid_kind = grid_out;
                 }
             }
             TransformStep::Palette {
