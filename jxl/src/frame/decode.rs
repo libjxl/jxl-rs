@@ -216,20 +216,23 @@ impl Frame {
             && image_metadata.color_encoding.color_space == ColorSpace::Gray;
         let color_channels = if is_gray { 1 } else { 3 };
         let size_blocks = frame_header.size_blocks();
-        let lf_image = if frame_header.encoding == Encoding::VarDCT {
-            if frame_header.has_lf_frame() {
-                if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
-                    return Err(Error::NoLfFrame(frame_header.lf_level));
-                } else {
-                    None
-                }
-            } else {
-                Some([
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
-                ])
+        let lf_image = if frame_header.has_lf_frame() {
+            if !decoder_state.lf_frames[frame_header.lf_level as usize]
+                .as_ref()
+                .is_some_and(|lf| {
+                    lf.iter()
+                        .all(|ch| ch.size().0 >= size_blocks.0 && ch.size().1 >= size_blocks.1)
+                })
+            {
+                return Err(Error::NoLfFrame(frame_header.lf_level));
             }
+            None
+        } else if frame_header.encoding == Encoding::VarDCT {
+            Some([
+                Image::new(size_blocks)?,
+                Image::new(size_blocks)?,
+                Image::new(size_blocks)?,
+            ])
         } else {
             None
         };
