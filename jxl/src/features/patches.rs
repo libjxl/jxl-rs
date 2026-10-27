@@ -370,6 +370,16 @@ impl PatchesDictionary {
         mult.saturating_mul(num_pixels).max(1 << 20)
     }
 
+    fn apply_patch_delta(axis: &str, prev: usize, delta: i32, limit: usize) -> Result<usize> {
+        prev.checked_add_signed(delta as isize).ok_or_else(|| {
+            if delta < 0 {
+                Error::PatchesInvalidDelta(axis.to_string(), prev, delta)
+            } else {
+                Error::PatchesOutOfBounds(axis.to_string(), prev, delta as usize, limit)
+            }
+        })
+    }
+
     #[instrument(level = "debug", skip(br, lz77_scratch), ret, err)]
     pub(crate) fn read_internal(
         br: &mut BitReader,
@@ -429,18 +439,18 @@ impl PatchesDictionary {
                 br,
                 PatchContext::PatchReferencePosition as usize,
             ) as usize;
-            let ref_pos_xsize = patches_reader.read_unsigned(
+            let ref_pos_xsize = (patches_reader.read_unsigned(
                 &patches_histograms,
                 br,
                 PatchContext::PatchSize as usize,
-            ) as usize
-                + 1;
-            let ref_pos_ysize = patches_reader.read_unsigned(
+            ) as usize)
+                .saturating_add(1);
+            let ref_pos_ysize = (patches_reader.read_unsigned(
                 &patches_histograms,
                 br,
                 PatchContext::PatchSize as usize,
-            ) as usize
-                + 1;
+            ) as usize)
+                .saturating_add(1);
             let reference_frame = &reference_frames[reference];
             // TODO(firsching): make sure this check is correct in the presence of downsampled extra channels (also in libjxl).
             match reference_frame {
@@ -449,7 +459,10 @@ impl PatchesDictionary {
                     if !reference.saved_before_color_transform {
                         return Err(Error::PatchesPostColorTransform());
                     }
-                    if x0 + ref_pos_xsize > reference.frame[0].size().0 {
+                    if x0
+                        .checked_add(ref_pos_xsize)
+                        .is_none_or(|end| end > reference.frame[0].size().0)
+                    {
                         return Err(Error::PatchesInvalidPosition(
                             "x".to_string(),
                             x0,
@@ -457,7 +470,10 @@ impl PatchesDictionary {
                             reference.frame[0].size().0,
                         ));
                     }
-                    if y0 + ref_pos_ysize > reference.frame[0].size().1 {
+                    if y0
+                        .checked_add(ref_pos_ysize)
+                        .is_none_or(|end| end > reference.frame[0].size().1)
+                    {
                         return Err(Error::PatchesInvalidPosition(
                             "y".to_string(),
                             y0,
@@ -468,12 +484,12 @@ impl PatchesDictionary {
                 }
             }
 
-            let id_count = patches_reader.read_unsigned(
+            let id_count = (patches_reader.read_unsigned(
                 &patches_histograms,
                 br,
                 PatchContext::PatchCount as usize,
-            ) as usize
-                + 1;
+            ) as usize)
+                .saturating_add(1);
             if id_count > max_patches + 1 {
                 return Err(Error::PatchesTooMany(
                     "patches".to_string(),
@@ -538,36 +554,27 @@ impl PatchesDictionary {
                     ) as usize;
                 } else {
                     // Read offsets and calculate new position
+                    let prev = positions.last().unwrap();
                     let delta_x = patches_reader.read_signed(
                         &patches_histograms,
                         br,
                         PatchContext::PatchOffset as usize,
                     );
-                    if delta_x < 0 && (-delta_x as usize) > positions.last().unwrap().x {
-                        return Err(Error::PatchesInvalidDelta(
-                            "x".to_string(),
-                            positions.last().unwrap().x,
-                            delta_x,
-                        ));
-                    }
-                    pos.x = (positions.last().unwrap().x as i32 + delta_x) as usize;
+                    pos.x = Self::apply_patch_delta("x", prev.x, delta_x, xsize)?;
 
                     let delta_y = patches_reader.read_signed(
                         &patches_histograms,
                         br,
                         PatchContext::PatchOffset as usize,
                     );
-                    if delta_y < 0 && (-delta_y as usize) > positions.last().unwrap().y {
-                        return Err(Error::PatchesInvalidDelta(
-                            "y".to_string(),
-                            positions.last().unwrap().y,
-                            delta_y,
-                        ));
-                    }
-                    pos.y = (positions.last().unwrap().y as i32 + delta_y) as usize;
+                    pos.y = Self::apply_patch_delta("y", prev.y, delta_y, ysize)?;
                 }
 
-                if pos.x + ref_pos_xsize > xsize {
+                if pos
+                    .x
+                    .checked_add(ref_pos_xsize)
+                    .is_none_or(|end| end > xsize)
+                {
                     return Err(Error::PatchesOutOfBounds(
                         "x".to_string(),
                         pos.x,
@@ -575,7 +582,11 @@ impl PatchesDictionary {
                         xsize,
                     ));
                 }
-                if pos.y + ref_pos_ysize > ysize {
+                if pos
+                    .y
+                    .checked_add(ref_pos_ysize)
+                    .is_none_or(|end| end > ysize)
+                {
                     return Err(Error::PatchesOutOfBounds(
                         "y".to_string(),
                         pos.y,
@@ -2107,6 +2118,26 @@ mod tests {
             assert_close!(all, &g_data, &initial_data, MAX_ABS_DELTA);
             assert_close!(all, &b_data, &initial_data, MAX_ABS_DELTA);
             Ok(())
+        }
+
+        #[test]
+        fn test_apply_patch_delta_bounds() {
+            assert_eq!(
+                PatchesDictionary::apply_patch_delta("x", 10, -4, 16).unwrap(),
+                6
+            );
+            assert_eq!(
+                PatchesDictionary::apply_patch_delta("x", 10, 5, 16).unwrap(),
+                15
+            );
+            assert!(matches!(
+                PatchesDictionary::apply_patch_delta("x", 0, i32::MIN, 8),
+                Err(Error::PatchesInvalidDelta(_, 0, i32::MIN))
+            ));
+            assert!(matches!(
+                PatchesDictionary::apply_patch_delta("x", usize::MAX, 1, 8),
+                Err(Error::PatchesOutOfBounds(_, usize::MAX, 1, 8))
+            ));
         }
     }
 }
