@@ -225,13 +225,14 @@ impl SqueezeInfo {
             (gx > 0).then(|| (gx - 1, gy))
         };
         let mut avg_rect = buf_avg.get_grid_rect(frame_header, output_grid_kind, output_grid_pos);
+        let avg_tile_size = buf_avg.buffer_grid[in_grid].size;
         let next_avg_grid = if let Some(pos) = pos_next {
             let grid = buf_avg.get_grid_idx(output_grid_kind, pos);
             if grid == in_grid {
                 if avg_rect.size.0 > 0 && avg_rect.size.1 > 0 {
-                    if vertical {
+                    if vertical && avg_rect.origin.1 + avg_rect.size.1 < avg_tile_size.1 {
                         avg_rect.size.1 += 1;
-                    } else {
+                    } else if !vertical && avg_rect.origin.0 + avg_rect.size.0 < avg_tile_size.0 {
                         avg_rect.size.0 += 1;
                     }
                 }
