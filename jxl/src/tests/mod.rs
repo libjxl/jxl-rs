@@ -557,6 +557,10 @@ declare_test_file!(squeeze_alpha, "squeeze_alpha.jxl");
 declare_test_file!(squeeze_edge, "squeeze_edge.jxl");
 declare_test_file!(squeeze_empty_residual, "squeeze_empty_residual.jxl");
 declare_test_file!(
+    squeeze_partial_last_group,
+    "squeeze_2049x257_corner_patch.jxl"
+);
+declare_test_file!(
     stp2_520x260_d25_e6,
     "stp2_520x260_d25_e6.jxl",
     checkpoints: &[

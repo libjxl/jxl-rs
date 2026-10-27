@@ -981,7 +981,28 @@ impl TransformStepChunk {
                                 )?;
                             }
                             let inputs = info.borrow_inputs(buffers, vertical);
-                            let in_next = inputs.in_next_border();
+                            // The in_next_avg border is indexed by the average
+                            // channel cell's coordinates; when the average
+                            // channel has a coarser grid than the output, the
+                            // used region starts at a non-zero offset within
+                            // the cell. Re-slice the border so that it can be
+                            // indexed by the used region's coordinates.
+                            let in_next = inputs.in_next_border().map(|r| {
+                                let sz = storage.sample_size();
+                                let (w, h) = r.byte_size();
+                                let rect = if vertical {
+                                    Rect {
+                                        origin: (avg_rect.origin.0, 0),
+                                        size: (w / sz - avg_rect.origin.0, h),
+                                    }
+                                } else {
+                                    Rect {
+                                        origin: (0, avg_rect.origin.1),
+                                        size: (w / sz, h - avg_rect.origin.1),
+                                    }
+                                };
+                                r.rect(rect.to_byte_rect_sz(sz))
+                            });
                             let out_prev = inputs.out_prev_border();
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(

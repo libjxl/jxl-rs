@@ -1229,6 +1229,45 @@ fn test_squeeze_boundary_minimal() {
     }
 }
 
+/// Lossless squeeze over more than one group horizontally (2049 px) with a
+/// partial last group row (257 px): a 5x5 noise patch in the bottom-right
+/// corner of a flat grey image. Encoded by cjxl v0.12.0
+/// (`-d 0 -e 3 --responsive=1`); libjxl decodes it exactly.
+///
+/// Regression test: the in_next_avg squeeze border buffer is indexed by the
+/// average cell's coordinates, so an average channel on a coarser (LF) grid
+/// than the output channel used to read the border at the wrong offset.
+#[test]
+fn squeeze_partial_last_group_is_lossless() {
+    const PATCH: [u8; 75] = [
+        68, 32, 130, 60, 253, 230, 241, 194, 107, 48, 249, 14, 199, 221, 1, 228, 136, 117, 52, 162,
+        15, 11, 13, 4, 195, 110, 216, 14, 113, 224, 253, 119, 176, 118, 112, 235, 148, 11, 213, 51,
+        95, 151, 61, 170, 216, 97, 155, 145, 255, 201, 17, 245, 124, 206, 212, 88, 187, 191, 44,
+        224, 55, 83, 201, 189, 250, 15, 240, 22, 157, 201, 87, 86, 116, 6, 102,
+    ];
+    let data = std::fs::read("resources/test/squeeze_2049x257_corner_patch.jxl").unwrap();
+    let frames = decode::<f32>(&data, DecodeParams::default()).unwrap();
+    let img = &frames[0][0];
+    assert_eq!(img.size(), (2049 * 3, 257));
+    let mut wrong = 0;
+    for y in 0..257 {
+        let row = img.row(y);
+        for x in 0..2049 {
+            for c in 0..3 {
+                let want = if x >= 2044 && y >= 252 {
+                    PATCH[((y - 252) * 5 + (x - 2044)) * 3 + c]
+                } else {
+                    128
+                };
+                if (row[x * 3 + c] * 255.0).round() as u8 != want {
+                    wrong += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(wrong, 0, "{wrong} samples differ from the source");
+}
+
 /// Regression test for grid boundary bug with odd-width images (issue #728 variant).
 #[test]
 fn decode_test_strategic_solid_blue_grid_boundary() {
