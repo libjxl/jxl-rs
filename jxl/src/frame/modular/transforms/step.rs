@@ -796,7 +796,14 @@ impl TransformStepChunk {
                     with_buffers(buffers, buf_out, out_grid + gx, recycler, |_| Ok(()))?;
                 }
 
-                if out_size.0 != 0 {
+                let active_grid_xsize = (0..grid_xsize)
+                    .take_while(|&gx| {
+                        let sz = buffers[buf_out[0]].buffer_grid[out_grid + gx].size;
+                        sz.0 != 0 && sz.1 != 0
+                    })
+                    .count();
+
+                if active_grid_xsize != 0 {
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
 
                     let has_left =
@@ -834,7 +841,7 @@ impl TransformStepChunk {
                     let mut prev_aux_guards = vec![];
                     if has_top {
                         for i in buf_out {
-                            for gx in 0..grid_xsize {
+                            for gx in 0..active_grid_xsize {
                                 let grid = (grid_y - 1) * stride + grid_x + gx;
                                 top_guards.push(borrow_topbottom(buffers, (*i, grid)));
                             }
@@ -856,7 +863,7 @@ impl TransformStepChunk {
 
                     let mut guards = vec![];
                     for i in buf_out {
-                        for gx in 0..grid_xsize {
+                        for gx in 0..active_grid_xsize {
                             let grid = out_grid + gx;
                             let b = &buffers[*i].buffer_grid[grid];
                             guards.push(b.data.try_write().unwrap());
@@ -875,7 +882,7 @@ impl TransformStepChunk {
                         );
                     } else {
                         let mut in_bufs = vec![];
-                        for gx in 0..grid_xsize {
+                        for gx in 0..active_grid_xsize {
                             in_bufs.push(borrow_channel(buffers, (*buf_in, out_grid + gx)));
                         }
                         let in_buf_refs: Vec<&ModularChannel> =
@@ -902,7 +909,7 @@ impl TransformStepChunk {
                             num_deltas: *num_deltas,
                             predictor: *predictor,
                             wp_header,
-                            grid_xsize,
+                            grid_xsize: active_grid_xsize,
                             buf_left: left_refs.as_deref(),
                             buf_top: has_top.then_some(&top_refs[..]),
                             buf_topleft: topleft_refs.as_deref(),
