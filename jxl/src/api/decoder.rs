@@ -156,6 +156,14 @@ impl JxlDecoder {
                 "cannot set pixel format before BasicInfo",
             ));
         }
+        if !pixel_format
+            .color_data_format
+            .iter()
+            .chain(pixel_format.extra_channel_format.iter().flatten())
+            .all(|f| f.is_valid())
+        {
+            return Err(Error::ApiUsageError("invalid bit_depth for data format"));
+        }
         let frame_header_was_decoded = self
             .codestream_parser
             .frame_info
