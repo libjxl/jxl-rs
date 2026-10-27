@@ -1873,3 +1873,38 @@ fn test_decoder_reset() {
         Ok(())
     });
 }
+
+#[test]
+fn unbounded_box_order() {
+    let before = include_bytes!("../../tests/testdata/unbounded_box_before_codestream.jxl");
+    assert!(matches!(
+        decode::<f32>(before, Default::default()),
+        Err(Error::InvalidBox)
+    ));
+
+    let after = include_bytes!("../../tests/testdata/exif_trailing_infinite.jxl");
+    decode::<f32>(after, Default::default()).unwrap();
+}
+
+#[test]
+fn empty_jxlp() {
+    let expected = decode::<f32>(
+        include_bytes!("../../resources/test/basic.jxl"),
+        Default::default(),
+    )
+    .unwrap();
+
+    for (name, data) in [
+        (
+            "empty_jxlp",
+            &include_bytes!("../../tests/testdata/empty_jxlp.jxl")[..],
+        ),
+        (
+            "empty_ooo_jxlp",
+            &include_bytes!("../../tests/testdata/empty_ooo_jxlp.jxl")[..],
+        ),
+    ] {
+        let got = decode::<f32>(data, Default::default()).unwrap();
+        compare_frames(Path::new(name), 0, &expected[0], &got[0]);
+    }
+}
