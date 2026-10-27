@@ -746,27 +746,44 @@ impl TransformStepChunk {
                 perm,
             } => {
                 for i in 0..3 {
-                    assert_eq!(out_grid_kind, buffers[buf_in[i]].grid_kind);
                     assert_eq!(out_size, buffers[buf_in[i]].info.size);
-                    // Optimistically move the buffers to the output if possible.
-                    // If not, creates buffers in the output that are a copy of the input buffers.
-                    // This should be rare.
-                    let b_in = &buffers[buf_in[i]].buffer_grid[out_grid];
+                    let in_grid_kind = buffers[buf_in[i]].grid_kind;
+                    let in_grid = buffers[buf_in[i]].get_grid_idx(out_grid_kind, self.grid_pos);
+                    let b_in = &buffers[buf_in[i]].buffer_grid[in_grid];
                     let b_out = &buffers[buf_out[i]].buffer_grid[out_grid];
+                    let storage = buffers[buf_out[i]].storage;
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
-                        b_out.ensure_buffer(
-                            &buffers[buf_out[i]].info,
-                            buffers[buf_out[i]].storage,
-                            recycler,
-                            true,
-                        )?;
-                    } else {
+                        b_out.ensure_buffer(&buffers[buf_out[i]].info, storage, recycler, true)?;
+                    } else if in_grid_kind == out_grid_kind {
+                        // Optimistically move the buffers to the output if possible.
+                        // If not, creates buffers in the output that are a copy of the input buffers.
+                        // This should be rare.
                         *b_out.data.try_write().unwrap() =
                             Some(b_in.get_buffer(b_in.can_consume(is_final), recycler)?);
+                    } else {
+                        b_out.ensure_buffer(&buffers[buf_out[i]].info, storage, recycler, false)?;
+                        let rect = buffers[buf_in[i]].get_grid_rect(
+                            frame_header,
+                            out_grid_kind,
+                            self.grid_pos,
+                        );
+                        if rect.size.0 > 0 && rect.size.1 > 0 {
+                            let byte_rect = rect.to_byte_rect_sz(storage.sample_size());
+                            let in_guard = b_in.data.try_read().unwrap();
+                            let src = in_guard.as_ref().unwrap().data.as_rect().rect(byte_rect);
+                            let mut out_guard = b_out.data.try_write().unwrap();
+                            let dst = &mut out_guard.as_mut().unwrap().data;
+                            for y in 0..byte_rect.size.1 {
+                                dst.row_mut(y).copy_from_slice(src.row(y));
+                            }
+                        }
+                        b_in.mark_used(b_in.can_consume(is_final), recycler);
                     }
                 }
                 with_buffers(buffers, buf_out, out_grid, recycler, |mut bufs| {
-                    super::rct::do_rct_step(&mut bufs, buffers[buf_in[0]].storage, *op, *perm);
+                    if !bufs.is_empty() {
+                        super::rct::do_rct_step(&mut bufs, buffers[buf_in[0]].storage, *op, *perm);
+                    }
                     Ok(())
                 })?;
             }
@@ -1152,12 +1169,16 @@ impl TransformStepChunk {
         frame_header: &FrameHeader,
     ) -> SmallVec<TransformDependency, 9> {
         match &self.step {
-            TransformStep::Rct { buf_in, .. } => {
-                let b = buf_in[0];
-                let grid_idx = buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos);
+            TransformStep::Rct {
+                buf_in, buf_out, ..
+            } => {
+                let out_grid_kind = buffers[buf_out[0]].grid_kind;
                 buf_in
                     .iter()
-                    .map(|x| TransformDependency::new(*x, grid_idx))
+                    .map(|x| {
+                        let grid_idx = buffers[*x].get_grid_idx(out_grid_kind, self.grid_pos);
+                        TransformDependency::new(*x, grid_idx)
+                    })
                     .collect()
             }
             TransformStep::Output { buf_in, .. } => {
