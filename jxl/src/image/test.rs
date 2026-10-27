@@ -6,7 +6,7 @@
 use arbtest::arbitrary::Arbitrary;
 
 use super::{Image, ImageDataType, Rect};
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 impl<T: ImageDataType> Image<T> {
     #[cfg(test)]
@@ -33,6 +33,36 @@ impl<T: ImageDataType> Image<T> {
 #[test]
 fn huge_image() {
     assert!(Image::<u8>::new((1 << 28, 1 << 28)).is_err());
+    let huge_width = (usize::MAX / size_of::<f32>()) + 2;
+    assert!(matches!(
+        Image::<f32>::new((huge_width, 1)),
+        Err(Error::ImageSizeTooLarge(_, 1))
+    ));
+}
+
+#[test]
+#[should_panic]
+fn rect_byte_width_overflow() {
+    let img = Image::<f32>::new((4, 1)).unwrap();
+    let oob_rect = Rect {
+        origin: ((usize::MAX / size_of::<f32>()) + 1, 0),
+        size: (1, 1),
+    };
+    let _ = img.get_rect(oob_rect);
+}
+
+#[test]
+fn rect_large_coord_clip_and_intersects() {
+    let r = Rect {
+        origin: (10, 0),
+        size: (usize::MAX - 5, 1),
+    };
+    assert_eq!(r.clip((100, 1)).size, (90, 1));
+    let tail = Rect {
+        origin: (usize::MAX, 0),
+        size: (1, 1),
+    };
+    assert!(r.intersects(&tail));
 }
 
 #[test]
