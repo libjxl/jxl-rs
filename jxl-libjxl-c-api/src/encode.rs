@@ -117,6 +117,22 @@ pub extern "C" fn JxlEncoderInitExtraChannelInfo(
 }
 
 // Unsupported feature: JPEG XL encoding is not implemented in `jxl-rs`.
+struct EmptyCms(JxlCmsInterface);
+
+// SAFETY: `EmptyCms` is immutable and contains only null pointers and `None` callbacks.
+unsafe impl Sync for EmptyCms {}
+
+static EMPTY_CMS: EmptyCms = EmptyCms(JxlCmsInterface {
+    set_fields_data: std::ptr::null_mut(),
+    set_fields_from_icc: None,
+    init_data: std::ptr::null_mut(),
+    init: None,
+    get_src_buf: None,
+    get_dst_buf: None,
+    run: None,
+    destroy: None,
+});
+
 // Struct initialization helpers (`JxlEncoderInit*`) and `JxlEncoderVersion` are provided above,
 // while all stateful encoder operations below are stubs returning `NULL` / `JXL_ENC_ERROR` /
 // `JXL_ENC_ERR_NOT_SUPPORTED` for symbol compatibility.
@@ -301,5 +317,20 @@ enc_stubs! {
         _output_buffer: *mut u8,
         _output_buffer_size: usize,
         _bytes_written: Option<&mut MaybeUninit<usize>>,
+    ) -> JXL_BOOL = JXL_FALSE;
+    fn JxlGetDefaultCms() -> *const JxlCmsInterface = &raw const EMPTY_CMS.0;
+    fn JxlICCProfileEncode(
+        _memory_manager: Option<&JxlMemoryManager>,
+        _icc: *const u8,
+        _icc_size: usize,
+        _compressed_icc: *mut *mut u8,
+        _compressed_icc_size: *mut usize,
+    ) -> JXL_BOOL = JXL_FALSE;
+    fn JxlICCProfileDecode(
+        _memory_manager: Option<&JxlMemoryManager>,
+        _compressed_icc: *const u8,
+        _compressed_icc_size: usize,
+        _icc: *mut *mut u8,
+        _icc_size: *mut usize,
     ) -> JXL_BOOL = JXL_FALSE;
 }
