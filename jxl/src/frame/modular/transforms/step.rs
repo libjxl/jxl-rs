@@ -390,25 +390,21 @@ impl<'a> SqueezeInputs<'a> {
             .as_ref()
             .and_then(|g| g.as_ref())
             .map(|img| {
-                // The border is indexed by the average channel cell's
-                // coordinates; when the average channel has a coarser grid
-                // than the output, the used region starts at a non-zero
-                // offset within the cell. Re-slice the border so that it can
-                // be indexed by the used region's coordinates.
-                let sz = storage.sample_size();
-                let (w, h) = img.as_rect().byte_size();
-                let rect = if self.vertical {
-                    Rect {
-                        origin: (rect.origin.0, 0),
-                        size: (w / sz - rect.origin.0, h),
-                    }
+                // The border has the same grid kind as the average buffer,
+                // so its view must use the same origin as `in_avg_rect`.
+                let rect = rect.to_byte_rect_sz(storage.sample_size());
+                let border = img.as_rect();
+                let (width_bytes, height) = border.byte_size();
+                let origin = if self.vertical {
+                    (rect.origin.0, 0)
                 } else {
-                    Rect {
-                        origin: (0, rect.origin.1),
-                        size: (w / sz, h - rect.origin.1),
-                    }
+                    (0, rect.origin.1)
                 };
-                img.as_rect().rect(rect.to_byte_rect_sz(sz))
+
+                border.rect(Rect {
+                    origin,
+                    size: (width_bytes - origin.0, height - origin.1),
+                })
             })
     }
 
