@@ -1229,14 +1229,7 @@ fn test_squeeze_boundary_minimal() {
     }
 }
 
-/// Lossless squeeze over more than one group horizontally (2049 px) with a
-/// partial last group row (257 px): a 5x5 noise patch in the bottom-right
-/// corner of a flat grey image. Encoded by cjxl v0.12.0
-/// (`-d 0 -e 3 --responsive=1`); libjxl decodes it exactly.
-///
-/// Regression test: the in_next_avg squeeze border buffer is indexed by the
-/// average cell's coordinates, so an average channel on a coarser (LF) grid
-/// than the output channel used to read the border at the wrong offset.
+/// Regression test for border buffer indexing when unsqueezing from LF to HF.
 #[test]
 fn squeeze_partial_last_group_is_lossless() {
     const PATCH: [u8; 75] = [
