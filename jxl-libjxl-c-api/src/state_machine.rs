@@ -17,7 +17,9 @@ use jxl::error::Result;
 
 use crate::conversions::{to_rs_color_type, to_rs_data_format};
 use crate::parallel_runner::RayonParallelRunner;
-use crate::pixel_buffer::{BoxOutBuffer, ImageOutBuffer, InputBuffer, compute_buffer_size};
+use crate::pixel_buffer::{
+    BoxOutBuffer, ImageOutBuffer, ImageOutTarget, InputBuffer, compute_buffer_size,
+};
 use crate::types::{
     JXL_BIT_DEPTH_FROM_PIXEL_FORMAT, JXL_BLEND_REPLACE, JXL_COLOR_PROFILE_TARGET_DATA,
     JXL_COLOR_PROFILE_TARGET_ORIGINAL, JXL_DEC_BASIC_INFO, JXL_DEC_BOX, JXL_DEC_BOX_COMPLETE,
@@ -91,7 +93,7 @@ pub(crate) struct StreamState {
     pub(crate) frame_flushed: bool,
     pub(crate) current_frame_header: Option<(JxlFrameHeader, String)>,
     pub(crate) preview_out_target: Option<ImageOutBuffer>,
-    pub(crate) image_out_target: Option<ImageOutBuffer>,
+    pub(crate) image_out_target: Option<ImageOutTarget>,
     pub(crate) extra_channel_targets: Vec<Option<ImageOutBuffer>>,
     pub(crate) queued_exif_count: usize,
     pub(crate) queued_xmp_count: usize,
@@ -147,7 +149,7 @@ fn step_decoder(
 pub(crate) fn make_main_output_buffers<'a>(
     width: usize,
     height: usize,
-    image_out_target: &'a mut Option<ImageOutBuffer>,
+    image_out_target: &'a mut Option<ImageOutTarget>,
     extra_channel_targets: &'a mut [Option<ImageOutBuffer>],
 ) -> Option<Vec<JxlOutputBuffer<'a>>> {
     let mut output_buffers = Vec::new();
@@ -343,13 +345,18 @@ impl JxlDecoder {
     fn desired_rs_pixel_format(&self, preview: bool) -> Option<RsPixelFormat> {
         let basic = self.basic_info_ref()?;
         let is_gray = self.is_gray();
-        let target = if preview {
-            self.stream.preview_out_target.as_ref()
+        let color_format = if preview {
+            self.stream
+                .preview_out_target
+                .as_ref()
+                .map(ImageOutBuffer::format)
         } else {
-            self.stream.image_out_target.as_ref()
+            self.stream
+                .image_out_target
+                .as_ref()
+                .map(ImageOutTarget::format)
         };
-        let (color_type, color_data_format) = if let Some(t) = target {
-            let cf = t.format();
+        let (color_type, color_data_format) = if let Some(cf) = color_format {
             let ct = to_rs_color_type(cf.num_channels, is_gray)?;
             let df = to_rs_data_format(&cf, &self.output_bit_depth, &basic.bit_depth)?;
             (ct, Some(df))
@@ -573,10 +580,11 @@ impl JxlDecoder {
 
                 Stage::MainDecode => {
                     let skipping = self.stream.image_out_target.is_none();
+                    let img_size = self.basic_info_ref().map(|b| b.size);
                     let mut output_buffers = if skipping {
                         None
                     } else {
-                        let Some((width, height)) = self.basic_info_ref().map(|b| b.size) else {
+                        let Some((width, height)) = img_size else {
                             return JXL_DEC_ERROR;
                         };
                         let Some(bufs) = make_main_output_buffers(
@@ -601,9 +609,18 @@ impl JxlDecoder {
                     match event {
                         Ok(Event::NeedMoreInput { .. }) => return JXL_DEC_NEED_MORE_INPUT,
                         Ok(Event::FrameComplete { has_more_frames }) => {
+                            let emit_ok = match (self.stream.image_out_target.as_ref(), img_size) {
+                                (Some(target), Some((width, height))) => {
+                                    target.emit_callbacks(width, height, self.parallel)
+                                }
+                                _ => true,
+                            };
                             self.stream.frame_flushed = false;
                             self.stream.image_out_target = None;
                             self.stream.extra_channel_targets.fill_with(|| None);
+                            if !emit_ok {
+                                return JXL_DEC_ERROR;
+                            }
                             self.stream.stage = if has_more_frames {
                                 Stage::MainFrameHeader
                             } else {

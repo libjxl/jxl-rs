@@ -1367,21 +1367,24 @@ fn unimplemented_features_return_errors() {
         JxlDecoderSetJPEGBuffer(dec.as_deref_mut(), std::ptr::null_mut(), 0),
         JXL_DEC_ERROR
     );
-    assert_eq!(
-        JxlDecoderSetImageOutCallback(dec.as_deref_mut(), None, None, std::ptr::null_mut()),
-        JXL_DEC_ERROR
-    );
-    assert_eq!(
+    // SAFETY: Passing null/None arguments to verify callback registration rejects invalid inputs.
+    let cb_null_status = unsafe {
+        JxlDecoderSetImageOutCallback(dec.as_deref_mut(), None, None, std::ptr::null_mut())
+    };
+    assert_eq!(cb_null_status, JXL_DEC_ERROR);
+    // SAFETY: Passing null/None arguments to verify multithreaded callback registration rejects
+    // invalid inputs.
+    let mt_cb_null_status = unsafe {
         JxlDecoderSetMultithreadedImageOutCallback(
             dec.as_deref_mut(),
             None,
             None,
             None,
             None,
-            std::ptr::null_mut()
-        ),
-        JXL_DEC_ERROR
-    );
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(mt_cb_null_status, JXL_DEC_ERROR);
     let expected_decompress_true = if cfg!(feature = "brotli") {
         JXL_DEC_SUCCESS
     } else {
@@ -1564,6 +1567,789 @@ fn xyb_auto_color_profile() {
     assert_eq!(
         get_color_encoding(dec.as_deref(), JXL_COLOR_PROFILE_TARGET_DATA).transfer_function,
         JXL_TRANSFER_FUNCTION_SRGB
+    );
+
+    JxlDecoderDestroy(dec);
+}
+
+struct SimpleCallbackCapture {
+    width: usize,
+    height: usize,
+    bytes_per_pixel: usize,
+    sample_align: usize,
+    out: std::sync::Mutex<Vec<u8>>,
+    visits: std::sync::Mutex<Vec<u32>>,
+}
+
+impl SimpleCallbackCapture {
+    fn new(width: usize, height: usize, bytes_per_pixel: usize, sample_align: usize) -> Self {
+        Self {
+            width,
+            height,
+            bytes_per_pixel,
+            sample_align,
+            out: std::sync::Mutex::new(vec![0u8; width * height * bytes_per_pixel]),
+            visits: std::sync::Mutex::new(vec![0u32; width * height]),
+        }
+    }
+
+    fn as_opaque(&self) -> *mut c_void {
+        (&raw const *self).cast_mut().cast::<c_void>()
+    }
+
+    fn into_verified_pixels(self) -> Vec<u8> {
+        assert!(
+            self.visits
+                .into_inner()
+                .unwrap()
+                .into_iter()
+                .all(|v| v == 1)
+        );
+        self.out.into_inner().unwrap()
+    }
+}
+
+unsafe extern "C" fn simple_capture_cb(
+    opaque: *mut c_void,
+    x: usize,
+    y: usize,
+    num_pixels: usize,
+    pixels: *const c_void,
+) {
+    // SAFETY: `opaque` points to a valid `SimpleCallbackCapture` outliving decoding.
+    let cap = unsafe { &*(opaque.cast::<SimpleCallbackCapture>()) };
+    assert!(y < cap.height);
+    assert!(x + num_pixels <= cap.width);
+    assert_eq!((pixels as usize) % cap.sample_align, 0);
+    let byte_len = num_pixels * cap.bytes_per_pixel;
+    // SAFETY: `pixels` is valid for reads of `num_pixels * bytes_per_pixel` bytes during this call.
+    let src = unsafe { std::slice::from_raw_parts(pixels.cast::<u8>(), byte_len) };
+
+    let start = (y * cap.width + x) * cap.bytes_per_pixel;
+    cap.out.lock().unwrap()[start..start + byte_len].copy_from_slice(src);
+    let mut visits = cap.visits.lock().unwrap();
+    for px in x..x + num_pixels {
+        visits[y * cap.width + px] += 1;
+    }
+}
+
+fn open_decoder_at_need_out_buffer(
+    data: &[u8],
+    parallel: bool,
+) -> (Option<Box<JxlDecoder>>, usize, usize) {
+    let mut dec = JxlDecoderCreate(None);
+    if parallel {
+        let runner = JxlThreadParallelRunnerCreate(None, 4);
+        assert_eq!(
+            JxlDecoderSetParallelRunner(dec.as_deref_mut(), Some(JxlThreadParallelRunner), runner),
+            JXL_DEC_SUCCESS
+        );
+        JxlThreadParallelRunnerDestroy(runner);
+    }
+    let events = (JXL_DEC_BASIC_INFO.0 as i32) | (JXL_DEC_FULL_IMAGE.0 as i32);
+    assert_eq!(
+        JxlDecoderSubscribeEvents(dec.as_deref_mut(), events),
+        JXL_DEC_SUCCESS
+    );
+    assert_eq!(set_input(dec.as_deref_mut(), data), JXL_DEC_SUCCESS);
+    JxlDecoderCloseInput(dec.as_deref_mut());
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_BASIC_INFO
+    );
+    let info = get_basic_info(dec.as_deref());
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_NEED_IMAGE_OUT_BUFFER
+    );
+    (dec, info.xsize as usize, info.ysize as usize)
+}
+
+fn finish_single_frame_decode(mut dec: Option<Box<JxlDecoder>>) {
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_FULL_IMAGE
+    );
+    assert_eq!(JxlDecoderProcessInput(dec.as_deref_mut()), JXL_DEC_SUCCESS);
+    JxlDecoderDestroy(dec);
+}
+
+#[test]
+fn image_out_callback_formats_and_parallel() {
+    let data = test_resource("conformance_test_images/bicycles.jxl");
+    let formats = [
+        (
+            JxlPixelFormat {
+                num_channels: 3,
+                data_type: JXL_TYPE_UINT8,
+                endianness: JXL_NATIVE_ENDIAN,
+                align: 0,
+            },
+            3usize,
+            1usize,
+        ),
+        (
+            JxlPixelFormat {
+                num_channels: 4,
+                data_type: JXL_TYPE_UINT16,
+                endianness: JXL_BIG_ENDIAN,
+                align: 8,
+            },
+            8usize,
+            2usize,
+        ),
+        (
+            JxlPixelFormat {
+                num_channels: 3,
+                data_type: JXL_TYPE_FLOAT16,
+                endianness: JXL_LITTLE_ENDIAN,
+                align: 0,
+            },
+            6usize,
+            2usize,
+        ),
+        (
+            JxlPixelFormat {
+                num_channels: 3,
+                data_type: JXL_TYPE_FLOAT,
+                endianness: JXL_NATIVE_ENDIAN,
+                align: 32,
+            },
+            12usize,
+            4usize,
+        ),
+    ];
+
+    for (fmt, bpp, sample_align) in formats {
+        let expected = decode_with_c_api(&data, JxlPixelFormat { align: 0, ..fmt }, false);
+
+        for parallel in [false, true] {
+            let (mut dec, width, height) = open_decoder_at_need_out_buffer(&data, parallel);
+            let capture = SimpleCallbackCapture::new(width, height, bpp, sample_align);
+
+            assert_eq!(
+                // SAFETY: `capture` outlives decoding and `simple_capture_cb` is thread-safe.
+                unsafe {
+                    JxlDecoderSetImageOutCallback(
+                        dec.as_deref_mut(),
+                        Some(&fmt),
+                        Some(simple_capture_cb),
+                        capture.as_opaque(),
+                    )
+                },
+                JXL_DEC_SUCCESS
+            );
+            finish_single_frame_decode(dec);
+            assert_eq!(capture.into_verified_pixels(), expected);
+        }
+    }
+}
+
+struct MtInitContext {
+    capture: SimpleCallbackCapture,
+    fail_init: bool,
+    init_calls: std::sync::atomic::AtomicUsize,
+    destroy_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl MtInitContext {
+    fn new(width: usize, height: usize, bytes_per_pixel: usize, fail_init: bool) -> Self {
+        let (alloc_w, alloc_h) = if fail_init { (0, 0) } else { (width, height) };
+        Self {
+            capture: SimpleCallbackCapture::new(alloc_w, alloc_h, bytes_per_pixel, 1),
+            fail_init,
+            init_calls: std::sync::atomic::AtomicUsize::new(0),
+            destroy_calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn as_opaque(&self) -> *mut c_void {
+        (&raw const *self).cast_mut().cast::<c_void>()
+    }
+}
+
+struct MtRunSession {
+    ctx: *const MtInitContext,
+    num_threads: usize,
+    num_pixels_per_thread: usize,
+    thread_in_use: Vec<std::sync::atomic::AtomicBool>,
+}
+
+unsafe extern "C" fn mt_init_cb(
+    init_opaque: *mut c_void,
+    num_threads: usize,
+    num_pixels_per_thread: usize,
+) -> *mut c_void {
+    // SAFETY: `init_opaque` points to a valid `MtInitContext` outliving decoding.
+    let ctx = unsafe { &*(init_opaque.cast::<MtInitContext>()) };
+    ctx.init_calls
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    assert!(num_threads >= 1);
+    assert!(num_pixels_per_thread >= 1);
+    if ctx.fail_init {
+        return std::ptr::null_mut();
+    }
+    let session = Box::new(MtRunSession {
+        ctx: init_opaque.cast::<MtInitContext>(),
+        num_threads,
+        num_pixels_per_thread,
+        thread_in_use: (0..num_threads)
+            .map(|_| std::sync::atomic::AtomicBool::new(false))
+            .collect(),
+    });
+    Box::into_raw(session).cast::<c_void>()
+}
+
+unsafe extern "C" fn mt_run_cb(
+    run_opaque: *mut c_void,
+    thread_id: usize,
+    x: usize,
+    y: usize,
+    num_pixels: usize,
+    pixels: *const c_void,
+) {
+    // SAFETY: `run_opaque` was returned by `mt_init_cb` and remains valid until `mt_destroy_cb`.
+    let session = unsafe { &*(run_opaque.cast::<MtRunSession>()) };
+    assert!(thread_id < session.num_threads);
+    assert!(num_pixels <= session.num_pixels_per_thread);
+    // Verify no two concurrent invocations ever share the same `thread_id`.
+    let was_in_use =
+        session.thread_in_use[thread_id].swap(true, std::sync::atomic::Ordering::AcqRel);
+    assert!(!was_in_use, "concurrent run_callback on same thread_id");
+
+    // SAFETY: `session.ctx` points to a valid `MtInitContext` outliving decoding, and `pixels` is
+    // valid for reads of `num_pixels` samples during this callback.
+    unsafe {
+        let ctx = &*session.ctx;
+        simple_capture_cb(ctx.capture.as_opaque(), x, y, num_pixels, pixels);
+    }
+
+    session.thread_in_use[thread_id].store(false, std::sync::atomic::Ordering::Release);
+}
+
+unsafe extern "C" fn mt_destroy_cb(run_opaque: *mut c_void) {
+    assert!(!run_opaque.is_null());
+    // SAFETY: `run_opaque` was allocated via `Box::into_raw` in `mt_init_cb` and all `mt_run_cb`
+    // calls have finished.
+    let session = unsafe { Box::from_raw(run_opaque.cast::<MtRunSession>()) };
+    // SAFETY: `session.ctx` points to a valid `MtInitContext` outliving decoding.
+    let ctx = unsafe { &*session.ctx };
+    ctx.destroy_calls
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+unsafe extern "C" fn mt_stateless_init_cb(
+    init_opaque: *mut c_void,
+    num_threads: usize,
+    num_pixels_per_thread: usize,
+) -> *mut c_void {
+    assert!(num_threads >= 1);
+    assert!(num_pixels_per_thread >= 1);
+    init_opaque
+}
+
+unsafe extern "C" fn mt_stateless_run_cb(
+    run_opaque: *mut c_void,
+    _thread_id: usize,
+    x: usize,
+    y: usize,
+    num_pixels: usize,
+    pixels: *const c_void,
+) {
+    // SAFETY: `run_opaque` is `init_opaque`, pointing to a valid `SimpleCallbackCapture`.
+    unsafe { simple_capture_cb(run_opaque, x, y, num_pixels, pixels) };
+}
+
+#[test]
+fn multithreaded_image_out_callback_lifecycle_and_null_destroy() {
+    let data = test_resource("conformance_test_images/bicycles.jxl");
+    let fmt = JxlPixelFormat {
+        num_channels: 3,
+        data_type: JXL_TYPE_UINT8,
+        endianness: JXL_NATIVE_ENDIAN,
+        align: 0,
+    };
+    let expected = decode_with_c_api(&data, fmt, false);
+
+    // 1. Full init / run / destroy lifecycle in parallel mode
+    {
+        let (mut dec, w, h) = open_decoder_at_need_out_buffer(&data, true);
+        let ctx = MtInitContext::new(w, h, 3, false);
+        assert_eq!(
+            // SAFETY: `ctx` outlives decoding and `mt_init_cb`/`mt_run_cb`/`mt_destroy_cb` uphold
+            // the multithreaded callback contract.
+            unsafe {
+                JxlDecoderSetMultithreadedImageOutCallback(
+                    dec.as_deref_mut(),
+                    Some(&fmt),
+                    Some(mt_init_cb),
+                    Some(mt_run_cb),
+                    Some(mt_destroy_cb),
+                    ctx.as_opaque(),
+                )
+            },
+            JXL_DEC_SUCCESS
+        );
+        finish_single_frame_decode(dec);
+
+        assert_eq!(ctx.init_calls.into_inner(), 1);
+        assert_eq!(ctx.destroy_calls.into_inner(), 1);
+        assert_eq!(ctx.capture.into_verified_pixels(), expected);
+    }
+
+    // 2. Nullable destroy_callback (destroy_callback == None)
+    {
+        let (mut dec, w, h) = open_decoder_at_need_out_buffer(&data, false);
+        let capture = SimpleCallbackCapture::new(w, h, 3, 1);
+        assert_eq!(
+            // SAFETY: `capture` outlives decoding and `destroy_callback` is intentionally `None`.
+            unsafe {
+                JxlDecoderSetMultithreadedImageOutCallback(
+                    dec.as_deref_mut(),
+                    Some(&fmt),
+                    Some(mt_stateless_init_cb),
+                    Some(mt_stateless_run_cb),
+                    None,
+                    capture.as_opaque(),
+                )
+            },
+            JXL_DEC_SUCCESS
+        );
+        finish_single_frame_decode(dec);
+        assert_eq!(capture.into_verified_pixels(), expected);
+    }
+
+    // 3. init_callback returning NULL fails with JXL_DEC_ERROR without calling destroy_callback
+    {
+        let (mut dec, w, h) = open_decoder_at_need_out_buffer(&data, false);
+        let ctx = MtInitContext::new(w, h, 3, true);
+        assert_eq!(
+            // SAFETY: `ctx` outlives decoding; `mt_init_cb` returns null to test error propagation.
+            unsafe {
+                JxlDecoderSetMultithreadedImageOutCallback(
+                    dec.as_deref_mut(),
+                    Some(&fmt),
+                    Some(mt_init_cb),
+                    Some(mt_run_cb),
+                    Some(mt_destroy_cb),
+                    ctx.as_opaque(),
+                )
+            },
+            JXL_DEC_SUCCESS
+        );
+        assert_eq!(JxlDecoderProcessInput(dec.as_deref_mut()), JXL_DEC_ERROR);
+        JxlDecoderDestroy(dec);
+
+        assert_eq!(ctx.init_calls.into_inner(), 1);
+        assert_eq!(ctx.destroy_calls.into_inner(), 0);
+    }
+}
+
+#[test]
+fn image_out_callback_streaming_and_flush() {
+    let data = test_resource("conformance_test_images/bicycles.jxl");
+    let fmt = JxlPixelFormat {
+        num_channels: 3,
+        data_type: JXL_TYPE_UINT8,
+        endianness: JXL_NATIVE_ENDIAN,
+        align: 0,
+    };
+    let expected = decode_with_c_api(&data, fmt, false);
+
+    let mut dec = JxlDecoderCreate(None);
+    let events = (JXL_DEC_BASIC_INFO.0 as i32) | (JXL_DEC_FULL_IMAGE.0 as i32);
+    assert_eq!(
+        JxlDecoderSubscribeEvents(dec.as_deref_mut(), events),
+        JXL_DEC_SUCCESS
+    );
+
+    let mut pos = 0usize;
+    let chunk_size = 256usize;
+    let mut capture: Option<Box<SimpleCallbackCapture>> = None;
+    let mut flush_successes = 0usize;
+    let mut got_full_image = false;
+
+    loop {
+        match JxlDecoderProcessInput(dec.as_deref_mut()) {
+            JXL_DEC_NEED_MORE_INPUT => {
+                if let Some(cap) = capture.as_ref() {
+                    let total_pixels = (cap.width * cap.height) as u32;
+                    let visits_before = cap.visits.lock().unwrap().iter().sum::<u32>();
+                    if JxlDecoderFlushImage(dec.as_deref_mut()) == JXL_DEC_SUCCESS {
+                        flush_successes += 1;
+                        let visits_after_first = cap.visits.lock().unwrap().iter().sum::<u32>();
+                        let delta1 = visits_after_first - visits_before;
+                        assert!(delta1 == 0 || delta1 == total_pixels);
+                        // Per jxl/decode.h, each FlushImage call visits each pixel 0 or 1 times.
+                        assert_eq!(JxlDecoderFlushImage(dec.as_deref_mut()), JXL_DEC_SUCCESS);
+                        let visits_after_second = cap.visits.lock().unwrap().iter().sum::<u32>();
+                        let delta2 = visits_after_second - visits_after_first;
+                        assert!(delta2 == 0 || delta2 == total_pixels);
+                    }
+                }
+                pos -= JxlDecoderReleaseInput(dec.as_deref_mut());
+                let end = (pos + chunk_size).min(data.len());
+                assert_eq!(
+                    set_input(dec.as_deref_mut(), &data[pos..end]),
+                    JXL_DEC_SUCCESS
+                );
+                pos = end;
+                if pos == data.len() {
+                    JxlDecoderCloseInput(dec.as_deref_mut());
+                }
+            }
+            JXL_DEC_BASIC_INFO => {
+                let info = get_basic_info(dec.as_deref());
+                capture = Some(Box::new(SimpleCallbackCapture::new(
+                    info.xsize as usize,
+                    info.ysize as usize,
+                    3,
+                    1,
+                )));
+            }
+            JXL_DEC_NEED_IMAGE_OUT_BUFFER => {
+                let cap_opaque = capture.as_ref().unwrap().as_opaque();
+                assert_eq!(
+                    // SAFETY: `capture` is heap-allocated and outlives `dec`.
+                    unsafe {
+                        JxlDecoderSetImageOutCallback(
+                            dec.as_deref_mut(),
+                            Some(&fmt),
+                            Some(simple_capture_cb),
+                            cap_opaque,
+                        )
+                    },
+                    JXL_DEC_SUCCESS
+                );
+                assert_eq!(JxlDecoderFlushImage(dec.as_deref_mut()), JXL_DEC_ERROR);
+            }
+            JXL_DEC_FULL_IMAGE => got_full_image = true,
+            JXL_DEC_SUCCESS => break,
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    JxlDecoderDestroy(dec);
+    assert!(got_full_image);
+    assert!(flush_successes > 0);
+    assert_eq!(capture.unwrap().out.into_inner().unwrap(), expected);
+}
+
+#[test]
+fn image_out_callback_with_extra_channels_and_animation() {
+    // 1. Callback + JxlDecoderSetExtraChannelBuffer on the same frame
+    {
+        let data = test_resource("3x3a_srgb_lossless.jxl");
+        let color_fmt = JxlPixelFormat {
+            num_channels: 3,
+            data_type: JXL_TYPE_UINT8,
+            endianness: JXL_NATIVE_ENDIAN,
+            align: 0,
+        };
+        let ec_fmt = JxlPixelFormat {
+            num_channels: 1,
+            data_type: JXL_TYPE_UINT8,
+            endianness: JXL_NATIVE_ENDIAN,
+            align: 0,
+        };
+
+        let (mut ref_dec, w, h) = open_decoder_at_need_out_buffer(&data, false);
+        let mut ref_color = vec![0u8; w * h * 3];
+        let mut ref_ec = vec![0u8; w * h];
+        assert_eq!(
+            set_image_out_buffer(ref_dec.as_deref_mut(), &color_fmt, &mut ref_color),
+            JXL_DEC_SUCCESS
+        );
+        assert_eq!(
+            set_extra_channel_buffer(ref_dec.as_deref_mut(), &ec_fmt, &mut ref_ec, 0),
+            JXL_DEC_SUCCESS
+        );
+        finish_single_frame_decode(ref_dec);
+
+        let (mut dec, w, h) = open_decoder_at_need_out_buffer(&data, false);
+        let capture = SimpleCallbackCapture::new(w, h, 3, 1);
+        let mut ec_buf = vec![0u8; w * h];
+        assert_eq!(
+            set_extra_channel_buffer(dec.as_deref_mut(), &ec_fmt, &mut ec_buf, 0),
+            JXL_DEC_SUCCESS
+        );
+        assert_eq!(
+            // SAFETY: `capture` outlives `dec`.
+            unsafe {
+                JxlDecoderSetImageOutCallback(
+                    dec.as_deref_mut(),
+                    Some(&color_fmt),
+                    Some(simple_capture_cb),
+                    capture.as_opaque(),
+                )
+            },
+            JXL_DEC_SUCCESS
+        );
+        finish_single_frame_decode(dec);
+
+        assert_eq!(capture.into_verified_pixels(), ref_color);
+        assert_eq!(ec_buf, ref_ec);
+    }
+
+    // 2. Alternating callback and buffer across animation frames
+    {
+        let data = test_resource("conformance_test_images/animation_icos4d_5.jxl");
+        let fmt = JxlPixelFormat {
+            num_channels: 4,
+            data_type: JXL_TYPE_UINT8,
+            endianness: JXL_NATIVE_ENDIAN,
+            align: 0,
+        };
+
+        let mut ref_frames = Vec::new();
+        {
+            let (mut dec, w, h) = open_decoder_at_need_out_buffer(&data, false);
+            let mut buf = vec![0u8; w * h * 4];
+            assert_eq!(
+                set_image_out_buffer(dec.as_deref_mut(), &fmt, &mut buf),
+                JXL_DEC_SUCCESS
+            );
+            loop {
+                match JxlDecoderProcessInput(dec.as_deref_mut()) {
+                    JXL_DEC_NEED_IMAGE_OUT_BUFFER => {
+                        assert_eq!(
+                            set_image_out_buffer(dec.as_deref_mut(), &fmt, &mut buf),
+                            JXL_DEC_SUCCESS
+                        );
+                    }
+                    JXL_DEC_FULL_IMAGE => ref_frames.push(buf.clone()),
+                    JXL_DEC_SUCCESS => break,
+                    other => panic!("unexpected status: {other:?}"),
+                }
+            }
+            JxlDecoderDestroy(dec);
+        }
+
+        let (mut dec, w, h) = open_decoder_at_need_out_buffer(&data, false);
+        let mut frame_buf = vec![0u8; w * h * 4];
+        let capture = SimpleCallbackCapture::new(w, h, 4, 1);
+
+        for (idx, expected_frame) in ref_frames.iter().enumerate() {
+            if idx > 0 {
+                assert_eq!(
+                    JxlDecoderProcessInput(dec.as_deref_mut()),
+                    JXL_DEC_NEED_IMAGE_OUT_BUFFER
+                );
+            }
+            if idx.is_multiple_of(2) {
+                capture.out.lock().unwrap().fill(0);
+                assert_eq!(
+                    // SAFETY: `capture` outlives `dec`.
+                    unsafe {
+                        JxlDecoderSetImageOutCallback(
+                            dec.as_deref_mut(),
+                            Some(&fmt),
+                            Some(simple_capture_cb),
+                            capture.as_opaque(),
+                        )
+                    },
+                    JXL_DEC_SUCCESS
+                );
+            } else {
+                frame_buf.fill(0);
+                assert_eq!(
+                    set_image_out_buffer(dec.as_deref_mut(), &fmt, &mut frame_buf),
+                    JXL_DEC_SUCCESS
+                );
+            }
+            assert_eq!(
+                JxlDecoderProcessInput(dec.as_deref_mut()),
+                JXL_DEC_FULL_IMAGE
+            );
+            if idx.is_multiple_of(2) {
+                assert_eq!(&*capture.out.lock().unwrap(), expected_frame);
+            } else {
+                assert_eq!(&frame_buf, expected_frame);
+            }
+        }
+        assert_eq!(JxlDecoderProcessInput(dec.as_deref_mut()), JXL_DEC_SUCCESS);
+        JxlDecoderDestroy(dec);
+    }
+}
+
+#[test]
+fn image_out_callback_mutual_exclusion_and_errors() {
+    let data = test_resource("lossy_with_icc.jxl");
+    let fmt_u8 = JxlPixelFormat {
+        num_channels: 3,
+        data_type: JXL_TYPE_UINT8,
+        endianness: JXL_NATIVE_ENDIAN,
+        align: 0,
+    };
+    let fmt_f32 = JxlPixelFormat {
+        num_channels: 3,
+        data_type: JXL_TYPE_FLOAT,
+        endianness: JXL_NATIVE_ENDIAN,
+        align: 0,
+    };
+    let fmt_invalid_gray = JxlPixelFormat {
+        num_channels: 1,
+        data_type: JXL_TYPE_UINT8,
+        endianness: JXL_NATIVE_ENDIAN,
+        align: 0,
+    };
+
+    let mut dec = JxlDecoderCreate(None);
+    let events = (JXL_DEC_BASIC_INFO.0 as i32) | (JXL_DEC_FULL_IMAGE.0 as i32);
+    assert_eq!(
+        JxlDecoderSubscribeEvents(dec.as_deref_mut(), events),
+        JXL_DEC_SUCCESS
+    );
+
+    // Calling before BASIC_INFO must fail
+    assert_eq!(
+        // SAFETY: `simple_capture_cb` is not invoked because setup fails before BASIC_INFO.
+        unsafe {
+            JxlDecoderSetImageOutCallback(
+                dec.as_deref_mut(),
+                Some(&fmt_u8),
+                Some(simple_capture_cb),
+                std::ptr::null_mut(),
+            )
+        },
+        JXL_DEC_ERROR
+    );
+
+    assert_eq!(set_input(dec.as_deref_mut(), &data), JXL_DEC_SUCCESS);
+    JxlDecoderCloseInput(dec.as_deref_mut());
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_BASIC_INFO
+    );
+    let info = get_basic_info(dec.as_deref());
+    let (w, h) = (info.xsize as usize, info.ysize as usize);
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_NEED_IMAGE_OUT_BUFFER
+    );
+
+    // Null callback / missing run_callback must fail
+    assert_eq!(
+        // SAFETY: Passing `None` callbacks to verify error handling.
+        unsafe {
+            JxlDecoderSetImageOutCallback(
+                dec.as_deref_mut(),
+                Some(&fmt_u8),
+                None,
+                std::ptr::null_mut(),
+            )
+        },
+        JXL_DEC_ERROR
+    );
+    assert_eq!(
+        // SAFETY: Passing `None` `run_callback` to verify error handling.
+        unsafe {
+            JxlDecoderSetMultithreadedImageOutCallback(
+                dec.as_deref_mut(),
+                Some(&fmt_u8),
+                Some(mt_stateless_init_cb),
+                None,
+                None,
+                std::ptr::null_mut(),
+            )
+        },
+        JXL_DEC_ERROR
+    );
+
+    let capture = SimpleCallbackCapture::new(w, h, 3, 1);
+
+    // Setting f32 callback updates TARGET_DATA to Linear sRGB
+    assert_eq!(
+        // SAFETY: `capture` outlives `dec` and will be replaced by `fmt_u8` before decoding.
+        unsafe {
+            JxlDecoderSetImageOutCallback(
+                dec.as_deref_mut(),
+                Some(&fmt_f32),
+                Some(simple_capture_cb),
+                capture.as_opaque(),
+            )
+        },
+        JXL_DEC_SUCCESS
+    );
+    assert_eq!(
+        get_color_encoding(dec.as_deref(), JXL_COLOR_PROFILE_TARGET_DATA).transfer_function,
+        JXL_TRANSFER_FUNCTION_LINEAR
+    );
+
+    // Switching from callback to buffer on the same frame must fail
+    let mut buf = vec![0u8; w * h * 3];
+    assert_eq!(
+        set_image_out_buffer(dec.as_deref_mut(), &fmt_u8, &mut buf),
+        JXL_DEC_ERROR
+    );
+
+    // Replacing callback with another valid callback (u8) succeeds and restores sRGB TARGET_DATA
+    assert_eq!(
+        // SAFETY: `capture` outlives `dec`.
+        unsafe {
+            JxlDecoderSetImageOutCallback(
+                dec.as_deref_mut(),
+                Some(&fmt_u8),
+                Some(simple_capture_cb),
+                capture.as_opaque(),
+            )
+        },
+        JXL_DEC_SUCCESS
+    );
+    assert_eq!(
+        get_color_encoding(dec.as_deref(), JXL_COLOR_PROFILE_TARGET_DATA).transfer_function,
+        JXL_TRANSFER_FUNCTION_SRGB
+    );
+
+    // Invalid format (1 channel on RGB image) fails without losing the active u8 callback
+    assert_eq!(
+        // SAFETY: Invalid format is rejected synchronously.
+        unsafe {
+            JxlDecoderSetImageOutCallback(
+                dec.as_deref_mut(),
+                Some(&fmt_invalid_gray),
+                Some(simple_capture_cb),
+                capture.as_opaque(),
+            )
+        },
+        JXL_DEC_ERROR
+    );
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_FULL_IMAGE
+    );
+    assert_eq!(
+        capture.into_verified_pixels(),
+        decode_with_c_api(&data, fmt_u8, false)
+    );
+
+    // Rewind and verify buffer -> callback on the same frame also fails
+    JxlDecoderRewind(dec.as_deref_mut());
+    assert_eq!(set_input(dec.as_deref_mut(), &data), JXL_DEC_SUCCESS);
+    JxlDecoderCloseInput(dec.as_deref_mut());
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_BASIC_INFO
+    );
+    assert_eq!(
+        JxlDecoderProcessInput(dec.as_deref_mut()),
+        JXL_DEC_NEED_IMAGE_OUT_BUFFER
+    );
+    assert_eq!(
+        set_image_out_buffer(dec.as_deref_mut(), &fmt_u8, &mut buf),
+        JXL_DEC_SUCCESS
+    );
+    assert_eq!(
+        // SAFETY: Switching from buffer to callback is rejected synchronously.
+        unsafe {
+            JxlDecoderSetImageOutCallback(
+                dec.as_deref_mut(),
+                Some(&fmt_u8),
+                Some(simple_capture_cb),
+                std::ptr::null_mut(),
+            )
+        },
+        JXL_DEC_ERROR
     );
 
     JxlDecoderDestroy(dec);

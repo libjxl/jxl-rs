@@ -16,7 +16,10 @@ use crate::conversions::{
     to_rs_data_format,
 };
 use crate::parallel_runner::RayonParallelRunner;
-use crate::pixel_buffer::{BoxOutBuffer, ImageOutBuffer, InputBuffer, compute_buffer_size};
+use crate::pixel_buffer::{
+    BoxOutBuffer, ImageOutBuffer, ImageOutCallback, ImageOutTarget, InputBuffer,
+    compute_buffer_size,
+};
 use crate::state_machine::{
     JxlDecoder, SUPPORTED_EVENTS_MASK, Stage, StreamState, TOP_LEVEL_EVENTS_MASK,
     make_main_output_buffers,
@@ -633,6 +636,26 @@ pub extern "C" fn JxlDecoderImageOutBufferSize(
     JXL_DEC_SUCCESS
 }
 
+fn install_main_out_target(dec: &mut JxlDecoder, target: ImageOutTarget) -> JxlDecoderStatus {
+    let prev = dec.stream.image_out_target.replace(target);
+    if !dec.apply_main_pixel_format() {
+        dec.stream.image_out_target = prev;
+        return JXL_DEC_ERROR;
+    }
+    JXL_DEC_SUCCESS
+}
+
+fn validate_callback_target_setup(dec: &JxlDecoder, format: &JxlPixelFormat) -> bool {
+    if dec.stream.stage == Stage::MainDecode
+        || matches!(dec.stream.image_out_target, Some(ImageOutTarget::Buffer(_)))
+    {
+        return false;
+    }
+    dec.basic_info_ref()
+        .and_then(|b| dec.color_buffer_size(b.size, format))
+        .is_some()
+}
+
 /// Sets the output buffer for the current image frame.
 ///
 /// # Safety
@@ -651,49 +674,88 @@ pub unsafe extern "C" fn JxlDecoderSetImageOutBuffer(
     let (Some(dec), Some(format)) = (dec, format) else {
         return JXL_DEC_ERROR;
     };
-    let Some(img_size) = dec.basic_info_ref().map(|b| b.size) else {
+    if dec.stream.stage == Stage::MainDecode
+        || matches!(
+            dec.stream.image_out_target,
+            Some(ImageOutTarget::Callback(_))
+        )
+    {
         return JXL_DEC_ERROR;
-    };
-    let Some(min_size) = dec.color_buffer_size(img_size, format) else {
-        return JXL_DEC_ERROR;
-    };
-    // SAFETY: Guaranteed by caller contract on `JxlDecoderSetImageOutBuffer`.
-    let Some(target) =
-        (unsafe { ImageOutBuffer::new(buffer.cast::<u8>(), size, min_size, *format) })
+    }
+    let Some(min_size) = dec
+        .basic_info_ref()
+        .and_then(|b| dec.color_buffer_size(b.size, format))
     else {
         return JXL_DEC_ERROR;
     };
-    let prev = dec.stream.image_out_target.replace(target);
-    if !dec.apply_main_pixel_format() {
-        dec.stream.image_out_target = prev;
+    // SAFETY: Guaranteed by caller contract on `JxlDecoderSetImageOutBuffer`.
+    let Some(buf) = (unsafe { ImageOutBuffer::new(buffer.cast::<u8>(), size, min_size, *format) })
+    else {
+        return JXL_DEC_ERROR;
+    };
+    install_main_out_target(dec, ImageOutTarget::Buffer(buf))
+}
+
+/// Sets the scanline output callback for the current image frame.
+///
+/// # Safety
+/// If `callback` is non-null, the caller must ensure that during calls to functions in this crate
+/// until `JXL_DEC_FULL_IMAGE` is returned, the current frame is skipped, or the decoder is
+/// rewound, reset, or destroyed, `callback(opaque, x, y, num_pixels, pixels)` is safe to invoke
+/// for valid scanlines in `format` (including concurrently across disjoint rows when a parallel
+/// runner is set), does not unwind across FFI, and does not access `dec`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn JxlDecoderSetImageOutCallback(
+    dec: Option<&mut JxlDecoder>,
+    format: Option<&JxlPixelFormat>,
+    callback: JxlImageOutCallback,
+    opaque: *mut c_void,
+) -> JxlDecoderStatus {
+    let (Some(dec), Some(format), Some(callback)) = (dec, format, callback) else {
+        return JXL_DEC_ERROR;
+    };
+    if !validate_callback_target_setup(dec, format) {
         return JXL_DEC_ERROR;
     }
-    JXL_DEC_SUCCESS
+    // SAFETY: Guaranteed by caller contract on `JxlDecoderSetImageOutCallback`.
+    let cb = unsafe { ImageOutCallback::new_simple(*format, callback, opaque) };
+    install_main_out_target(dec, ImageOutTarget::Callback(cb))
 }
 
-// Unsupported feature: row-by-row output callbacks (`JxlImageOutCallback` and
-// `JxlImageOutInitCallback` / `JxlImageOutRunCallback`) are not implemented; use
-// `JxlDecoderSetImageOutBuffer` instead.
+/// Sets the multithreaded scanline output callbacks for the current image frame.
+///
+/// # Safety
+/// If `init_callback` and `run_callback` are non-null, the caller must ensure that during calls to
+/// functions in this crate until `JXL_DEC_FULL_IMAGE` is returned, the current frame is skipped,
+/// or the decoder is rewound, reset, or destroyed,
+/// `init_callback(init_opaque, num_threads, num_pixels_per_thread)` is safe to invoke and,
+/// whenever it returns a non-null `run_opaque`,
+/// `run_callback(run_opaque, thread_id, x, y, num_pixels, pixels)` is safe to invoke concurrently
+/// for distinct `thread_id < num_threads` and `num_pixels <= num_pixels_per_thread`, followed by
+/// `destroy_callback(run_opaque)` (if `destroy_callback` is non-null) after all `run_callback`
+/// calls complete, without unwinding across FFI or accessing `dec`.
 #[unsafe(no_mangle)]
-pub extern "C" fn JxlDecoderSetImageOutCallback(
-    _dec: Option<&mut JxlDecoder>,
-    _format: Option<&JxlPixelFormat>,
-    _callback: JxlImageOutCallback,
-    _opaque: *mut c_void,
+pub unsafe extern "C" fn JxlDecoderSetMultithreadedImageOutCallback(
+    dec: Option<&mut JxlDecoder>,
+    format: Option<&JxlPixelFormat>,
+    init_callback: JxlImageOutInitCallback,
+    run_callback: JxlImageOutRunCallback,
+    destroy_callback: JxlImageOutDestroyCallback,
+    init_opaque: *mut c_void,
 ) -> JxlDecoderStatus {
-    JXL_DEC_ERROR
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn JxlDecoderSetMultithreadedImageOutCallback(
-    _dec: Option<&mut JxlDecoder>,
-    _format: Option<&JxlPixelFormat>,
-    _init_callback: JxlImageOutInitCallback,
-    _run_callback: JxlImageOutRunCallback,
-    _destroy_callback: JxlImageOutDestroyCallback,
-    _init_opaque: *mut c_void,
-) -> JxlDecoderStatus {
-    JXL_DEC_ERROR
+    let (Some(dec), Some(format), Some(init_cb), Some(run_cb)) =
+        (dec, format, init_callback, run_callback)
+    else {
+        return JXL_DEC_ERROR;
+    };
+    if !validate_callback_target_setup(dec, format) {
+        return JXL_DEC_ERROR;
+    }
+    // SAFETY: Guaranteed by caller contract on `JxlDecoderSetMultithreadedImageOutCallback`.
+    let cb = unsafe {
+        ImageOutCallback::new_multithreaded(*format, init_cb, run_cb, destroy_callback, init_opaque)
+    };
+    install_main_out_target(dec, ImageOutTarget::Callback(cb))
 }
 
 #[unsafe(no_mangle)]
@@ -926,12 +988,20 @@ pub extern "C" fn JxlDecoderFlushImage(dec: Option<&mut JxlDecoder>) -> JxlDecod
         return JXL_DEC_ERROR;
     };
     let mut runner = RayonParallelRunner;
-    match dec.rs_decoder.flush_pixels(
+    let res = dec.rs_decoder.flush_pixels(
         &mut output_buffers,
         dec.parallel
             .then_some(&mut runner as &mut dyn RsParallelRunner),
-    ) {
+    );
+    drop(output_buffers);
+    match res {
         Ok(flushed) => {
+            if flushed
+                && let Some(target) = dec.stream.image_out_target.as_ref()
+                && !target.emit_callbacks(width, height, dec.parallel)
+            {
+                return JXL_DEC_ERROR;
+            }
             dec.stream.frame_flushed |= flushed;
             if dec.stream.frame_flushed {
                 JXL_DEC_SUCCESS
