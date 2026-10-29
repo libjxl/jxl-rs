@@ -6,8 +6,8 @@
 use std::collections::BTreeSet;
 
 use crate::api::{
-    AlphaMode, JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
-    JxlPixelFormat,
+    AlphaMode, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer,
+    JxlParallelRunner, JxlPixelFormat,
 };
 use crate::bit_reader::BitReader;
 use crate::color::tf::TransferFunction;
@@ -730,9 +730,14 @@ impl Frame {
 
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
 
-        // Determine output TF: use output profile's TF if available, else fall back to embedded profile's TF.
-        // Note: output_color_info (luminances, opsin matrix) always comes from the embedded profile;
-        // CMS handles any primaries conversion if the output profile differs.
+        let signalled_encoding = if !metadata.color_encoding.want_icc
+            && metadata.color_encoding.color_space != ColorSpace::XYB
+        {
+            Some(JxlColorEncoding::from_internal(&metadata.color_encoding)?)
+        } else {
+            None
+        };
+
         let output_tf = output_profile
             .transfer_function()
             .map(|tf| {
@@ -750,7 +755,10 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0));
         } else if xyb_encoded {
             let mut stage_color_info = output_color_info.clone();
-            stage_color_info.tf = output_tf.clone();
+            // Blending and post-transform references must remain in the signalled encoding.
+            if signalled_encoding.is_none() {
+                stage_color_info.tf = output_tf.clone();
+            }
             pipeline = pipeline.add_inplace_stage(XybColorConvertStage::new(0, stage_color_info));
         }
 
@@ -798,6 +806,15 @@ impl Frame {
         }
 
         if frame_header.is_visible() {
+            if let (Some(from), JxlColorProfile::Simple(to)) = (&signalled_encoding, output_profile)
+                && !JxlColorProfile::Simple(from.clone()).same_color_encoding(output_profile)
+            {
+                pipeline = pipeline.add_inplace_stage(ColorConvertStage::new(
+                    from,
+                    to,
+                    output_color_info.intensity_target,
+                )?);
+            }
             let color_space = decoder_state
                 .file_header
                 .image_metadata

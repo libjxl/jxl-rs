@@ -4,19 +4,20 @@
 // license that can be found in the LICENSE file.
 
 use crate::api::{
-    JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
-    JxlPixelFormat,
+    JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer,
+    JxlParallelRunner, JxlPixelFormat,
 };
 use crate::color::tf::TransferFunction;
 use crate::error::Result;
 use crate::frame::Frame;
 use crate::headers::Orientation;
+use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::FrameType;
 use crate::image::{DataTypeTag, Rect};
 use crate::render::buffer_splitter::{BufferSplitter, OutputChannelRef, SaveStageBufferInfo};
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::save::SaveStage;
-use crate::render::stages::{OutputColorInfo, Upsample8x, XybColorConvertStage};
+use crate::render::stages::{ColorConvertStage, OutputColorInfo, Upsample8x, XybColorConvertStage};
 use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::util::mirror;
 
@@ -33,6 +34,7 @@ impl Frame {
         full_size: (usize, usize),
         output_color_info: &OutputColorInfo,
         output_tf: &TransferFunction,
+        color_convert: Option<&ColorConvertStage>,
     ) -> Result<()> {
         let save_stage = SaveStage::new(
             &[0, 1, 2],
@@ -148,6 +150,9 @@ impl Frame {
                     &mut b.get_row_mut(uy)[off..],
                 ];
                 xyb_stage.process_row_chunk((0, 0), ulen, &mut rows, None, false);
+                if let Some(stage) = color_convert {
+                    stage.process_row_chunk((0, 0), ulen, &mut rows, None, false);
+                }
 
                 let input_channels = match color_type {
                     JxlColorType::Bgr | JxlColorType::Bgra => {
@@ -190,7 +195,7 @@ impl Frame {
 
         let output_color_info = OutputColorInfo::from_header(&self.decoder_state.file_header)?;
 
-        let Some(output_tf) = output_profile.transfer_function().map(|tf| {
+        let Some(mut output_tf) = output_profile.transfer_function().map(|tf| {
             TransferFunction::from_api_tf(
                 tf,
                 output_color_info.intensity_target,
@@ -206,6 +211,24 @@ impl Frame {
             // TODO(veluca): we might want to relax this to "no alpha".
             return Ok(false);
         }
+        let color_convert = if !image_metadata.color_encoding.want_icc
+            && image_metadata.color_encoding.color_space != ColorSpace::XYB
+            && let JxlColorProfile::Simple(to) = output_profile
+        {
+            let from = JxlColorEncoding::from_internal(&image_metadata.color_encoding)?;
+            output_tf = output_color_info.tf.clone();
+            if JxlColorProfile::Simple(from.clone()).same_color_encoding(output_profile) {
+                None
+            } else {
+                Some(ColorConvertStage::new(
+                    &from,
+                    to,
+                    output_color_info.intensity_target,
+                )?)
+            }
+        } else {
+            None
+        };
         let color_type = pixel_format.color_type;
         let Some(data_format) = pixel_format.color_data_format else {
             return Ok(false);
@@ -269,6 +292,7 @@ impl Frame {
                 (xsize, ysize),
                 &output_color_info,
                 &output_tf,
+                color_convert.as_ref(),
             )
         })?;
 

@@ -97,6 +97,11 @@ impl JxlDecoder {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_test_output_color_profile(&mut self, profile: JxlColorProfile) {
+        self.codestream_parser.output_color_profile = Some(profile);
+    }
+
+    #[cfg(test)]
     pub(crate) fn raw_frame_header(&self) -> Option<&crate::headers::frame_header::FrameHeader> {
         self.codestream_parser.frame_info.current_frame_header()
     }

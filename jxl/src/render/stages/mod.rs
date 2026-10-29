@@ -5,6 +5,7 @@
 
 mod blending;
 mod chroma_upsample;
+mod color_convert;
 mod convert;
 mod epf;
 mod extend;
@@ -20,6 +21,7 @@ mod ycbcr;
 
 pub use blending::*;
 pub use chroma_upsample::*;
+pub use color_convert::*;
 pub use convert::*;
 pub use epf::*;
 pub use extend::*;

@@ -40,6 +40,45 @@ pub fn linear_to_srgb_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32V
         .copysign(x)
 }
 
+#[inline(always)]
+pub fn srgb_to_linear_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
+    #[allow(clippy::excessive_precision)]
+    const P: [f32; 5] = [
+        2.200248328e-4,
+        1.043637593e-2,
+        1.624820318e-1,
+        7.961564959e-1,
+        8.210152774e-1,
+    ];
+    #[allow(clippy::excessive_precision)]
+    const Q: [f32; 5] = [
+        2.631846970e-1,
+        1.076976492,
+        4.987528350e-1,
+        -5.512498495e-2,
+        6.521209011e-3,
+    ];
+    let a = x.abs();
+    let one = D::F32Vec::splat(d, 1.0);
+    let mut nonlinear = eval_rational_poly_simd(d, a, P, Q);
+    // Blending can exceed the polynomial's [0, 1] approximation range.
+    if !one.gt(a).all() {
+        let extended = crate::util::fast_powf_simd(
+            d,
+            a.mul_add(
+                D::F32Vec::splat(d, 1.0 / 1.055),
+                D::F32Vec::splat(d, 0.055 / 1.055),
+            ),
+            D::F32Vec::splat(d, 2.4),
+        );
+        nonlinear = a.gt(one).if_then_else_f32(extended, nonlinear);
+    }
+    D::F32Vec::splat(d, 0.04045)
+        .gt(a)
+        .if_then_else_f32(a * D::F32Vec::splat(d, 1.0 / 12.92), nonlinear)
+        .copysign(x)
+}
+
 /// Converts a single SIMD vector of linear samples to BT.709 transfer curve.
 // Max error ~3e-7
 #[inline(always)]
@@ -71,6 +110,23 @@ pub fn linear_to_bt709_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32
             a * D::F32Vec::splat(d, 4.5),
             eval_rational_poly_simd(d, a.sqrt(), P, Q),
         )
+        .copysign(x)
+}
+
+#[inline(always)]
+pub fn bt709_to_linear_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
+    let threshold = D::F32Vec::splat(d, 0.081);
+    let inv_4_5 = D::F32Vec::splat(d, 1.0 / 4.5);
+    let scale = D::F32Vec::splat(d, 1.0 / 1.099);
+    let offset = D::F32Vec::splat(d, 0.099 / 1.099);
+    let exp = D::F32Vec::splat(d, 1.0 / 0.45);
+
+    let a = x.abs();
+    let linear_part = a * inv_4_5;
+    let gamma_part = crate::util::fast_powf_simd(d, a.mul_add(scale, offset), exp);
+    threshold
+        .gt(a)
+        .if_then_else_f32(linear_part, gamma_part)
         .copysign(x)
 }
 
@@ -135,9 +191,61 @@ pub fn linear_to_pq_simd_vec<D: SimdDescriptor>(
         .min(D::F32Vec::splat(d, 1.0))
 }
 
+const PQ_EOTF_P: [f32; 5] = [
+    2.6297566e-4,
+    -6.235531e-3,
+    7.386023e-1,
+    2.6455317,
+    5.500349e-1,
+];
+const PQ_EOTF_Q: [f32; 5] = [
+    4.213501e2,
+    -4.2873682e2,
+    1.7436467e2,
+    -3.3907887e1,
+    2.6771877,
+];
+
+#[inline(always)]
+pub fn pq_to_linear_simd_vec<D: SimdDescriptor>(
+    d: D,
+    y_mult: D::F32Vec,
+    s: D::F32Vec,
+) -> D::F32Vec {
+    let a = s.abs();
+    let x = a.mul_add(a, a);
+    let y = eval_rational_poly_simd(d, x, PQ_EOTF_P, PQ_EOTF_Q);
+    (y * y_mult).copysign(s)
+}
+
 const HLG_A: f64 = 0.17883277;
 const HLG_B: f64 = 1.0 - 4.0 * HLG_A;
 const HLG_C: f64 = 0.5599107295;
+
+#[cfg(test)]
+fn hlg_ootf_inner(exp: f32, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut [f32]; 3]) {
+    if exp.abs() < 0.1 {
+        return;
+    }
+    for ((r, g), b) in std::iter::zip(sr, sg).zip(sb) {
+        let mixed = r.mul_add(lr, g.mul_add(lg, *b * lb));
+        let mult = crate::util::fast_powf(mixed, exp);
+        *r *= mult;
+        *g *= mult;
+        *b *= mult;
+    }
+}
+
+#[cfg(test)]
+fn hlg_scene_to_display(
+    intensity_display: f32,
+    luminance_rgb: [f32; 3],
+    samples_rgb: [&mut [f32]; 3],
+) {
+    let system_gamma = hlg_system_gamma(intensity_display);
+    let gamma_sub_one = system_gamma - 1.0;
+    hlg_ootf_inner(gamma_sub_one, luminance_rgb, samples_rgb);
+}
 
 #[inline(always)]
 fn hlg_ootf_inner_vec<D: SimdDescriptor>(
@@ -222,6 +330,20 @@ pub fn hlg_to_scene(samples: &mut [f32]) {
     }
 }
 
+#[inline(always)]
+pub fn hlg_to_scene_vec<D: SimdDescriptor>(d: D, s: D::F32Vec) -> D::F32Vec {
+    let splat = |x| D::F32Vec::splat(d, x);
+    let a = s.abs();
+    let large =
+        crate::util::fast_pow2f_simd(d, a * splat((std::f64::consts::LOG2_E / HLG_A) as f32))
+            * splat(0.003_639_807)
+            + splat((HLG_B / 12.0) as f32);
+    splat(0.5)
+        .gt(a)
+        .if_then_else_f32(a * a / splat(3.0), large)
+        .copysign(s)
+}
+
 #[derive(Clone, Debug)]
 pub enum TransferFunction {
     Bt709,
@@ -238,6 +360,93 @@ pub enum TransferFunction {
 }
 
 impl TransferFunction {
+    #[inline(always)]
+    pub fn apply_to_linear<D: SimdDescriptor>(&self, d: D, rgb: [D::F32Vec; 3]) -> [D::F32Vec; 3] {
+        let splat = |x| D::F32Vec::splat(d, x);
+        match *self {
+            Self::Srgb => rgb.map(|x| srgb_to_linear_simd_vec(d, x)),
+            Self::Bt709 => rgb.map(|x| bt709_to_linear_simd_vec(d, x)),
+            Self::Pq { intensity_target } => {
+                let y_mult = splat(10000.0 / intensity_target);
+                rgb.map(|x| pq_to_linear_simd_vec(d, y_mult, x))
+            }
+            Self::Hlg {
+                intensity_target,
+                luminance_rgb,
+            } => {
+                let scene = rgb.map(|x| hlg_to_scene_vec(d, x));
+                hlg_ootf_inner_vec(
+                    d,
+                    splat(hlg_system_gamma(intensity_target) - 1.0),
+                    luminance_rgb.map(splat),
+                    scene,
+                )
+            }
+            Self::Gamma(1.0) => rgb,
+            Self::Gamma(g) => {
+                // Gamma stores the encoding exponent; decoding uses its reciprocal.
+                let exp = splat(g.recip());
+                rgb.map(|x| {
+                    let power =
+                        crate::util::fast_log2f_simd(d, x.abs().max(splat(f32::MIN_POSITIVE)))
+                            * exp;
+                    let linear =
+                        crate::util::fast_pow2f_simd(d, power.max(splat(-126.0)).min(splat(128.0)));
+                    x.abs()
+                        .gt(splat(0.0))
+                        .if_then_else_f32(
+                            power.gt(splat(-126.0)).if_then_else_f32(linear, splat(0.0)),
+                            splat(0.0),
+                        )
+                        .copysign(x)
+                })
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn apply_from_linear<D: SimdDescriptor>(
+        &self,
+        d: D,
+        rgb: [D::F32Vec; 3],
+    ) -> [D::F32Vec; 3] {
+        match *self {
+            Self::Srgb => rgb.map(|x| linear_to_srgb_simd_vec(d, x)),
+            Self::Bt709 => rgb.map(|x| linear_to_bt709_simd_vec(d, x)),
+            Self::Gamma(1.0) => rgb,
+            Self::Gamma(g) => rgb.map(|x| {
+                let zero = D::F32Vec::splat(d, 0.0);
+                x.abs()
+                    .gt(zero)
+                    .if_then_else_f32(
+                        crate::util::fast_powf_simd(d, x.abs(), D::F32Vec::splat(d, g)),
+                        zero,
+                    )
+                    .copysign(x)
+            }),
+            Self::Pq { intensity_target } => rgb.map(|x| {
+                linear_to_pq_simd_vec(
+                    d,
+                    D::F32Vec::splat(d, intensity_target / 10000.0),
+                    D::F32Vec::splat(d, 1e-4),
+                    x,
+                )
+            }),
+            Self::Hlg {
+                intensity_target,
+                luminance_rgb,
+            } => {
+                let scene = hlg_display_to_scene_vec(
+                    d,
+                    D::F32Vec::splat(d, hlg_system_gamma(intensity_target)),
+                    luminance_rgb.map(|x| D::F32Vec::splat(d, x)),
+                    rgb,
+                );
+                scene.map(|x| scene_to_hlg_vec(d, x))
+            }
+        }
+    }
+
     /// Create a TransferFunction from a JxlTransferFunction.
     /// For PQ/HLG, requires intensity_target and luminances from tone mapping info.
     /// Note: JxlTransferFunction::Gamma stores the encoding exponent (e.g., 1/2.2 for gamma 2.2).
@@ -292,21 +501,6 @@ mod test {
     use crate::tests::assert_close;
     use crate::util::eval_rational_poly;
 
-    const PQ_EOTF_P: [f32; 5] = [
-        2.6297566e-4,
-        -6.235531e-3,
-        7.386023e-1,
-        2.6455317,
-        5.500349e-1,
-    ];
-    const PQ_EOTF_Q: [f32; 5] = [
-        4.213501e2,
-        -4.2873682e2,
-        1.7436467e2,
-        -3.3907887e1,
-        2.6771877,
-    ];
-
     fn srgb_to_linear(samples: &mut [f32]) {
         #[allow(clippy::excessive_precision)]
         const P: [f32; 5] = [
@@ -346,30 +540,6 @@ mod test {
                 crate::util::fast_powf(a.mul_add(1.0 / 1.099, 0.099 / 1.099), 1.0 / 0.45)
             }
             .copysign(*s);
-        }
-    }
-
-    #[inline(always)]
-    fn bt709_to_linear_simd<D: SimdDescriptor>(d: D, xsize: usize, samples: &mut [f32]) {
-        let threshold = D::F32Vec::splat(d, 0.081);
-        let inv_4_5 = D::F32Vec::splat(d, 1.0 / 4.5);
-        let scale = D::F32Vec::splat(d, 1.0 / 1.099);
-        let offset = D::F32Vec::splat(d, 0.099 / 1.099);
-        let exp = D::F32Vec::splat(d, 1.0 / 0.45);
-
-        for vec in samples
-            .chunks_exact_mut(D::F32Vec::LEN)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let x = D::F32Vec::load(d, vec);
-            let a = x.abs();
-            let linear_part = a * inv_4_5;
-            let gamma_part = crate::util::fast_powf_simd(d, a.mul_add(scale, offset), exp);
-            threshold
-                .gt(a)
-                .if_then_else_f32(linear_part, gamma_part)
-                .copysign(x)
-                .store(vec);
         }
     }
 
@@ -420,28 +590,6 @@ mod test {
         }
     }
 
-    #[inline(always)]
-    fn pq_to_linear_simd<D: SimdDescriptor>(
-        d: D,
-        intensity_target: f32,
-        xsize: usize,
-        samples: &mut [f32],
-    ) {
-        let y_mult = D::F32Vec::splat(d, 10000.0 / intensity_target);
-
-        for vec in samples
-            .chunks_exact_mut(D::F32Vec::LEN)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let s = D::F32Vec::load(d, vec);
-            let a = s.abs();
-            // a + a * a
-            let x = a.mul_add(a, a);
-            let y = eval_rational_poly_simd(d, x, PQ_EOTF_P, PQ_EOTF_Q);
-            (y * y_mult).copysign(s).store(vec);
-        }
-    }
-
     fn hlg_ootf_inner_precise(exp: f64, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut [f32]; 3]) {
         if exp.abs() < 0.1 {
             return;
@@ -459,20 +607,6 @@ mod test {
             *r = (dr * mult) as f32;
             *g = (dg * mult) as f32;
             *b = (db * mult) as f32;
-        }
-    }
-
-    fn hlg_ootf_inner(exp: f32, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut [f32]; 3]) {
-        if exp.abs() < 0.1 {
-            return;
-        }
-
-        for ((r, g), b) in std::iter::zip(sr, sg).zip(sb) {
-            let mixed = r.mul_add(lr, g.mul_add(lg, *b * lb));
-            let mult = crate::util::fast_powf(mixed, exp);
-            *r *= mult;
-            *g *= mult;
-            *b *= mult;
         }
     }
 
@@ -494,16 +628,6 @@ mod test {
         let system_gamma = hlg_system_gamma(intensity_display) as f64;
         let one_sub_gamma = 1.0 - system_gamma;
         hlg_ootf_inner_precise(one_sub_gamma / system_gamma, luminance_rgb, samples_rgb);
-    }
-
-    fn hlg_scene_to_display(
-        intensity_display: f32,
-        luminance_rgb: [f32; 3],
-        samples_rgb: [&mut [f32]; 3],
-    ) {
-        let system_gamma = hlg_system_gamma(intensity_display);
-        let gamma_sub_one = system_gamma - 1.0;
-        hlg_ootf_inner(gamma_sub_one, luminance_rgb, samples_rgb);
     }
 
     fn hlg_display_to_scene(
@@ -698,10 +822,12 @@ mod test {
         arbtest::arbtest(|u| {
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
-            let xsize = samples.len();
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
 
             bt709_to_linear(&mut samples);
-            bt709_to_linear_simd(jxl_simd::ScalarDescriptor::new().unwrap(), xsize, &mut simd);
+            for s in &mut simd {
+                *s = bt709_to_linear_simd_vec(d, *s);
+            }
             assert_close!(all, &samples, &simd, 1e-5);
             Ok(())
         });
@@ -713,15 +839,13 @@ mod test {
             let intensity_target = u.int_in_range(9900..=10100)? as f32;
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
-            let xsize = samples.len();
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            let y_mult = F32SimdVec::splat(d, 10000.0 / intensity_target);
 
             pq_to_linear(intensity_target, &mut samples);
-            pq_to_linear_simd(
-                jxl_simd::ScalarDescriptor::new().unwrap(),
-                intensity_target,
-                xsize,
-                &mut simd,
-            );
+            for s in &mut simd {
+                *s = pq_to_linear_simd_vec(d, y_mult, *s);
+            }
             assert_close!(all, &samples, &simd, 2e-5);
             Ok(())
         });
