@@ -279,6 +279,7 @@ impl SqueezeInfo {
             in_res: borrow_channel(buffers, in_res),
             in_next_border: in_next_avg.map(|x| borrow_border(buffers, x)),
             out_prev_border: out_prev.map(|x| borrow_border(buffers, x)),
+            vertical,
         }
     }
 
@@ -362,6 +363,7 @@ struct SqueezeInputs<'a> {
     in_res: RwLockReadGuard<'a, Option<ModularChannel>>,
     in_next_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
     out_prev_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
+    vertical: bool,
 }
 
 impl<'a> SqueezeInputs<'a> {
@@ -383,11 +385,27 @@ impl<'a> SqueezeInputs<'a> {
             .rect(rect.to_byte_rect_sz(storage.sample_size()))
     }
 
-    fn in_next_border(&self) -> Option<RawImageRect<'_>> {
+    fn in_next_border(&self, rect: Rect, storage: ModularStorage) -> Option<RawImageRect<'_>> {
         self.in_next_border
             .as_ref()
             .and_then(|g| g.as_ref())
-            .map(|img| img.as_rect())
+            .map(|img| {
+                // The border has the same grid kind as the average buffer,
+                // so its view must use the same origin as `in_avg_rect`.
+                let rect = rect.to_byte_rect_sz(storage.sample_size());
+                let border = img.as_rect();
+                let (width_bytes, height) = border.byte_size();
+                let origin = if self.vertical {
+                    (rect.origin.0, 0)
+                } else {
+                    (0, rect.origin.1)
+                };
+
+                border.rect(Rect {
+                    origin,
+                    size: (width_bytes - origin.0, height - origin.1),
+                })
+            })
     }
 
     fn out_prev_border(&self) -> Option<RawImageRect<'_>> {
@@ -981,7 +999,7 @@ impl TransformStepChunk {
                                 )?;
                             }
                             let inputs = info.borrow_inputs(buffers, vertical);
-                            let in_next = inputs.in_next_border();
+                            let in_next = inputs.in_next_border(avg_rect, storage);
                             let out_prev = inputs.out_prev_border();
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(

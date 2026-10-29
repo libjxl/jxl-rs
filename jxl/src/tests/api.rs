@@ -1229,6 +1229,45 @@ fn test_squeeze_boundary_minimal() {
     }
 }
 
+/// Regression test for border buffer indexing when unsqueezing from LF to HF.
+#[test]
+fn squeeze_partial_last_group_is_lossless() {
+    const WIDTH: usize = 2049;
+    const HEIGHT: usize = 257;
+    const PATCH_SIZE: usize = 5;
+    const PATCH: [u8; 75] = [
+        68, 32, 130, 60, 253, 230, 241, 194, 107, 48, 249, 14, 199, 221, 1, 228, 136, 117, 52, 162,
+        15, 11, 13, 4, 195, 110, 216, 14, 113, 224, 253, 119, 176, 118, 112, 235, 148, 11, 213, 51,
+        95, 151, 61, 170, 216, 97, 155, 145, 255, 201, 17, 245, 124, 206, 212, 88, 187, 191, 44,
+        224, 55, 83, 201, 189, 250, 15, 240, 22, 157, 201, 87, 86, 116, 6, 102,
+    ];
+    let data = std::fs::read("resources/test/squeeze_2049x257_corner_patch.jxl").unwrap();
+    let frames = decode::<f32>(&data, DecodeParams::default()).unwrap();
+    assert_eq!(frames.len(), 1);
+    let img = &frames[0][0];
+    assert_eq!(img.size(), (WIDTH * 3, HEIGHT));
+
+    for py in 0..PATCH_SIZE {
+        let y = HEIGHT - PATCH_SIZE + py;
+        let row = img.row(y);
+        for px in 0..PATCH_SIZE {
+            let x = WIDTH - PATCH_SIZE + px;
+            for c in 0..3 {
+                let sample = row[x * 3 + c];
+                assert!(
+                    sample.is_finite(),
+                    "non-finite sample at ({x}, {y}), channel {c}"
+                );
+                assert_eq!(
+                    (sample * 255.0).round() as u8,
+                    PATCH[(py * PATCH_SIZE + px) * 3 + c],
+                    "pixel ({x}, {y}), channel {c}"
+                );
+            }
+        }
+    }
+}
+
 /// Regression test for grid boundary bug with odd-width images (issue #728 variant).
 #[test]
 fn decode_test_strategic_solid_blue_grid_boundary() {
