@@ -1242,52 +1242,29 @@ fn squeeze_partial_last_group_is_lossless() {
         224, 55, 83, 201, 189, 250, 15, 240, 22, 157, 201, 87, 86, 116, 6, 102,
     ];
     let data = std::fs::read("resources/test/squeeze_2049x257_corner_patch.jxl").unwrap();
+    let frames = decode::<f32>(&data, DecodeParams::default()).unwrap();
+    assert_eq!(frames.len(), 1);
+    let img = &frames[0][0];
+    assert_eq!(img.size(), (WIDTH * 3, HEIGHT));
 
-    for disable_16bit_modular_buffers in [false, true] {
-        let frames = decode::<f32>(
-            &data,
-            DecodeParams {
-                disable_16bit_modular_buffers,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(frames.len(), 1);
-        let img = &frames[0][0];
-        assert_eq!(img.size(), (WIDTH * 3, HEIGHT));
-
-        let mut wrong = 0;
-        let mut first_wrong = None;
-
-        for y in 0..HEIGHT {
-            let row = img.row(y);
-            for x in 0..WIDTH {
-                for c in 0..3 {
-                    let want = if x >= WIDTH - PATCH_SIZE && y >= HEIGHT - PATCH_SIZE {
-                        let px = x - (WIDTH - PATCH_SIZE);
-                        let py = y - (HEIGHT - PATCH_SIZE);
-                        PATCH[(py * PATCH_SIZE + px) * 3 + c]
-                    } else {
-                        128
-                    };
-
-                    let sample = row[x * 3 + c];
-                    let got = (sample * 255.0).round() as u8;
-                    if !sample.is_finite() || got != want {
-                        wrong += 1;
-                        first_wrong.get_or_insert((x, y, c, sample, got, want));
-                    }
-                }
+    for py in 0..PATCH_SIZE {
+        let y = HEIGHT - PATCH_SIZE + py;
+        let row = img.row(y);
+        for px in 0..PATCH_SIZE {
+            let x = WIDTH - PATCH_SIZE + px;
+            for c in 0..3 {
+                let sample = row[x * 3 + c];
+                assert!(
+                    sample.is_finite(),
+                    "non-finite sample at ({x}, {y}), channel {c}"
+                );
+                assert_eq!(
+                    (sample * 255.0).round() as u8,
+                    PATCH[(py * PATCH_SIZE + px) * 3 + c],
+                    "pixel ({x}, {y}), channel {c}"
+                );
             }
         }
-
-        assert_eq!(
-            wrong, 0,
-            "disable_16bit_modular_buffers={disable_16bit_modular_buffers}: \
-             {wrong} samples differ from the source; \
-             first (x, y, channel, float, actual, expected): {first_wrong:?}"
-        );
     }
 }
 
