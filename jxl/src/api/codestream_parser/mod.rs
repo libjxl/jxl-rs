@@ -173,6 +173,13 @@ impl CodestreamParser {
         }
     }
 
+    pub(super) fn skip_frames(&mut self, count: usize) {
+        if count > 0 {
+            let current = self.visible_frames_to_skip.unwrap_or(0);
+            self.visible_frames_to_skip = Some(current.saturating_add(count));
+        }
+    }
+
     pub(super) fn start_new_frame(
         &mut self,
         seek_target: &VisibleFrameSeekTarget,
@@ -356,7 +363,7 @@ impl CodestreamParser {
                     let is_stored = stored_slot(header).is_some();
                     if !header.is_visible() {
                         process_mode = ProcessMode::SkipOutput;
-                    } else if let Some(n) = self.visible_frames_to_skip.as_mut() {
+                    } else if !is_preview && let Some(n) = self.visible_frames_to_skip.as_mut() {
                         if *n > 0 {
                             *n -= 1;
                             // A frame that is not stored does not affect later frames.
@@ -401,8 +408,6 @@ impl CodestreamParser {
                         toc,
                         self.image_info.file_header(),
                         decode_options,
-                        self.pixel_format.as_ref().unwrap(),
-                        self.output_color_profile.as_ref().unwrap(),
                         process_mode,
                         level5_limits,
                     )?;

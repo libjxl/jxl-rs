@@ -64,6 +64,7 @@ pub struct JxlBasicInfo {
     pub uses_original_profile: bool,
     pub tone_mapping: ToneMapping,
     pub preview_size: Option<(usize, usize)>,
+    pub intrinsic_size: (usize, usize),
 }
 
 pub type JxlParallelRunnerFun<'a> = dyn Fn(usize) -> Result<()> + Sync + 'a;

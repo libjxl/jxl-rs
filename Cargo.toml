@@ -17,6 +17,8 @@ members = [
   "jxl",
   "jxl-gainmap",
   "jxl-image-rs-integration",
+  "jxl-libjxl-c-api",
+  "jxl-libjxl-c-api-tests",
   "jxl_cli",
   "jxl_cms",
   "jxl_macros",

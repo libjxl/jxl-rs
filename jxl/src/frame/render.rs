@@ -117,11 +117,14 @@ impl Frame {
             return Ok(false);
         }
 
-        if self.render_pipeline.is_none() || self.lf_global.is_none() {
+        if self.lf_global.is_none() {
             assert_eq!(groups.iter().map(|x| x.1.len()).sum::<usize>(), 0);
-            // We don't yet have any output ready (as the pipeline would be initialized otherwise),
-            // so exit without doing anything.
+            // We don't yet have any output ready, so exit without doing anything.
             return Ok(false);
+        }
+
+        if self.render_pipeline.is_none() {
+            self.prepare_render_pipeline(pixel_format, output_profile)?;
         }
 
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();

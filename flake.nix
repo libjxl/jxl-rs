@@ -80,12 +80,18 @@
         buildCraneLib = mkCraneLib rustBuildToolchain;
 
         jxlFilter = path: type: builtins.match ".*jxl$" path != null;
+        cSourceFilter =
+          path: type:
+          (pkgs.lib.hasSuffix ".h" path)
+          || (pkgs.lib.hasSuffix ".c" path)
+          || (pkgs.lib.hasSuffix ".cc" path);
         ditherTableFilter = path: type: pkgs.lib.hasSuffix "/dither_32x32.bin" path;
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter =
             path: type:
             (jxlFilter path type)
+            || (cSourceFilter path type)
             || (ditherTableFilter path type)
             || (buildCraneLib.filterCargoSources path type);
           name = "source";

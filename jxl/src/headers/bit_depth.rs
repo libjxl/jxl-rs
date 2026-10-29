@@ -7,6 +7,7 @@ use std::fmt::Debug;
 
 use jxl_macros::UnconditionalCoder;
 
+use crate::api::JxlBitDepth;
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::encodings::*;
@@ -84,6 +85,18 @@ impl BitDepth {
     }
     pub fn floating_point_sample(&self) -> bool {
         self.floating_point_sample
+    }
+    pub fn to_api(self) -> JxlBitDepth {
+        if self.floating_point_sample {
+            JxlBitDepth::Float {
+                bits_per_sample: self.bits_per_sample,
+                exponent_bits_per_sample: self.exponent_bits_per_sample,
+            }
+        } else {
+            JxlBitDepth::Int {
+                bits_per_sample: self.bits_per_sample,
+            }
+        }
     }
     fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.floating_point_sample {

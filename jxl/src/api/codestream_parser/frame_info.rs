@@ -138,6 +138,10 @@ impl FrameInfo {
             .or(self.frame.as_ref().map(|x| x.header()))
     }
 
+    pub fn has_render_pipeline(&self) -> bool {
+        self.frame.as_ref().is_some_and(|f| f.has_render_pipeline())
+    }
+
     #[cfg(test)]
     pub fn current_toc(&self) -> Option<&crate::headers::toc::Toc> {
         self.frame.as_ref().map(|x| x.toc())
@@ -212,15 +216,12 @@ impl FrameInfo {
         Ok(self.toc_parser.take().unwrap().finalize())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn make_frame(
         &mut self,
         cbuf: &mut SmallBuffer,
         toc: Toc,
         file_header: &FileHeader,
         decode_options: &JxlDecoderOptions,
-        pixel_format: &JxlPixelFormat,
-        output_profile: &JxlColorProfile,
         process_mode: ProcessMode,
         level5_limits: bool,
     ) -> Result<()> {
@@ -254,7 +255,7 @@ impl FrameInfo {
                 });
             decoder_state.level5_limits = level5_limits;
             decoder_state.keep_slots(std::mem::replace(&mut self.keep_slots, [true; 8]));
-            let mut frame = Frame::from_header_and_toc(
+            let frame = Frame::from_header_and_toc(
                 self.frame_header.take().unwrap(),
                 toc,
                 decoder_state,
@@ -331,7 +332,6 @@ impl FrameInfo {
 
             self.section_state =
                 SectionState::new(frame.header().num_lf_groups(), frame.header().num_groups());
-            frame.prepare_render_pipeline(pixel_format, output_profile)?;
             self.frame = Some(frame);
         } else {
             let num = (cbuf.len() as u64).min(self.section_size) as usize;

@@ -26,9 +26,14 @@ memory requirements.
 
 ## Safety
 
-The vast majority of the code uses safe Rust. Where `unsafe` is needed for
-performance benefits (including SIMD), we require unsafe code to have extensive
-safety comments and to be reviewed by a non-author Unsafe Rust expert.
+The vast majority of the code uses safe Rust. In core libraries, where `unsafe`
+is needed for performance benefits (including SIMD), we require unsafe code to
+have extensive safety comments and to be reviewed by a non-author Unsafe Rust
+expert.
+
+We do not hold the `jxl-libjxl-c-api` crate to the same safety standards,
+although we still do our best to ensure any unsafe code is sound, reviewed and
+properly commented.
 
 ## Workspace Crates
 
@@ -36,7 +41,12 @@ safety comments and to be reviewed by a non-author Unsafe Rust expert.
 - [`jxl-gainmap`](jxl-gainmap/): Parser helpers for HDR gain map boxes.
 - [`jxl-image-rs-integration`](jxl-image-rs-integration/): Integration for the `image` crate.
 - [`jxl_cli`](jxl_cli/): CLI decoding and benchmarking tool.
-- [`jxl_cms`](jxl_cms/), [`jxl_simd`](jxl_simd/), [`jxl_transforms`](jxl_transforms/), [`jxl_macros`](jxl_macros/): Internal crates for color management, SIMD acceleration, transforms, and macros.
+- [`jxl_cms`](jxl_cms/), [`jxl_simd`](jxl_simd/), [`jxl_transforms`](jxl_transforms/),
+  [`jxl_macros`](jxl_macros/): Internal crates for color management, SIMD acceleration,
+  transforms, and macros.
+- [`jxl-libjxl-c-api`]: compatibility shim for the libjxl C API. It is not fully feature
+  complete, but should be compatible with most usages of the decode API. If you are
+  writing a new application using jxl-rs, please *do not use* this API.
 
 ## Usage
 

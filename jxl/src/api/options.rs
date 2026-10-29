@@ -20,7 +20,6 @@ pub struct JxlDecoderOptions {
     /// and the caller is responsible for applying the orientation.
     pub adjust_orientation: bool,
     pub render_spot_colors: bool,
-    pub coalescing: bool,
     pub desired_intensity_target: Option<f32>,
     pub skip_preview: bool,
     /// Fail decoding images with more than this number of samples, or with frames with
@@ -95,7 +94,6 @@ impl Default for JxlDecoderOptions {
         Self {
             adjust_orientation: true,
             render_spot_colors: true,
-            coalescing: true,
             skip_preview: true,
             desired_intensity_target: None,
             sample_limit: None,

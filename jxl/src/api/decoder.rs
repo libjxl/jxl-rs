@@ -33,6 +33,8 @@ pub struct VisibleFrameInfo {
     pub duration_ms: f64,
     /// Duration in raw ticks from the animation header.
     pub duration_ticks: u32,
+    /// Timecode from the frame header (0 if `have_timecodes` is false).
+    pub timecode: u32,
     /// Byte offset of this frame's header in the input file.
     pub file_offset: u64,
     /// Whether this is the last frame in the codestream.
@@ -85,6 +87,25 @@ impl JxlDecoder {
     pub fn reset(&mut self) {
         self.box_parser.reset();
         self.codestream_parser.reset();
+    }
+
+    /// Updates the decoder options.
+    ///
+    /// Should only be called before decoding starts (or after [`Self::reset`]).
+    pub fn set_options(&mut self, options: JxlDecoderOptions) {
+        self.box_parser
+            .set_aux_boxes(options.request_aux_boxes.iter().copied());
+        self.options = options;
+    }
+
+    /// Skips the next `count` visible frames.
+    ///
+    /// If the decoder is currently in the middle of a visible frame (after
+    /// [`Event::FrameHeader`] and before [`Event::FrameComplete`]), skipping starts from the
+    /// following visible frame. Calling this multiple times accumulates the number of frames to
+    /// skip.
+    pub fn skip_frames(&mut self, count: usize) {
+        self.codestream_parser.skip_frames(count);
     }
 
     #[cfg(test)]
@@ -141,13 +162,9 @@ impl JxlDecoder {
 
     /// Specifies the pixel format for output buffers.
     ///
-    /// Setting this may also change the output color profile if it was not set
-    /// manually before.
-    ///
-    /// Frame render pipelines are built for the pixel format that is current
-    /// when the frame's TOC is parsed, so the format can only be changed after
-    /// [`Event::BasicInfo`](crate::api::Event::BasicInfo) and before the first
-    /// frame header is decoded.
+    /// Setting this may also change the output color profile. Can only be
+    /// called after [`Event::BasicInfo`](crate::api::Event::BasicInfo), and not
+    /// while a frame is being rendered.
     pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) -> Result<()> {
         // TODO(veluca): return an error if we are asking for both planar and
         // interleaved-in-color alpha.
@@ -156,17 +173,11 @@ impl JxlDecoder {
                 "cannot set pixel format before BasicInfo",
             ));
         }
-        let frame_header_was_decoded = self
-            .codestream_parser
-            .frame_info
-            .current_frame_header()
-            .is_some()
-            || !self.codestream_parser.scanned_frames().is_empty();
-        if frame_header_was_decoded
+        if self.codestream_parser.frame_info.has_render_pipeline()
             && self.codestream_parser.pixel_format.as_ref() != Some(&pixel_format)
         {
             return Err(Error::ApiUsageError(
-                "cannot change pixel format after first frame header",
+                "cannot change pixel format during frame decoding",
             ));
         }
         self.codestream_parser.pixel_format = Some(pixel_format);

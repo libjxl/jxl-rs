@@ -33,30 +33,29 @@ pub enum ExtraChannel {
     Optional,
 }
 
-// TODO(veluca): figure out if these fields should be unused.
-#[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug, Clone)]
 #[validate]
 pub struct ExtraChannelInfo {
     #[all_default]
+    #[allow(dead_code)]
     all_default: bool,
     #[default(ExtraChannel::Alpha)]
     pub ec_type: ExtraChannel,
     #[default(BitDepth::default(&field_nonserialized))]
-    bit_depth: BitDepth,
+    pub bit_depth: BitDepth,
     #[coder(u2S(0, 3, 4, Bits(3) + 1))]
     #[default(0)]
-    dim_shift: u32,
-    name: String,
+    pub dim_shift: u32,
+    pub name: String,
     // TODO(veluca93): if using Option<bool>, this is None when all_default.
     #[condition(ec_type == ExtraChannel::Alpha)]
     #[default(false)]
-    alpha_associated: bool,
+    pub alpha_associated: bool,
     #[condition(ec_type == ExtraChannel::SpotColor)]
     pub spot_color: Option<[f32; 4]>,
     #[condition(ec_type == ExtraChannel::CFA)]
     #[coder(u2S(1, Bits(2), Bits(4) + 3, Bits(8) + 19))]
-    cfa_channel: Option<u32>,
+    pub cfa_channel: Option<u32>,
 }
 
 impl ExtraChannelInfo {

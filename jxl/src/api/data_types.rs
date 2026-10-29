@@ -298,10 +298,15 @@ impl JxlBitDepth {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct JxlExtraChannel {
     pub ec_type: ExtraChannel,
     pub alpha_associated: bool,
+    pub bit_depth: JxlBitDepth,
+    pub dim_shift: u32,
+    pub name: String,
+    pub spot_color: Option<[f32; 4]>,
+    pub cfa_channel: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
