@@ -1472,6 +1472,19 @@ fn test_modular_rle_fast_path() {
     );
 }
 
+/// Regression test: a VarDCT block that codes u32::MAX nonzero coefficients. On 32-bit targets
+/// a non-checked `nonzeros + num_blocks` either panics in debug mode or causes a crash later on.
+#[test]
+fn test_fuzzer_vardct_num_nonzeros_overflow() {
+    let data = include_bytes!("../../tests/testdata/vardct_num_nonzeros_overflow.jxl");
+    let result = decode::<f32>(data, DecodeParams::default());
+    assert!(
+        matches!(result, Err(Error::InvalidNumNonZeros(..))),
+        "expected an invalid number of nonzeros error, got {:?}",
+        result.map(|_| "a decoded image")
+    );
+}
+
 /// Decoding with `adjust_orientation: false` must output pixels in
 /// codestream order and report the codestream size in the basic info;
 /// re-applying the orientation must reproduce the default (oriented) output.

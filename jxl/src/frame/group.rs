@@ -986,7 +986,8 @@ pub fn decode_vardct_group(
                        nzeros: {nonzeros}",
                         sbx[c], sby[c]
                     );
-                    if nonzeros + num_blocks > num_coeffs {
+                    // Note: up-cast from usize to u64 here to avoid an overflow on 32-bit platforms:
+                    if (nonzeros as u64) + num_blocks as u64 > num_coeffs as u64 {
                         return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                     }
                     let val = nonzeros.shrc(log_num_blocks) as u8;
