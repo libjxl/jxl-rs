@@ -409,7 +409,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 Stage::Save(s) => {
                     let (dx, dy) = self.downsampling_for_stage[i];
                     s.check_buffer_size(
-                        (size.0 >> dx, size.1 >> dy),
+                        (size.0.shrc(dx), size.1.shrc(dy)),
                         buffers[s.output_buffer_index].as_ref(),
                     )?
                 }
