@@ -210,6 +210,10 @@ impl CodestreamParser {
         start.box_parser_checkpoint
     }
 
+    pub(super) fn frame_header_was_decoded(&self) -> bool {
+        self.frame_info.current_frame_header().is_some() || !self.scanned_frames().is_empty()
+    }
+
     fn has_more_frames(&self) -> bool {
         !matches!(self.state, ParserState::TrailingData | ParserState::Done)
     }

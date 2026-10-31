@@ -226,7 +226,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             .iter()
             .zip(shared.channel_info.iter())
             .map(|(s, ci)| {
-                let dowsamplings: Vec<_> = (0..nc)
+                let downsamplings: Vec<_> = (0..nc)
                     .filter_map(|c| {
                         if s.uses_channel(c) {
                             Some(ci[c].downsample)
@@ -235,10 +235,10 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                         }
                     })
                     .collect();
-                for &d in dowsamplings.iter() {
-                    assert_eq!(d, dowsamplings[0]);
+                for &d in downsamplings.iter() {
+                    assert_eq!(d, downsamplings[0]);
                 }
-                (dowsamplings[0].0 as usize, dowsamplings[0].1 as usize)
+                (downsamplings[0].0 as usize, downsamplings[0].1 as usize)
             })
             .collect();
 

@@ -95,7 +95,7 @@ impl<const SHIFT: u8> RenderPipelineInOutStage for DownsampleStage<SHIFT> {
         let weights = scratch.weights.chunks_exact_mut(out_width);
         for (c, (weights, alpha)) in weights.zip(&self.alpha).enumerate() {
             let samples = input.row(c);
-            let dest = output.row_mut(c, 0);
+            let dest = &mut output.row_mut(c, 0)[..out_width];
             if scratch.need_reset {
                 dest.fill(0.0);
             }

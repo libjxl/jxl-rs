@@ -13,7 +13,6 @@ use crate::error::{Error, Result};
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::{FileHeader, JxlHeader};
 use crate::icc::IncrementalIccReader;
-use crate::util::ShiftRightCeil;
 
 pub struct ImageInfo {
     file_header: Option<FileHeader>,
@@ -51,6 +50,16 @@ impl ImageInfo {
 
     pub fn basic_info(&self) -> &JxlBasicInfo {
         self.basic_info.as_ref().unwrap()
+    }
+
+    pub(in crate::api) fn update_size(&mut self, options: &JxlDecoderOptions) {
+        let Some(file_header) = &self.file_header else {
+            return;
+        };
+        let Some(basic_info) = &mut self.basic_info else {
+            return;
+        };
+        basic_info.update_size(file_header, options);
     }
 
     pub fn embedded_color_profile(&self) -> &JxlColorProfile {
@@ -103,15 +112,10 @@ impl ImageInfo {
                 file_header.image_metadata.extra_channel_info.len(),
             )?;
         }
-        let shift = decode_options.downsample_factor;
-        let (xsize, ysize) = (xsize.shrc(shift), ysize.shrc(shift));
         let data = &file_header.image_metadata;
-        self.basic_info = Some(JxlBasicInfo {
-            size: if decode_options.adjust_orientation && data.orientation.is_transposing() {
-                (ysize, xsize)
-            } else {
-                (xsize, ysize)
-            },
+        let mut basic_info = JxlBasicInfo {
+            // Will be set by `update_size` below
+            size: (xsize, ysize),
             bit_depth: if data.bit_depth.floating_point_sample() {
                 JxlBitDepth::Float {
                     bits_per_sample: data.bit_depth.bits_per_sample(),
@@ -147,13 +151,11 @@ impl ImageInfo {
                 relative_to_max_display: data.tone_mapping.relative_to_max_display,
                 linear_below: data.tone_mapping.linear_below,
             },
-            preview_size: data.preview.as_ref().map(|p| {
-                (
-                    (p.xsize() as usize).shrc(shift),
-                    (p.ysize() as usize).shrc(shift),
-                )
-            }),
-        });
+            // Will be set by `update_size` below
+            preview_size: None,
+        };
+        basic_info.update_size(&file_header, decode_options);
+        self.basic_info = Some(basic_info);
         self.file_header = Some(file_header);
         *bits = br.total_bits_read();
         Ok(())
