@@ -30,8 +30,8 @@ use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::stages::*;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
-use crate::util::SmallVec;
-use crate::util::sync::{Arc, RwLock};
+use crate::util::sync::Arc;
+use crate::util::{SharedSnapshot, SmallVec};
 
 #[cfg(test)]
 macro_rules! pipeline_mut {
@@ -517,12 +517,12 @@ impl Frame {
     pub fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
-        patches: Arc<RwLock<PatchesDictionary>>,
-        splines: Arc<RwLock<Splines>>,
-        noise: Arc<RwLock<Noise>>,
-        lf_quant: Arc<RwLock<LfQuantFactors>>,
-        color_correlation_params: Arc<RwLock<ColorCorrelationParams>>,
-        epf_sigma: Arc<RwLock<SigmaSource>>,
+        patches: Arc<SharedSnapshot<PatchesDictionary>>,
+        splines: Arc<SharedSnapshot<Splines>>,
+        noise: Arc<SharedSnapshot<Noise>>,
+        lf_quant: Arc<SharedSnapshot<LfQuantFactors>>,
+        color_correlation_params: Arc<SharedSnapshot<ColorCorrelationParams>>,
+        epf_sigma: Arc<SharedSnapshot<SigmaSource>>,
         pixel_format: &JxlPixelFormat,
         output_profile: &JxlColorProfile,
         buffer_recycler: Arc<crate::image::BufferRecycler>,

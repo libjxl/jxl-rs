@@ -26,7 +26,7 @@ use crate::headers::permutation::Permutation;
 use crate::headers::toc::Toc;
 use crate::image::{BufferRecycler, Image, Rect};
 use crate::render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter};
-use crate::util::sync::{Arc, Mutex, RwLock};
+use crate::util::sync::{Arc, Mutex};
 use crate::util::tracing_wrappers::*;
 
 mod adaptive_lf_smoothing;
@@ -67,7 +67,7 @@ pub struct PassState {
     histograms: Histograms,
 }
 
-use crate::util::CacheLine;
+use crate::util::{CacheLine, SharedSnapshot};
 
 pub struct HfGlobalState {
     num_histograms: u32,
@@ -326,12 +326,12 @@ pub struct Frame {
     lf_frame_data: Option<[Image<f32>; 3]>,
     section0_render_up_to_date: bool,
     group_status: GroupStatus,
-    patches: Arc<RwLock<PatchesDictionary>>,
-    splines: Arc<RwLock<Splines>>,
-    noise: Arc<RwLock<Noise>>,
-    lf_quant: Arc<RwLock<LfQuantFactors>>,
-    color_correlation_params: Arc<RwLock<ColorCorrelationParams>>,
-    epf_sigma: Arc<RwLock<SigmaSource>>,
+    patches: Arc<SharedSnapshot<PatchesDictionary>>,
+    splines: Arc<SharedSnapshot<Splines>>,
+    noise: Arc<SharedSnapshot<Noise>>,
+    lf_quant: Arc<SharedSnapshot<LfQuantFactors>>,
+    color_correlation_params: Arc<SharedSnapshot<ColorCorrelationParams>>,
+    epf_sigma: Arc<SharedSnapshot<SigmaSource>>,
     // LF groups that received data and thus should trigger a modular
     // re-render of the corresponding groups.
     dirty_lf_groups: BTreeSet<usize>,

@@ -14,7 +14,8 @@ use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
     for_each_chunk,
 };
-use crate::util::sync::{Arc, RwLock};
+use crate::util::sync::Arc;
+use crate::util::{SharedSnapshot, SnapshotReader};
 
 pub struct ConvolveNoiseStage {
     first_channel: usize,
@@ -294,16 +295,22 @@ simd_function!(
 );
 
 pub struct AddNoiseStage {
-    noise: Arc<RwLock<Noise>>,
+    noise: Arc<SharedSnapshot<Noise>>,
     first_channel: usize,
-    color_correlation: Arc<RwLock<ColorCorrelationParams>>,
+    color_correlation: Arc<SharedSnapshot<ColorCorrelationParams>>,
+}
+
+/// Per-thread state: cached snapshots of the noise parameters and color correlation.
+struct AddNoiseState {
+    noise: SnapshotReader<Noise>,
+    color_correlation: SnapshotReader<ColorCorrelationParams>,
 }
 
 impl AddNoiseStage {
     #[allow(dead_code)]
     pub fn new(
-        noise: Arc<RwLock<Noise>>,
-        color_correlation: Arc<RwLock<ColorCorrelationParams>>,
+        noise: Arc<SharedSnapshot<Noise>>,
+        color_correlation: Arc<SharedSnapshot<ColorCorrelationParams>>,
         first_channel: usize,
     ) -> AddNoiseStage {
         assert!(first_channel > 2);
@@ -339,14 +346,15 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         _position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
-        _state: Option<&mut ErasedLocalState>,
+        state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let noise = self.noise.try_read().unwrap();
+        let state: &mut AddNoiseState = state.unwrap().downcast_mut().unwrap();
+        let noise = state.noise.get(&self.noise);
         if noise.lut == [0.0; 8] {
             return;
         }
-        let color_correlation = self.color_correlation.try_read().unwrap();
+        let color_correlation = state.color_correlation.get(&self.color_correlation);
         let ytox = color_correlation.y_to_x_lf();
         let ytob = color_correlation.y_to_b_lf();
 
@@ -354,6 +362,13 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         let row_rnd: [&[f32]; 3] = [&*rest[0], &*rest[1], &*rest[2]];
 
         add_noise_simd_dispatch(row_c, &row_rnd, &noise.lut, ytox, ytob, xsize);
+    }
+
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
+        Ok(Some(Box::new(AddNoiseState {
+            noise: self.noise.reader(),
+            color_correlation: self.color_correlation.reader(),
+        }) as Box<ErasedLocalState>))
     }
 }
 
@@ -368,7 +383,8 @@ mod test {
     use crate::render::stages::noise::{AddNoiseStage, ConvolveNoiseStage};
     use crate::render::test::make_and_run_simple_pipeline;
     use crate::tests::assert_close;
-    use crate::util::sync::{Arc, RwLock};
+    use crate::util::SharedSnapshot;
+    use crate::util::sync::Arc;
 
     #[test]
     fn convolve_noise_consistency() -> Result<()> {
@@ -388,10 +404,10 @@ mod test {
         let input_c4: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
         let input_c5: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
         let stage = AddNoiseStage::new(
-            Arc::new(RwLock::new(Noise {
+            Arc::new(SharedSnapshot::new(Noise {
                 lut: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
             })),
-            Arc::new(RwLock::new(ColorCorrelationParams::default())),
+            Arc::new(SharedSnapshot::new(ColorCorrelationParams::default())),
             3,
         );
         let output = make_and_run_simple_pipeline(
@@ -485,10 +501,10 @@ mod test {
         crate::render::test::test_stage_consistency(
             || {
                 AddNoiseStage::new(
-                    Arc::new(RwLock::new(Noise {
+                    Arc::new(SharedSnapshot::new(Noise {
                         lut: [0.0, 2.0, 1.0, 0.0, 1.0, 3.0, 1.1, 2.3],
                     })),
-                    Arc::new(RwLock::new(ColorCorrelationParams::default())),
+                    Arc::new(SharedSnapshot::new(ColorCorrelationParams::default())),
                     3,
                 )
             },

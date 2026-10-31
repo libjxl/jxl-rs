@@ -7,23 +7,24 @@ use crate::features::patches::PatchesDictionary;
 use crate::frame::ReferenceFrame;
 use crate::headers::extra_channels::ExtraChannelInfo;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
-use crate::util::NewWithCapacity as _;
-use crate::util::sync::{Arc, RwLock};
+use crate::util::sync::Arc;
+use crate::util::{NewWithCapacity as _, SharedSnapshot, SnapshotReader};
 
 pub struct PatchesStage {
-    patches: Arc<RwLock<PatchesDictionary>>,
+    patches: Arc<SharedSnapshot<PatchesDictionary>>,
     extra_channels: Vec<ExtraChannelInfo>,
     decoder_state: Arc<[Option<ReferenceFrame>; 4]>,
 }
 
 struct PatchesState {
+    patches: SnapshotReader<PatchesDictionary>,
     patches_for_row_result: Vec<usize>,
     blending_scratch: Vec<f32>,
 }
 
 impl PatchesStage {
     pub fn new(
-        patches: Arc<RwLock<PatchesDictionary>>,
+        patches: Arc<SharedSnapshot<PatchesDictionary>>,
         extra_channels: Vec<ExtraChannelInfo>,
         decoder_state: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Self {
@@ -56,11 +57,11 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let patches = self.patches.try_read().unwrap();
+        let state: &mut PatchesState = state.unwrap().downcast_mut().unwrap();
+        let patches = state.patches.get(&self.patches);
         if patches.positions.is_empty() {
             return;
         }
-        let state: &mut PatchesState = state.unwrap().downcast_mut().unwrap();
         if state.patches_for_row_result.capacity() < patches.positions.len() {
             state
                 .patches_for_row_result
@@ -79,10 +80,11 @@ impl RenderPipelineInPlaceStage for PatchesStage {
 
     fn init_local_state(&self) -> crate::error::Result<Option<Box<ErasedLocalState>>> {
         // TODO(veluca): I think this is wrong, check that.
-        let patches = self.patches.try_read().unwrap();
-        let len = patches.positions.len();
+        let mut patches = self.patches.reader();
+        let len = patches.get(&self.patches).positions.len();
         let patches_for_row_result = Vec::<usize>::new_with_capacity(len)?;
         Ok(Some(Box::new(PatchesState {
+            patches,
             patches_for_row_result,
             blending_scratch: Vec::new(),
         }) as Box<ErasedLocalState>))
@@ -119,7 +121,7 @@ mod test {
         ]);
         crate::render::test::test_stage_consistency(
             || PatchesStage {
-                patches: Arc::new(RwLock::new(patch_dict.clone())),
+                patches: Arc::new(SharedSnapshot::new(patch_dict.clone())),
                 extra_channels: file_header.image_metadata.extra_channel_info.clone(),
                 decoder_state: reference_frames.clone(),
             },

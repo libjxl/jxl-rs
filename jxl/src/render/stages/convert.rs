@@ -10,17 +10,23 @@ use crate::headers::bit_depth::BitDepth;
 use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, VecLoad, for_each_chunk,
 };
-use crate::util::sync::{Arc, RwLock};
+use crate::util::sync::Arc;
+use crate::util::{SharedSnapshot, SnapshotReader};
+
+/// Per-thread state: a cached snapshot of the LF quantization factors.
+struct LfQuantState {
+    lf_quant: SnapshotReader<LfQuantFactors>,
+}
 
 pub struct ConvertModularXYBToF32Stage {
     first_channel: usize,
-    lf_quant: Arc<RwLock<LfQuantFactors>>,
+    lf_quant: Arc<SharedSnapshot<LfQuantFactors>>,
 }
 
 impl ConvertModularXYBToF32Stage {
     pub fn new(
         first_channel: usize,
-        lf_quant: Arc<RwLock<LfQuantFactors>>,
+        lf_quant: Arc<SharedSnapshot<LfQuantFactors>>,
     ) -> ConvertModularXYBToF32Stage {
         ConvertModularXYBToF32Stage {
             first_channel,
@@ -113,10 +119,11 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         xsize: usize,
         input_rows: &Channels<i32>,
         output_rows: &mut ChannelsMut<f32>,
-        _state: Option<&mut ErasedLocalState>,
+        state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let lf_quant = self.lf_quant.try_read().unwrap();
+        let state: &mut LfQuantState = state.unwrap().downcast_mut().unwrap();
+        let lf_quant = state.lf_quant.get(&self.lf_quant);
         modular32_xyb_to_float_simd_dispatch(
             input_rows,
             output_rows,
@@ -124,17 +131,23 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
             xsize,
         );
     }
+
+    fn init_local_state(&self) -> crate::error::Result<Option<Box<ErasedLocalState>>> {
+        Ok(Some(Box::new(LfQuantState {
+            lf_quant: self.lf_quant.reader(),
+        }) as Box<ErasedLocalState>))
+    }
 }
 
 pub struct ConvertModular16XYBToF32Stage {
     first_channel: usize,
-    lf_quant: Arc<RwLock<LfQuantFactors>>,
+    lf_quant: Arc<SharedSnapshot<LfQuantFactors>>,
 }
 
 impl ConvertModular16XYBToF32Stage {
     pub fn new(
         first_channel: usize,
-        lf_quant: Arc<RwLock<LfQuantFactors>>,
+        lf_quant: Arc<SharedSnapshot<LfQuantFactors>>,
     ) -> ConvertModular16XYBToF32Stage {
         ConvertModular16XYBToF32Stage {
             first_channel,
@@ -170,16 +183,23 @@ impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
         xsize: usize,
         input_rows: &Channels<i16>,
         output_rows: &mut ChannelsMut<f32>,
-        _state: Option<&mut ErasedLocalState>,
+        state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let lf_quant = self.lf_quant.try_read().unwrap();
+        let state: &mut LfQuantState = state.unwrap().downcast_mut().unwrap();
+        let lf_quant = state.lf_quant.get(&self.lf_quant);
         modular16_xyb_to_float_simd_dispatch(
             input_rows,
             output_rows,
             lf_quant.quant_factors,
             xsize,
         );
+    }
+
+    fn init_local_state(&self) -> crate::error::Result<Option<Box<ErasedLocalState>>> {
+        Ok(Some(Box::new(LfQuantState {
+            lf_quant: self.lf_quant.reader(),
+        }) as Box<ErasedLocalState>))
     }
 }
 
@@ -573,7 +593,7 @@ mod test {
             || {
                 ConvertModular16XYBToF32Stage::new(
                     0,
-                    Arc::new(RwLock::new(LfQuantFactors::default())),
+                    Arc::new(SharedSnapshot::new(LfQuantFactors::default())),
                 )
             },
             (500, 500),
