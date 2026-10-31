@@ -27,6 +27,7 @@ pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub pixel_format: Option<JxlPixelFormat>,
     pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
+    pub downsample_factor: u8,
 }
 
 impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
@@ -42,6 +43,7 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
             pixel_format: None,
             alpha_mode: AlphaMode::AsIs,
             adjust_orientation: true,
+            downsample_factor: 0,
         }
     }
 }
@@ -67,6 +69,7 @@ pub fn decode<'a, T: ImageDataType>(
     let mut parallel_runner = params.parallel_runner;
     let options = JxlDecoderOptions {
         adjust_orientation: params.adjust_orientation,
+        downsample_factor: params.downsample_factor,
         alpha_mode: params.alpha_mode,
         max_profile_level: ProfileLevel::Main10,
         test_options: TestOptions {

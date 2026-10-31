@@ -19,6 +19,8 @@ pub struct JxlDecoderOptions {
     /// output in codestream order, basic info reports the codestream size,
     /// and the caller is responsible for applying the orientation.
     pub adjust_orientation: bool,
+    /// Render at 1 / 2^factor resolution (0 = full resolution, maximum 3).
+    pub downsample_factor: u8,
     pub render_spot_colors: bool,
     pub coalescing: bool,
     pub desired_intensity_target: Option<f32>,
@@ -94,6 +96,7 @@ impl Default for JxlDecoderOptions {
     fn default() -> Self {
         Self {
             adjust_orientation: true,
+            downsample_factor: 0,
             render_spot_colors: true,
             coalescing: true,
             skip_preview: true,

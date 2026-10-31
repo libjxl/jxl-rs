@@ -107,6 +107,18 @@ pub struct Channels<'a, T> {
 }
 
 impl<'a, T> Channels<'a, T> {
+    /// Central input row, starting at the current chunk's first pixel.
+    pub fn row(&self, channel: usize) -> &[T] {
+        self.row_at(channel, 0)
+    }
+
+    /// Input row at a vertical offset, mirrored at the image edge.
+    pub fn row_at(&self, channel: usize, dy: isize) -> &[T] {
+        let y = mirror(self.center_y as isize + dy, self.image_height);
+        let row = (y & (self.num_rows - 1)) * self.stride;
+        &self.channel_buffers[channel][row + self.x_offset..row + self.stride]
+    }
+
     #[inline]
     pub fn from_row_buffers(
         buffers: &[&'a RowBuffer],
@@ -259,6 +271,13 @@ pub struct ChannelsMut<'a, T> {
 }
 
 impl<'a, T> ChannelsMut<'a, T> {
+    /// An output row, including previously accumulated contributions.
+    pub fn row_mut(&mut self, channel: usize, row: usize) -> &mut [T] {
+        assert!(row < self.num_rows);
+        let row = ((self.first_y + row) & (self.num_rows - 1)) * self.stride;
+        &mut self.channel_buffers[channel][row + self.x_offset..row + self.stride]
+    }
+
     #[inline]
     pub fn from_row_buffers(
         buffers: &'a mut [RowBuffer],
