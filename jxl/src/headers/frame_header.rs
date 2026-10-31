@@ -443,12 +443,12 @@ pub struct FrameHeader {
     // The following fields are not actually serialized, but just used as variables for
     // implementing the methods below.
     #[coder(Bits(0))]
-    #[default(if frame_width == 0 { nonserialized.img_width } else { frame_width })]
+    #[default(if !have_crop { nonserialized.img_width } else { frame_width })]
     #[condition(false)]
     pub width: u32,
 
     #[coder(Bits(0))]
-    #[default(if frame_height == 0 { nonserialized.img_height } else { frame_height })]
+    #[default(if !have_crop { nonserialized.img_height } else { frame_height })]
     #[condition(false)]
     pub height: u32,
 
@@ -676,6 +676,21 @@ impl FrameHeader {
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
+        if self.width == 0 || self.height == 0 {
+            return Err(Error::InvalidImageSize(
+                self.width as usize,
+                self.height as usize,
+            ));
+        }
+
+        if self.width > (1 << 30)
+            || self.height > (1 << 30)
+            || (self.width as u64) * (self.height as u64) > (1 << 40)
+        {
+            return Err(Error::ImageDimensionTooLarge(
+                self.width.max(self.height) as u64
+            ));
+        }
         if let Some((dim_shift, effective_upsampling)) = nonserialized
             .extra_channel_info
             .iter()
@@ -911,5 +926,30 @@ mod test_frame_header {
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.name, "TestFrameName");
         assert_eq!(frame_header.name.len(), 13);
+    }
+
+    #[test]
+    fn test_frame_dimension_checks() {
+        let (file_header, mut fh, _) =
+            read_headers_and_toc(include_bytes!("../../resources/test/basic.jxl")).unwrap();
+        let nonserialized = file_header.frame_header_nonserialized();
+
+        for (w, h) in [(0, 8), (8, 0)] {
+            fh.width = w;
+            fh.height = h;
+            assert!(matches!(
+                fh.check(&nonserialized),
+                Err(Error::InvalidImageSize(_, _))
+            ));
+        }
+
+        for (w, h) in [((1 << 30) + 1, 1), (1 << 21, 1 << 20)] {
+            fh.width = w;
+            fh.height = h;
+            assert!(matches!(
+                fh.check(&nonserialized),
+                Err(Error::ImageDimensionTooLarge(_))
+            ));
+        }
     }
 }

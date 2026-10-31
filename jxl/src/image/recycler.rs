@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::frame::VarDctBuffers;
 use crate::frame::modular::ScratchSpace;
 use crate::image::{Image, ImageDataType, OwnedRawImage};
@@ -66,7 +66,11 @@ impl BufferRecycler {
     }
 
     pub(crate) fn get_buffer<T: ImageDataType>(&self, size: (usize, usize)) -> Result<Image<T>> {
-        self.get_raw_buffer((std::mem::size_of::<T>() * size.0, size.1), false)
+        let byte_width = size
+            .0
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(Error::ImageSizeTooLarge(size.0, size.1))?;
+        self.get_raw_buffer((byte_width, size.1), false)
             .map(Image::from_raw)
     }
 

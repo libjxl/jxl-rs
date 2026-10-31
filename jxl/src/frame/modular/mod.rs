@@ -442,14 +442,7 @@ impl FullModularImage {
                         .info
                         .is_meta_or_small(frame_header.group_dim())
                 })
-                .filter(|x| {
-                    let info = &buffer_info[x.1].info;
-                    info.is_shift_in_range(3, usize::MAX) && {
-                        let shift = info.shift.unwrap();
-                        let dim = ModularGridKind::Lf.grid_dim(frame_header, shift);
-                        dim.0 > 0 && dim.1 > 0
-                    }
-                })
+                .filter(|x| buffer_info[x.1].info.is_shift_in_range(3, usize::MAX))
                 .map(|x| x.1)
                 .collect(),
         );
@@ -465,12 +458,9 @@ impl FullModularImage {
                             .is_meta_or_small(frame_header.group_dim())
                     })
                     .filter(|x| {
-                        let info = &buffer_info[x.1].info;
-                        info.is_shift_in_range(min_shift, max_shift) && {
-                            let shift = info.shift.unwrap();
-                            let dim = ModularGridKind::Hf.grid_dim(frame_header, shift);
-                            dim.0 > 0 && dim.1 > 0
-                        }
+                        buffer_info[x.1]
+                            .info
+                            .is_shift_in_range(min_shift, max_shift)
                     })
                     .map(|x| x.1)
                     .collect(),
@@ -506,7 +496,7 @@ impl FullModularImage {
             &section_buffer_indices,
             &mut buffer_info,
             modular_color_channels,
-        );
+        )?;
 
         #[cfg(feature = "tracing")]
         for (i, bi) in buffer_info.iter().enumerate() {

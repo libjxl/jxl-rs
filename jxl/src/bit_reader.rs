@@ -108,7 +108,7 @@ impl<'a> BitReader<'a> {
         let total_read = self.total_bits_read();
         let initial_bits = self.initial_bytes * 8;
         if total_read > initial_bits {
-            Err(Error::OutOfBounds(total_read - initial_bits))
+            Err(Error::OutOfBounds((total_read - initial_bits).div_ceil(8)))
         } else {
             Ok(())
         }
@@ -152,7 +152,7 @@ impl<'a> BitReader<'a> {
         let bits_available = self.data.len() * 8;
         if n > bits_available {
             self.data = &[];
-            return Err(Error::OutOfBounds(n - bits_available));
+            return Err(Error::OutOfBounds((n - bits_available).div_ceil(8)));
         }
 
         // Skip bytes directly in `data`, then handle leftover bits
@@ -239,5 +239,23 @@ mod tests {
         // Read the next 7 bits to complete the byte
         let val = br.read(7).expect("read should work");
         assert_eq!(val, 0x12 >> 1); // Should get the lower 7 bits of 0x12
+    }
+
+    #[test]
+    fn test_out_of_bounds_reports_bytes() {
+        let data = [0xAA];
+        assert!(matches!(
+            BitReader::new(&data).skip_bits(9),
+            Err(Error::OutOfBounds(1))
+        ));
+        assert!(matches!(
+            BitReader::new(&data).skip_bits(17),
+            Err(Error::OutOfBounds(2))
+        ));
+
+        let mut br = BitReader::new(&data);
+        let _ = br.peek(17);
+        br.consume_optimistic(17);
+        assert!(matches!(br.check_for_error(), Err(Error::OutOfBounds(2))));
     }
 }

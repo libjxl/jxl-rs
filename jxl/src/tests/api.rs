@@ -72,6 +72,37 @@ fn test_set_pixel_format() {
     };
     decoder.set_pixel_format(new_format.clone()).unwrap();
     assert_eq!(decoder.current_pixel_format().unwrap(), &new_format);
+
+    let endianness = crate::api::Endianness::native();
+    for invalid in [
+        JxlDataFormat::U8 { bit_depth: 0 },
+        JxlDataFormat::U8 { bit_depth: 9 },
+        JxlDataFormat::U16 {
+            endianness,
+            bit_depth: 0,
+        },
+        JxlDataFormat::U16 {
+            endianness,
+            bit_depth: 17,
+        },
+    ] {
+        assert!(matches!(
+            decoder.set_pixel_format(JxlPixelFormat {
+                color_type: JxlColorType::Rgb,
+                color_data_format: Some(invalid),
+                extra_channel_format: vec![],
+            }),
+            Err(Error::ApiUsageError(_))
+        ));
+        assert!(matches!(
+            decoder.set_pixel_format(JxlPixelFormat {
+                color_type: JxlColorType::Rgb,
+                color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+                extra_channel_format: vec![Some(invalid)],
+            }),
+            Err(Error::ApiUsageError(_))
+        ));
+    }
 }
 
 #[test]
@@ -675,12 +706,13 @@ fn flush_truncated_squeeze_missing_avg() {
 }
 
 /// Regression test: flushing a truncated image with tiled channels whose tile
-/// dimension is <= 1 used to panic during smooth-squeeze upsampling.
+/// dimension is 0 used to panic during smooth-squeeze upsampling; non-empty
+/// channels with zero-sized grid tiles are now rejected.
 #[test]
 fn flush_truncated_squeeze_small_tiles() {
     let data = include_bytes!("../../tests/testdata/truncated_squeeze_flush_small_tiles.jxl");
     for chunk_size in [64, 256, usize::MAX] {
-        decode::<f32>(
+        let res = decode::<f32>(
             data,
             DecodeParams {
                 chunk_size,
@@ -688,8 +720,8 @@ fn flush_truncated_squeeze_small_tiles() {
                 allow_partial: true,
                 ..Default::default()
             },
-        )
-        .unwrap();
+        );
+        assert!(matches!(res, Err(Error::TooManySqueezes)), "{res:?}");
     }
 }
 
@@ -1840,4 +1872,39 @@ fn test_decoder_reset() {
         }
         Ok(())
     });
+}
+
+#[test]
+fn unbounded_box_order() {
+    let before = include_bytes!("../../tests/testdata/unbounded_box_before_codestream.jxl");
+    assert!(matches!(
+        decode::<f32>(before, Default::default()),
+        Err(Error::InvalidBox)
+    ));
+
+    let after = include_bytes!("../../tests/testdata/exif_trailing_infinite.jxl");
+    decode::<f32>(after, Default::default()).unwrap();
+}
+
+#[test]
+fn empty_jxlp() {
+    let expected = decode::<f32>(
+        include_bytes!("../../resources/test/basic.jxl"),
+        Default::default(),
+    )
+    .unwrap();
+
+    for (name, data) in [
+        (
+            "empty_jxlp",
+            &include_bytes!("../../tests/testdata/empty_jxlp.jxl")[..],
+        ),
+        (
+            "empty_ooo_jxlp",
+            &include_bytes!("../../tests/testdata/empty_ooo_jxlp.jxl")[..],
+        ),
+    ] {
+        let got = decode::<f32>(data, Default::default()).unwrap();
+        compare_frames(Path::new(name), 0, &expected[0], &got[0]);
+    }
 }

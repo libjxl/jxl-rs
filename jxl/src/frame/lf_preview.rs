@@ -234,7 +234,11 @@ impl Frame {
             .collect();
         let regions = &regions_storage[..];
 
-        let orientation = image_metadata.orientation;
+        let orientation = if self.decoder_state.adjust_orientation {
+            image_metadata.orientation
+        } else {
+            Orientation::Identity
+        };
         let info = SaveStageBufferInfo {
             downsample: (0, 0),
             orientation,

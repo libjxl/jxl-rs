@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use super::{ImageDataType, OwnedRawImage, RawImageRect, RawImageRectMut, Rect};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::image::internal::{DistinctRowsIndexes, MAX_IMAGE_ALIGN};
 use crate::util::tracing_wrappers::*;
 
@@ -22,7 +22,11 @@ impl<T: ImageDataType> Image<T> {
     #[instrument(ret, err)]
     pub fn new(size: (usize, usize)) -> Result<Image<T>> {
         let s = T::DATA_TYPE_ID.size();
-        let img = OwnedRawImage::new((size.0 * s, size.1))?;
+        let byte_width = size
+            .0
+            .checked_mul(s)
+            .ok_or(Error::ImageSizeTooLarge(size.0, size.1))?;
+        let img = OwnedRawImage::new((byte_width, size.1))?;
         Ok(Self::from_raw(img))
     }
 

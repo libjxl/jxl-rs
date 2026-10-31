@@ -225,13 +225,14 @@ impl SqueezeInfo {
             (gx > 0).then(|| (gx - 1, gy))
         };
         let mut avg_rect = buf_avg.get_grid_rect(frame_header, output_grid_kind, output_grid_pos);
+        let avg_tile_size = buf_avg.buffer_grid[in_grid].size;
         let next_avg_grid = if let Some(pos) = pos_next {
             let grid = buf_avg.get_grid_idx(output_grid_kind, pos);
             if grid == in_grid {
                 if avg_rect.size.0 > 0 && avg_rect.size.1 > 0 {
-                    if vertical {
+                    if vertical && avg_rect.origin.1 + avg_rect.size.1 < avg_tile_size.1 {
                         avg_rect.size.1 += 1;
-                    } else {
+                    } else if !vertical && avg_rect.origin.0 + avg_rect.size.0 < avg_tile_size.0 {
                         avg_rect.size.0 += 1;
                     }
                 }
@@ -746,27 +747,44 @@ impl TransformStepChunk {
                 perm,
             } => {
                 for i in 0..3 {
-                    assert_eq!(out_grid_kind, buffers[buf_in[i]].grid_kind);
                     assert_eq!(out_size, buffers[buf_in[i]].info.size);
-                    // Optimistically move the buffers to the output if possible.
-                    // If not, creates buffers in the output that are a copy of the input buffers.
-                    // This should be rare.
-                    let b_in = &buffers[buf_in[i]].buffer_grid[out_grid];
+                    let in_grid_kind = buffers[buf_in[i]].grid_kind;
+                    let in_grid = buffers[buf_in[i]].get_grid_idx(out_grid_kind, self.grid_pos);
+                    let b_in = &buffers[buf_in[i]].buffer_grid[in_grid];
                     let b_out = &buffers[buf_out[i]].buffer_grid[out_grid];
+                    let storage = buffers[buf_out[i]].storage;
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
-                        b_out.ensure_buffer(
-                            &buffers[buf_out[i]].info,
-                            buffers[buf_out[i]].storage,
-                            recycler,
-                            true,
-                        )?;
-                    } else {
+                        b_out.ensure_buffer(&buffers[buf_out[i]].info, storage, recycler, true)?;
+                    } else if in_grid_kind == out_grid_kind {
+                        // Optimistically move the buffers to the output if possible.
+                        // If not, creates buffers in the output that are a copy of the input buffers.
+                        // This should be rare.
                         *b_out.data.try_write().unwrap() =
                             Some(b_in.get_buffer(b_in.can_consume(is_final), recycler)?);
+                    } else {
+                        b_out.ensure_buffer(&buffers[buf_out[i]].info, storage, recycler, false)?;
+                        let rect = buffers[buf_in[i]].get_grid_rect(
+                            frame_header,
+                            out_grid_kind,
+                            self.grid_pos,
+                        );
+                        if rect.size.0 > 0 && rect.size.1 > 0 {
+                            let byte_rect = rect.to_byte_rect_sz(storage.sample_size());
+                            let in_guard = b_in.data.try_read().unwrap();
+                            let src = in_guard.as_ref().unwrap().data.as_rect().rect(byte_rect);
+                            let mut out_guard = b_out.data.try_write().unwrap();
+                            let dst = &mut out_guard.as_mut().unwrap().data;
+                            for y in 0..byte_rect.size.1 {
+                                dst.row_mut(y).copy_from_slice(src.row(y));
+                            }
+                        }
+                        b_in.mark_used(b_in.can_consume(is_final), recycler);
                     }
                 }
                 with_buffers(buffers, buf_out, out_grid, recycler, |mut bufs| {
-                    super::rct::do_rct_step(&mut bufs, buffers[buf_in[0]].storage, *op, *perm);
+                    if !bufs.is_empty() {
+                        super::rct::do_rct_step(&mut bufs, buffers[buf_in[0]].storage, *op, *perm);
+                    }
                     Ok(())
                 })?;
             }
@@ -796,7 +814,14 @@ impl TransformStepChunk {
                     with_buffers(buffers, buf_out, out_grid + gx, recycler, |_| Ok(()))?;
                 }
 
-                if out_size.0 != 0 {
+                let active_grid_xsize = (0..grid_xsize)
+                    .take_while(|&gx| {
+                        let sz = buffers[buf_out[0]].buffer_grid[out_grid + gx].size;
+                        sz.0 != 0 && sz.1 != 0
+                    })
+                    .count();
+
+                if active_grid_xsize != 0 {
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
 
                     let has_left =
@@ -834,7 +859,7 @@ impl TransformStepChunk {
                     let mut prev_aux_guards = vec![];
                     if has_top {
                         for i in buf_out {
-                            for gx in 0..grid_xsize {
+                            for gx in 0..active_grid_xsize {
                                 let grid = (grid_y - 1) * stride + grid_x + gx;
                                 top_guards.push(borrow_topbottom(buffers, (*i, grid)));
                             }
@@ -856,7 +881,7 @@ impl TransformStepChunk {
 
                     let mut guards = vec![];
                     for i in buf_out {
-                        for gx in 0..grid_xsize {
+                        for gx in 0..active_grid_xsize {
                             let grid = out_grid + gx;
                             let b = &buffers[*i].buffer_grid[grid];
                             guards.push(b.data.try_write().unwrap());
@@ -875,7 +900,7 @@ impl TransformStepChunk {
                         );
                     } else {
                         let mut in_bufs = vec![];
-                        for gx in 0..grid_xsize {
+                        for gx in 0..active_grid_xsize {
                             in_bufs.push(borrow_channel(buffers, (*buf_in, out_grid + gx)));
                         }
                         let in_buf_refs: Vec<&ModularChannel> =
@@ -902,7 +927,7 @@ impl TransformStepChunk {
                             num_deltas: *num_deltas,
                             predictor: *predictor,
                             wp_header,
-                            grid_xsize,
+                            grid_xsize: active_grid_xsize,
                             buf_left: left_refs.as_deref(),
                             buf_top: has_top.then_some(&top_refs[..]),
                             buf_topleft: topleft_refs.as_deref(),
@@ -1145,12 +1170,16 @@ impl TransformStepChunk {
         frame_header: &FrameHeader,
     ) -> SmallVec<TransformDependency, 9> {
         match &self.step {
-            TransformStep::Rct { buf_in, .. } => {
-                let b = buf_in[0];
-                let grid_idx = buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos);
+            TransformStep::Rct {
+                buf_in, buf_out, ..
+            } => {
+                let out_grid_kind = buffers[buf_out[0]].grid_kind;
                 buf_in
                     .iter()
-                    .map(|x| TransformDependency::new(*x, grid_idx))
+                    .map(|x| {
+                        let grid_idx = buffers[*x].get_grid_idx(out_grid_kind, self.grid_pos);
+                        TransformDependency::new(*x, grid_idx)
+                    })
                     .collect()
             }
             TransformStep::Output { buf_in, .. } => {
