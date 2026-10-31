@@ -21,12 +21,14 @@ pub struct OutputChannelSplitter<'a> {
 
 impl<'a> Drop for OutputChannelSplitter<'a> {
     fn drop(&mut self) {
-        assert!(
-            self.borrowed_rects
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .is_empty()
-        )
+        if !std::thread::panicking() {
+            assert!(
+                self.borrowed_rects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_empty()
+            );
+        }
     }
 }
 
@@ -64,14 +66,15 @@ impl<'a> OutputChannelSplitter<'a> {
         }
         rects.insert(rect);
 
+        // SAFETY: we just checked that `self.borrowed_rects` does not contain
+        // any rects that intersect with the new rect. Since by safety invariant
+        // all the currently-borrowed rects are in `self.borrowed_rects`, the
+        // new rect does not intersect the old ones.
+        let buf = unsafe { self.buffer.rect(rect) };
         OutputChannelRef {
             s: self,
             r: rect,
-            // SAFETY: we just checked that `self.borrowed_rects` does not contain
-            // any rects that intersect with the new rect. Since by safety invariant
-            // all the currently-borrowed rects are in `self.borrowed_rects`, the
-            // new rect does not intersect the old ones.
-            buf: Some(unsafe { self.buffer.rect(rect) }),
+            buf: Some(buf),
         }
     }
 }
@@ -415,6 +418,17 @@ mod tests {
             }
 
             Ok(())
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn oob_borrow_rect_does_not_double_panic_on_drop() {
+        let mut raw = vec![0u8; 16 * 16];
+        let splitter = OutputChannelSplitter::new(JxlOutputBuffer::new(&mut raw, 16, 16));
+        let _ = splitter.borrow_rect(Rect {
+            origin: (0, 0),
+            size: (32, 16),
         });
     }
 }

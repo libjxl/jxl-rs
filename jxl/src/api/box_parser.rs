@@ -452,8 +452,11 @@ impl BoxParser {
 
     fn advance_to_codestream(&mut self, input: &mut dyn JxlBitstreamInput) -> Result<()> {
         loop {
+            if self.injected_jxlp().is_some() {
+                return Ok(());
+            }
             match self.state {
-                ParseState::Codestream(Some(0)) => self.state = ParseState::BoxNeeded(8),
+                ParseState::Codestream(Some(0)) => self.mark_codestream_read(0),
                 ParseState::Complete | ParseState::Codestream(_) => return Ok(()),
                 ParseState::SignatureNeeded => {
                     let codestream_signature_len = JxlSignature::Codestream.signature_len();
@@ -490,15 +493,7 @@ impl BoxParser {
                     }
                     self.state = ParseState::Skip(count.map(|x| x - n));
                 }
-                ParseState::Aux(None) => {
-                    let local_buffer_len = self.local_buffer.len();
-                    let buf = self.aux.box_buffer.as_mut().unwrap();
-                    if local_buffer_len > 0 {
-                        buf.data.extend_from_slice(&self.local_buffer);
-                        self.local_buffer.consume(local_buffer_len);
-                    }
-                    return Ok(());
-                }
+                ParseState::Aux(None) => unreachable!(),
                 ParseState::Aux(Some(count)) => {
                     if count == 0 {
                         let buf = self.aux.box_buffer.take().unwrap();
@@ -703,6 +698,13 @@ impl BoxParser {
             return Err(Error::InvalidBox);
         };
 
+        if content_len.is_none()
+            && !matches!(&ty, b"jxlc" | b"jxlp")
+            && !self.latest_codestream_box.is_last()
+        {
+            return Err(Error::InvalidBox);
+        }
+
         match &ty {
             b"ftyp" => {
                 if self.version.is_some() {
@@ -832,11 +834,11 @@ impl<'a> CodestreamInput<'a> {
     // The methods below have the same semantics as the methods in JxlBitstreamInput.
 
     pub(super) fn available_bytes(&mut self) -> Result<usize> {
+        self.box_parser.advance_to_codestream(self.input)?;
         if let Some(b) = self.box_parser.injected_jxlp() {
             return Ok(b.data.len() - b.consumed);
         }
 
-        self.box_parser.advance_to_codestream(self.input)?;
         let ParseState::Codestream(r) = self.box_parser.state else {
             return Ok(0);
         };
@@ -846,6 +848,7 @@ impl<'a> CodestreamInput<'a> {
     }
 
     pub(super) fn read(&mut self, buf: &mut [IoSliceMut]) -> Result<usize> {
+        self.box_parser.advance_to_codestream(self.input)?;
         if let Some(b) = self.box_parser.injected_jxlp() {
             let mut r = &b.data[b.consumed..];
             let n = r.read_vectored(buf)?;
@@ -854,7 +857,6 @@ impl<'a> CodestreamInput<'a> {
             return Ok(n);
         }
 
-        self.box_parser.advance_to_codestream(self.input)?;
         let ParseState::Codestream(r) = self.box_parser.state else {
             return Ok(0);
         };
@@ -881,6 +883,7 @@ impl<'a> CodestreamInput<'a> {
     }
 
     pub(super) fn skip(&mut self, amount: usize) -> Result<usize> {
+        self.box_parser.advance_to_codestream(self.input)?;
         if let Some(b) = self.box_parser.injected_jxlp() {
             let n = (b.data.len() - b.consumed).min(amount);
             b.consumed += n;
@@ -888,7 +891,6 @@ impl<'a> CodestreamInput<'a> {
             return Ok(n);
         }
 
-        self.box_parser.advance_to_codestream(self.input)?;
         let ParseState::Codestream(r) = self.box_parser.state else {
             return Ok(0);
         };

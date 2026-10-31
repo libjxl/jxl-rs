@@ -130,6 +130,14 @@ impl JxlDataFormat {
         }
     }
 
+    pub(crate) fn is_valid(&self) -> bool {
+        match *self {
+            Self::U8 { bit_depth } => (1..=8).contains(&bit_depth),
+            Self::U16 { bit_depth, .. } => (1..=16).contains(&bit_depth),
+            Self::F16 { .. } | Self::F32 { .. } => true,
+        }
+    }
+
     /// Returns the byte representation of opaque alpha (1.0) for this format.
     #[cfg(test)]
     pub(crate) fn opaque_alpha_bytes(&self) -> Vec<u8> {
