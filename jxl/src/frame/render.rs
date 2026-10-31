@@ -632,11 +632,6 @@ impl Frame {
         let needs_full_resolution_save = frame_header.needs_full_resolution_save();
         let needs_full_resolution_blending =
             frame_header.needs_full_resolution_blending(decoder_state.extra_channel_info());
-        let late_ec_upsample = frame_header.upsampling > 1
-            && frame_header
-                .ec_upsampling
-                .iter()
-                .all(|x| *x == frame_header.upsampling);
 
         // Holds how many downsampling levels are applied when the frame features are rendered.
         let feature_rendering_shift = frame_header.feature_rendering_shift(
@@ -660,6 +655,18 @@ impl Frame {
         // Noise is rendered after upsampling.
         // TODO(tirr-c): Maybe also downsample noise?
         let can_render_noise = intermediate_shift == 0;
+
+        // Match color channel shift if `late_ec_upsample`, otherwise jump to `intermediate_shift`.
+        let late_ec_upsample = frame_header.upsampling > 1
+            && frame_header
+                .ec_upsampling
+                .iter()
+                .all(|x| *x == frame_header.upsampling);
+        let ec_feature_shift = if late_ec_upsample {
+            feature_rendering_shift
+        } else {
+            intermediate_shift
+        };
 
         let render_noise = frame_header.has_noise() && can_render_noise;
         let num_channels = frame_header.num_extra_channels as usize + 3;
@@ -744,10 +751,10 @@ impl Frame {
             } else {
                 frame_header.ec_upsampling[c - 3].ilog2()
             };
-            let dst_shift = if late_ec_upsample || c < 3 {
+            let dst_shift = if c < 3 {
                 feature_rendering_shift
             } else {
-                intermediate_shift
+                ec_feature_shift
             };
             let downsampling = dst_shift.saturating_sub(src_shift);
 
@@ -802,22 +809,27 @@ impl Frame {
             ))
         }
 
-        if !late_ec_upsample {
-            let transform_data = &decoder_state.file_header.transform_data;
-            for (ec, ec_up) in frame_header.ec_upsampling.iter().enumerate() {
-                let upsample = ec_up.ilog2().saturating_sub(intermediate_shift);
-                if upsample > 0 {
-                    pipeline = match upsample {
-                        1 => pipeline.add_inout_stage(Upsample2x::new(transform_data, 3 + ec)),
-                        2 => pipeline.add_inout_stage(Upsample4x::new(transform_data, 3 + ec)),
-                        3 => pipeline.add_inout_stage(Upsample8x::new(transform_data, 3 + ec)),
-                        _ => unreachable!(),
-                    };
-                }
+        let transform_data = &decoder_state.file_header.transform_data;
+        for (ec, ec_up) in frame_header.ec_upsampling.iter().enumerate() {
+            // `upsample` is always 0 if `late_ec_upsample`, because
+            // `ec_feature_shift == feature_rendering_shift >= upsampling_shift == ec_up.ilog2()`.
+            let upsample = ec_up.ilog2().saturating_sub(ec_feature_shift);
+            if upsample > 0 {
+                pipeline = match upsample {
+                    1 => pipeline.add_inout_stage(Upsample2x::new(transform_data, 3 + ec)),
+                    2 => pipeline.add_inout_stage(Upsample4x::new(transform_data, 3 + ec)),
+                    3 => pipeline.add_inout_stage(Upsample8x::new(transform_data, 3 + ec)),
+                    _ => unreachable!(),
+                };
             }
         }
 
         if frame_header.has_patches() {
+            debug_assert!(
+                frame_header.num_extra_channels == 0 || ec_feature_shift == feature_rendering_shift,
+                "`late_ec_upsample` cannot be false if `has_patches`; `FrameHeader::check` must \
+                have checked that upsampling is not mixed"
+            );
             pipeline = pipeline.add_inplace_stage(PatchesStage::new(
                 patches,
                 metadata.extra_channel_info.clone(),
@@ -829,16 +841,15 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(SplinesStage::new(splines))
         }
 
-        let color_upsample = feature_rendering_shift.saturating_sub(intermediate_shift);
-        if color_upsample > 0 {
-            let transform_data = &decoder_state.file_header.transform_data;
-            let nb_channels = if late_ec_upsample {
-                3 + frame_header.ec_upsampling.len()
+        for c in 0..num_channels {
+            let current_shift = if c < 3 {
+                feature_rendering_shift
             } else {
-                3
+                ec_feature_shift
             };
-            for c in 0..nb_channels {
-                pipeline = match color_upsample {
+            let upsample = current_shift.saturating_sub(intermediate_shift);
+            if upsample > 0 {
+                pipeline = match upsample {
                     1 => pipeline.add_inout_stage(Upsample2x::new(transform_data, c)),
                     2 => pipeline.add_inout_stage(Upsample4x::new(transform_data, c)),
                     3 => pipeline.add_inout_stage(Upsample8x::new(transform_data, c)),
