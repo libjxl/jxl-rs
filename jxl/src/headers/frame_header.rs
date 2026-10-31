@@ -580,10 +580,16 @@ impl FrameHeader {
     }
 
     pub fn needs_full_resolution_blending(&self, extra_channel_info: &[ExtraChannelInfo]) -> bool {
+        let ec_blending_with_alpha = self
+            .ec_blending_info
+            .iter()
+            .enumerate()
+            .filter(|(ec, info)| *ec != info.alpha_channel as usize)
+            .map(|(_, info)| info);
         self.num_extra_channels != 0
             && self.needs_blending()
             && std::iter::once(&self.blending_info)
-                .chain(self.ec_blending_info.iter())
+                .chain(ec_blending_with_alpha)
                 .any(|info| {
                     // Blend with premultiplied alpha doesn't require alpha-weighted downsampling.
                     info.mode == BlendingMode::AlphaWeightedAdd

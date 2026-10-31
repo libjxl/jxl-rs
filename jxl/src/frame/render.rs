@@ -646,7 +646,8 @@ impl Frame {
         );
         let can_render_features = feature_rendering_shift == upsampling_shift;
 
-        let output_shift = if frame_header.frame_type == FrameType::LFFrame {
+        // Skip output downsampling if the frame is saved before blending, and it is not visible.
+        let output_shift = if needs_full_resolution_save && !frame_header.is_visible() {
             0
         } else {
             decoder_state.output_downsampling_shift
@@ -882,6 +883,10 @@ impl Frame {
                     false,
                 );
             }
+
+            // The frame is invisible and cannot be referenced, so the following stages cannot make
+            // any side effect; stop pipeline build.
+            return pipeline.build();
         }
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
@@ -893,6 +898,13 @@ impl Frame {
                     JxlDataFormat::f32(),
                     false,
                 );
+            }
+
+            // If the frame is invisible, the following stages cannot make any side effect; stop
+            // pipeline build. This prevents panic in `BlendingStage::new` because of downsampling
+            // level mismatch.
+            if !frame_header.is_visible() {
+                return pipeline.build();
             }
         }
 
