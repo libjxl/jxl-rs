@@ -43,6 +43,11 @@ pub struct JxlDecoderOptions {
     /// This is useful for collecting [`VisibleFrameInfo`](crate::api::VisibleFrameInfo)
     /// via the regular decoder API without producing pixels.
     pub scan_frames_only: bool,
+    /// Whether [`JxlDecoder::scanned_frames`](crate::api::JxlDecoder::scanned_frames) records each
+    /// visible frame (default: true). When false it records none, so a decoder playing a long
+    /// animation does not grow with each frame. Seeking needs the entries' seek targets, so it
+    /// needs this on.
+    pub record_visible_frames: bool,
     /// Additional boxes to request from the decoder.
     ///
     /// Note that if you request additional boxes, you must call `close_input()` when the
@@ -102,6 +107,7 @@ impl Default for JxlDecoderOptions {
             high_precision: false,
             alpha_mode: AlphaMode::AsIs,
             scan_frames_only: false,
+            record_visible_frames: true,
             request_aux_boxes: Vec::new(),
             max_profile_level: ProfileLevel::Main5,
             #[cfg(test)]

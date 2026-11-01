@@ -326,4 +326,8 @@ pub struct JxlFrameHeader {
     pub duration: Option<f64>,
     /// Frame size (width, height)
     pub size: (usize, usize),
+    /// The frame's duration in the animation's ticks (0 for a still).
+    pub duration_ticks: u32,
+    /// Whether this is the codestream's last frame.
+    pub is_last: bool,
 }
