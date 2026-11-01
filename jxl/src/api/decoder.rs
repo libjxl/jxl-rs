@@ -69,7 +69,8 @@ pub struct JxlDecoder {
 impl JxlDecoder {
     /// Creates a new decoder with the given options.
     pub fn new(options: JxlDecoderOptions) -> Self {
-        let box_parser = BoxParser::with_aux_boxes(options.request_aux_boxes.iter().copied());
+        let mut box_parser = BoxParser::with_aux_boxes(options.request_aux_boxes.iter().copied());
+        box_parser.set_codestream_box_limit(options.codestream_box_limit);
         JxlDecoder {
             options,
             box_parser,

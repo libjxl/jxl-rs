@@ -28,6 +28,10 @@ pub struct JxlDecoderOptions {
     /// channels, so for example an image with 1 extra channel of size 1024x1024 has 4
     /// million samples.
     pub sample_limit: Option<usize>,
+    /// Fail decoding a container of more than this many codestream boxes (`jxlc` and `jxlp`, in
+    /// order or not), each counted once where the file holds it. The state kept per box is then
+    /// bounded by this limit rather than by the file's size.
+    pub codestream_box_limit: Option<usize>,
     /// Use high precision mode for decoding.
     /// When false (default), uses lower precision settings that match libjxl's default.
     /// When true, uses higher precision at the cost of performance.
@@ -99,6 +103,7 @@ impl Default for JxlDecoderOptions {
             skip_preview: true,
             desired_intensity_target: None,
             sample_limit: None,
+            codestream_box_limit: None,
             high_precision: false,
             alpha_mode: AlphaMode::AsIs,
             scan_frames_only: false,

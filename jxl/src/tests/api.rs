@@ -1908,3 +1908,56 @@ fn empty_jxlp() {
         compare_frames(Path::new(name), 0, &expected[0], &got[0]);
     }
 }
+
+// A container holding `codestream` in `jxlp` boxes: all but its last byte, then `empty` empty boxes
+// out of order, then the last byte.
+fn split_into_jxlp(codestream: &[u8], empty: u32) -> Vec<u8> {
+    let make_box = |ty: &[u8; 4], payload: &[u8]| {
+        let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(ty);
+        out.extend_from_slice(payload);
+        out
+    };
+    let jxlp =
+        |index: u32, part: &[u8]| make_box(b"jxlp", &[&index.to_be_bytes()[..], part].concat());
+    let mut out = b"\0\0\0\x0cJXL \r\n\x87\n".to_vec();
+    out.extend(make_box(b"ftyp", b"jxl \0\0\0\x01jxl "));
+    let (head, tail) = codestream.split_at(codestream.len() - 1);
+    out.extend(jxlp(0, head));
+    for index in 2..empty + 2 {
+        out.extend(jxlp(index, &[]));
+    }
+    out.extend(jxlp(1 | 0x8000_0000, tail));
+    out
+}
+
+fn decode_with_codestream_box_limit(data: &[u8], limit: usize) -> Result<usize, Error> {
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions {
+        codestream_box_limit: Some(limit),
+        ..Default::default()
+    });
+    let mut input = data;
+    let mut visible = 0;
+    loop {
+        match decoder.process(&mut input, None, None)? {
+            Event::FrameComplete { .. } => visible += 1,
+            Event::Complete => return Ok(visible),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn test_codestream_box_limit() {
+    let data = std::fs::read("resources/test/basic.jxl").unwrap();
+    assert_eq!(&data[..2], [0xff, 0x0a]);
+    let split = split_into_jxlp(&data, 100);
+    assert_eq!(decode_with_codestream_box_limit(&split, 102).unwrap(), 1);
+    assert!(matches!(
+        decode_with_codestream_box_limit(&split, 101),
+        Err(Error::TooManyCodestreamBoxes(101))
+    ));
+    // A single jxlc box.
+    let data = std::fs::read("resources/test/conformance_test_images/lossless_pfm.jxl").unwrap();
+    assert_eq!(decode_with_codestream_box_limit(&data, 1).unwrap(), 1);
+}
