@@ -149,11 +149,16 @@ impl ImageInfo {
         Ok(())
     }
 
-    pub fn parse_color_encoding(&mut self, br: &mut BitReader, bits: &mut usize) -> Result<()> {
+    pub fn parse_color_encoding(
+        &mut self,
+        br: &mut BitReader,
+        bits: &mut usize,
+        level5_limits: bool,
+    ) -> Result<()> {
         // Parse (or extract from file header) the ICC profile.
         let embedded_color_profile = if self.file_header().image_metadata.color_encoding.want_icc {
             if self.icc_parser.is_none() {
-                self.icc_parser = Some(IncrementalIccReader::new(br)?);
+                self.icc_parser = Some(IncrementalIccReader::new(br, level5_limits)?);
             }
             let icc_parser = self.icc_parser.as_mut().unwrap();
             *bits = br.total_bits_read();

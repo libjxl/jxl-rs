@@ -27,22 +27,28 @@ const ICC_CONTEXTS: usize = 41;
 const ICC_HEADER_SIZE: u64 = 128;
 const PREAMBLE_SIZE: usize = 20;
 
+/// Level 5 allows ICC profiles of up to 2^22 bytes, Level 10 up to 2^28.
+fn max_icc_size(level5_limits: bool) -> u64 {
+    if level5_limits { 1 << 22 } else { 1 << 28 }
+}
+
 fn check_preamble(
     output_size: u64,
     commands_size: u64,
     bytes_read: u64,
     total_len: u64,
+    level5_limits: bool,
 ) -> Result<()> {
     if bytes_read.saturating_add(commands_size) > total_len {
         return Err(Error::InvalidIccStream);
     }
-    if output_size > (1 << 28) || output_size.saturating_add(65536) < total_len {
+    if output_size > max_icc_size(level5_limits) || output_size.saturating_add(65536) < total_len {
         return Err(Error::IccTooLarge);
     }
     Ok(())
 }
 
-fn read_icc_inner(stream: &mut IccStream) -> Result<Vec<u8>, Error> {
+fn read_icc_inner(stream: &mut IccStream, level5_limits: bool) -> Result<Vec<u8>, Error> {
     let output_size = stream.read_varint()?;
     let commands_size = stream.read_varint()?;
     check_preamble(
@@ -50,6 +56,7 @@ fn read_icc_inner(stream: &mut IccStream) -> Result<Vec<u8>, Error> {
         commands_size,
         stream.bytes_read(),
         stream.len(),
+        level5_limits,
     )?;
 
     // Extract command stream first.
@@ -122,10 +129,11 @@ pub struct IncrementalIccReader {
     len: usize,
     // [prev, prev_prev]
     prev_bytes: [u8; 2],
+    level5_limits: bool,
 }
 
 impl IncrementalIccReader {
-    pub fn new(br: &mut BitReader) -> Result<Self> {
+    pub fn new(br: &mut BitReader, level5_limits: bool) -> Result<Self> {
         let len = u64::read_unconditional(&(), br, &Empty {})?;
         if len > 1u64 << 24 {
             return Err(Error::IccTooLarge);
@@ -144,6 +152,7 @@ impl IncrementalIccReader {
             len,
             out_buf,
             prev_bytes: [0, 0],
+            level5_limits,
         })
     }
 
@@ -190,7 +199,13 @@ impl IncrementalIccReader {
         let commands_size =
             read_varint_from_reader(&mut cursor).map_err(|_| Error::InvalidIccStream)?;
         let bytes_read = (self.out_buf.len() - cursor.len()) as u64;
-        check_preamble(output_size, commands_size, bytes_read, self.len as u64)
+        check_preamble(
+            output_size,
+            commands_size,
+            bytes_read,
+            self.len as u64,
+            self.level5_limits,
+        )
     }
 
     pub fn read_one(&mut self, br: &mut BitReader) -> Result<()> {
@@ -225,8 +240,28 @@ impl IncrementalIccReader {
         assert_eq!(self.num_coded_bytes(), self.out_buf.len());
         self.reader.check_final_state(&self.histograms, br)?;
         let mut stream = IccStream::new(self.out_buf);
-        let profile = read_icc_inner(&mut stream)?;
+        let profile = read_icc_inner(&mut stream, self.level5_limits)?;
         stream.finalize()?;
         Ok(profile)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn level5_limits_the_icc_size() {
+        let size = |output_size: u64, level5_limits: bool| {
+            check_preamble(output_size, 0, 2, output_size, level5_limits)
+        };
+        assert!(size(1 << 22, true).is_ok());
+        assert!(matches!(size((1 << 22) + 1, true), Err(Error::IccTooLarge)));
+        assert!(size((1 << 22) + 1, false).is_ok());
+        assert!(size(1 << 28, false).is_ok());
+        assert!(matches!(
+            size((1 << 28) + 1, false),
+            Err(Error::IccTooLarge)
+        ));
     }
 }

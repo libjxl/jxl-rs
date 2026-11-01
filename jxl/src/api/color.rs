@@ -1258,7 +1258,7 @@ impl JxlColorProfile {
         }
 
         let mut reader = BitReader::new(encoded_icc);
-        let mut icc = IncrementalIccReader::new(&mut reader)?;
+        let mut icc = IncrementalIccReader::new(&mut reader, false)?;
         while icc.remaining() != 0 {
             icc.read_one(&mut reader)?;
         }
