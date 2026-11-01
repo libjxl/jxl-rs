@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::io::{Read, Write};
+use std::io::Read;
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
@@ -92,10 +92,11 @@ impl IccStream {
         read_varint(|| self.read_one())
     }
 
-    pub fn copy_bytes(&mut self, writer: &mut impl Write, len: usize) -> Result<()> {
+    pub fn copy_bytes(&mut self, writer: &mut Vec<u8>, len: usize) -> Result<()> {
         if len > self.remaining_bytes() as usize {
             return Err(Error::IccEndOfStream);
         }
+        writer.try_reserve(len)?;
 
         for _ in 0..len {
             let b = self.read_one()?;
