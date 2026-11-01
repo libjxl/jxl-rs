@@ -1908,3 +1908,46 @@ fn empty_jxlp() {
         compare_frames(Path::new(name), 0, &expected[0], &got[0]);
     }
 }
+
+fn decode_with_frame_limit(data: &[u8], frame_limit: usize) -> Result<usize, Error> {
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions {
+        frame_limit: Some(frame_limit),
+        ..Default::default()
+    });
+    let mut input = data;
+    let mut visible = 0;
+    loop {
+        match decoder.process(&mut input, None, None)? {
+            Event::FrameComplete { .. } => visible += 1,
+            Event::Complete => return Ok(visible),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn test_frame_limit() {
+    // Five frames are decoded for the one visible frame.
+    let data = std::fs::read("resources/test/conformance_test_images/blendmodes.jxl").unwrap();
+    assert_eq!(decode_with_frame_limit(&data, 5).unwrap(), 1);
+    assert!(matches!(
+        decode_with_frame_limit(&data, 4),
+        Err(Error::TooManyFrames(4))
+    ));
+    // Every frame of an animation is visible, so the count restarts at each.
+    let data =
+        std::fs::read("resources/test/conformance_test_images/animation_icos4d.jxl").unwrap();
+    assert!(decode_with_frame_limit(&data, 1).unwrap() > 1);
+}
+
+#[test]
+fn test_frame_limit_ignores_scan_frames_only() {
+    let data = std::fs::read("resources/test/conformance_test_images/blendmodes.jxl").unwrap();
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions {
+        frame_limit: Some(1),
+        scan_frames_only: true,
+        ..Default::default()
+    });
+    let mut input = data.as_slice();
+    while decoder.process(&mut input, None, None).unwrap() != Event::Complete {}
+}

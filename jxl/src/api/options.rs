@@ -28,6 +28,11 @@ pub struct JxlDecoderOptions {
     /// channels, so for example an image with 1 extra channel of size 1024x1024 has 4
     /// million samples.
     pub sample_limit: Option<usize>,
+    /// Fail decoding when more than this many frames are decoded for one visible frame: the
+    /// frames since the previous visible frame completed (or since decoding began, or a seek),
+    /// the visible frame included. Frames that are skipped (the preview, frames a seek passes
+    /// over) are not counted. Checked at each frame's TOC, before the frame allocates.
+    pub frame_limit: Option<usize>,
     /// Use high precision mode for decoding.
     /// When false (default), uses lower precision settings that match libjxl's default.
     /// When true, uses higher precision at the cost of performance.
@@ -99,6 +104,7 @@ impl Default for JxlDecoderOptions {
             skip_preview: true,
             desired_intensity_target: None,
             sample_limit: None,
+            frame_limit: None,
             high_precision: false,
             alpha_mode: AlphaMode::AsIs,
             scan_frames_only: false,
