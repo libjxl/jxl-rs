@@ -40,7 +40,7 @@ pub(super) fn read_header(data_stream: &mut IccStream, output_size: u64) -> Resu
     let header_size = output_size.min(ICC_HEADER_SIZE);
     let header_data = data_stream.read_to_vec_exact(header_size as usize)?;
 
-    let mut profile = Vec::new_with_capacity(output_size as usize)?;
+    let mut profile = Vec::new_with_capacity(header_size as usize)?;
 
     for (idx, &e) in header_data.iter().enumerate() {
         let p = predict_header(idx, output_size as u32, &header_data);

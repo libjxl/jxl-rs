@@ -24,7 +24,7 @@ const COMMON_DATA: [&[u8; 4]; 8] = [
 pub(super) fn read_tag_list(
     data_stream: &mut IccStream,
     commands_stream: &mut Cursor<Vec<u8>>,
-    decoded_profile: &mut Cursor<&mut [u8]>,
+    decoded_profile: &mut Vec<u8>,
     num_tags: u32,
     output_size: u64,
 ) -> Result<()> {
@@ -81,6 +81,7 @@ pub(super) fn read_tag_list(
             .checked_add(tagsize.checked_mul(2).ok_or(Error::InvalidIccStream)?)
             .ok_or(Error::InvalidIccStream)?;
 
+        decoded_profile.try_reserve(36)?;
         let write_result = (|| -> std::io::Result<()> {
             decoded_profile.write_all(&tag)?;
             decoded_profile.write_u32::<BigEndian>(tagstart)?;
@@ -103,6 +104,9 @@ pub(super) fn read_tag_list(
             Ok(())
         })();
         write_result.map_err(|_| Error::InvalidIccStream)?;
+        if decoded_profile.len() as u64 > output_size {
+            return Err(Error::InvalidIccStream);
+        }
     }
 
     Ok(())
@@ -150,11 +154,12 @@ fn shuffle_w4(bytes: &[u8]) -> Result<Vec<u8>> {
 pub(super) fn read_single_command(
     data_stream: &mut IccStream,
     commands_stream: &mut Cursor<Vec<u8>>,
-    decoded_profile: &mut Cursor<&mut [u8]>,
+    decoded_profile: &mut Vec<u8>,
     command: u8,
 ) -> Result<()> {
     use std::num::Wrapping;
 
+    decoded_profile.try_reserve(20)?;
     match command {
         1 => {
             let num = read_varint_from_reader(commands_stream)? as usize;
@@ -168,6 +173,7 @@ pub(super) fn read_single_command(
             } else {
                 shuffle_w4(&bytes)?
             };
+            decoded_profile.try_reserve(bytes.len())?;
             decoded_profile
                 .write_all(&bytes)
                 .map_err(|_| Error::InvalidIccStream)?;
@@ -191,7 +197,7 @@ pub(super) fn read_single_command(
                 }
                 stride
             };
-            if stride.saturating_mul(4) >= decoded_profile.position() as usize {
+            if stride.saturating_mul(4) >= decoded_profile.len() {
                 return Err(Error::InvalidIccStream);
             }
 
@@ -204,15 +210,16 @@ pub(super) fn read_single_command(
                 _ => unreachable!(),
             };
 
+            decoded_profile.try_reserve(num)?;
             for i in (0..num).step_by(width) {
-                let base_position = decoded_profile.position() as usize;
-                let buffer_slice = decoded_profile.get_ref();
+                let base_position = decoded_profile.len();
 
                 let mut prev = [Wrapping(0u32); 3];
                 for (j, p) in prev[..=order as usize].iter_mut().enumerate() {
                     let offset = base_position - (stride * (j + 1));
                     let mut p_bytes = [0u8; 4];
-                    p_bytes[(4 - width)..].copy_from_slice(&buffer_slice[offset..offset + width]);
+                    p_bytes[(4 - width)..]
+                        .copy_from_slice(&decoded_profile[offset..offset + width]);
                     p.0 = u32::from_be_bytes(p_bytes);
                 }
 
@@ -223,7 +230,6 @@ pub(super) fn read_single_command(
                     _ => unreachable!(),
                 };
 
-                decoded_profile.set_position(base_position as u64);
                 for j in 0..width.min(num - i) {
                     let val = Wrapping(bytes[i + j] as u32) + (p >> (8 * (width - 1 - j)));
                     decoded_profile
