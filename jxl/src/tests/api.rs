@@ -1908,3 +1908,39 @@ fn empty_jxlp() {
         compare_frames(Path::new(name), 0, &expected[0], &got[0]);
     }
 }
+
+#[test]
+fn test_record_visible_frames_off() {
+    for name in ["animation_icos4d.jxl", "blendmodes.jxl"] {
+        let data = std::fs::read(format!("resources/test/conformance_test_images/{name}")).unwrap();
+        let decode_with = |record_visible_frames: bool| {
+            let mut decoder = JxlDecoder::new(JxlDecoderOptions {
+                record_visible_frames,
+                ..Default::default()
+            });
+            let mut input = data.as_slice();
+            let mut headers = Vec::new();
+            loop {
+                match decoder.process(&mut input, None, None).unwrap() {
+                    Event::FrameHeader => {
+                        let header = decoder.frame_header().unwrap();
+                        headers.push((header.duration_ticks, header.is_last));
+                    }
+                    Event::Complete => break,
+                    _ => {}
+                }
+            }
+            let scanned: Vec<_> = decoder
+                .scanned_frames()
+                .iter()
+                .map(|frame| (frame.duration_ticks, frame.is_last))
+                .collect();
+            (headers, scanned)
+        };
+        let (on, scanned) = decode_with(true);
+        assert_eq!(on, scanned, "{name}");
+        let (off, none) = decode_with(false);
+        assert_eq!(off, on, "{name}");
+        assert!(none.is_empty(), "{name}");
+    }
+}

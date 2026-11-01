@@ -51,7 +51,14 @@ impl FrameScanInfo {
 
     /// Record frame info for the just-parsed frame.
     /// Called after process_non_section() creates a Frame, for frame scanning.
-    pub(super) fn record(&mut self, header: &FrameHeader, animation: &Option<Animation>) {
+    /// With `record_visible_frames` off, a visible frame is counted and its dependencies tracked,
+    /// but no entry is kept for it.
+    pub(super) fn record(
+        &mut self,
+        record_visible_frames: bool,
+        header: &FrameHeader,
+        animation: &Option<Animation>,
+    ) {
         let Some(box_parser_checkpoint) = self.current_frame_box_parser_checkpoint else {
             return;
         };
@@ -96,7 +103,7 @@ impl FrameScanInfo {
             .min_by_key(|s| s.frame_index)
             .unwrap_or(target);
 
-        if is_visible {
+        if is_visible && record_visible_frames {
             let duration_ticks = header.duration;
             let duration_ms = if let Some(anim) = animation {
                 if anim.tps_numerator > 0 {
@@ -132,7 +139,8 @@ impl FrameScanInfo {
                 seek_target: VisibleFrameSeekTarget { target, slots },
                 name: header.name.clone(),
             });
-
+        }
+        if is_visible {
             self.visible_frame_index += 1;
         }
 

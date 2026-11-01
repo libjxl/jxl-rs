@@ -205,6 +205,8 @@ impl JxlDecoder {
                 .as_ref()
                 .map(|anim| frame_header.duration(anim)),
             size,
+            duration_ticks: frame_header.duration,
+            is_last: frame_header.is_last,
         })
     }
 

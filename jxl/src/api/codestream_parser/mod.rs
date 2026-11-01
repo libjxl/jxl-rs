@@ -392,6 +392,7 @@ impl CodestreamParser {
                     // Record frame for seeking purposes
                     if !is_preview {
                         self.frame_scan_info.record(
+                            decode_options.record_visible_frames,
                             self.frame_info.current_frame_header().unwrap(),
                             &self.image_info.file_header().image_metadata.animation,
                         );
