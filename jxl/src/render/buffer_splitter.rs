@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 
 use crate::api::JxlOutputBuffer;
 use crate::headers::Orientation;
-use crate::image::{Image, ImageDataType, Rect};
+use crate::image::{Image, ImageDataType, Rect, align_origin};
 use crate::util::sync::Mutex;
 use crate::util::{ChannelVec, ShiftRightCeil};
 
@@ -175,7 +175,19 @@ impl<'a> BufferSplitter<'a> {
                     // Before-extend stages do not write to rects outside the current frame.
                     return None;
                 }
-                let mut channel_rect = rect.downsample(bi.downsample);
+                let (dx, dy) = bi.downsample;
+                let channel_size = if bi.after_extend {
+                    full_image_size
+                } else {
+                    frame_size
+                };
+                let channel_size = (channel_size.0.shrc(dx), channel_size.1.shrc(dy));
+                let origin = (rect.origin.0 >> dx, rect.origin.1 >> dy);
+                let end = (rect.end().0.shrc(dx), rect.end().1.shrc(dy));
+                let mut channel_rect = Rect {
+                    origin,
+                    size: (end.0 - origin.0, end.1 - origin.1),
+                };
                 if !outside_current_frame {
                     let frame_size = (
                         frame_size.0.shrc(bi.downsample.0),
@@ -185,17 +197,19 @@ impl<'a> BufferSplitter<'a> {
                     if bi.after_extend {
                         // clip this rect to its visible area in the full image (in full image coordinates).
                         let origin = (
-                            rect.origin.0 as isize + frame_origin.0,
-                            rect.origin.1 as isize + frame_origin.1,
+                            channel_rect.origin.0 as isize
+                                + align_origin(frame_origin.0, dx as usize),
+                            channel_rect.origin.1 as isize
+                                + align_origin(frame_origin.1, dy as usize),
                         );
                         let end = (
-                            origin.0 + rect.size.0 as isize,
-                            origin.1 + rect.size.1 as isize,
+                            origin.0 + channel_rect.size.0 as isize,
+                            origin.1 + channel_rect.size.1 as isize,
                         );
                         let origin = (origin.0.max(0) as usize, origin.1.max(0) as usize);
                         let end = (
-                            end.0.min(full_image_size.0 as isize).max(0) as usize,
-                            end.1.min(full_image_size.1 as isize).max(0) as usize,
+                            end.0.min(channel_size.0 as isize).max(0) as usize,
+                            end.1.min(channel_size.1 as isize).max(0) as usize,
                         );
                         channel_rect = Rect {
                             origin,
@@ -210,7 +224,7 @@ impl<'a> BufferSplitter<'a> {
                     // Buffer would be empty anyway.
                     return None;
                 }
-                let channel_rect = bi.orientation.display_rect(channel_rect, full_image_size);
+                let channel_rect = bi.orientation.display_rect(channel_rect, channel_size);
                 let channel_rect = channel_rect.to_byte_rect_sz(bi.byte_size);
                 Some(buf.borrow_rect(channel_rect))
             })

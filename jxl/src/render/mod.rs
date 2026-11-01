@@ -75,19 +75,20 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display + Send + Sync {
 ///  - the input slice contains 1 + BORDER.1 * 2 slices, each of length
 ///    xsize + BORDER.0 * 2, i.e. covering one input row and up to BORDER pixels of
 ///    padding on either side.
-///  - the output slice contains 1 << SHIFT.1 slices, each of length xsize << SHIFT.0, the
-///    corresponding output pixels.
+///  - the output slice contains `1 << max(SHIFT.1, 0)` rows. Negative shifts
+///    reduce resolution, with output lengths rounded up at the image edge.
 pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     type InputT: ImageDataType;
     type OutputT: ImageDataType;
 
     const BORDER: (u8, u8);
-    const SHIFT: (u8, u8);
+    const SHIFT: (i8, i8);
 
     // Note: If previous_call_was_previous_row is true, it is guaranteed
     // that the previous call on this specific implementor covered the same
     // range of pixels, but in the row above the current one.
     // If it is false, it is *NOT* guaranteed that it wasn't.
+    #[expect(clippy::too_many_arguments)]
     fn process_row_chunk(
         &self,
         position: (usize, usize),
@@ -98,6 +99,7 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
         output_rows: &mut ChannelsMut<Self::OutputT>,
         state: Option<&mut ErasedLocalState>,
         previous_call_was_previous_row: bool,
+        flush_output_row: bool,
     );
 
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
@@ -111,6 +113,9 @@ pub trait RenderPipeline: Sized {
     type Buffer: 'static;
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
+
+    /// Input resolution relative to the pipeline's virtual image grid.
+    fn input_downsample(&self, channel: usize) -> (u8, u8);
 
     /// Obtains a buffer suitable for storing the input in channel `channel`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous

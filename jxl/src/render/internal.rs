@@ -16,6 +16,24 @@ use crate::render::ErasedLocalState;
 use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::AtomicBool;
 
+/// Scale a length, rounding up when reducing resolution.
+pub(super) fn scale_size(size: usize, shift: i8) -> usize {
+    if shift >= 0 {
+        size << shift
+    } else {
+        size.shrc(-shift)
+    }
+}
+
+/// Scale an aligned position (or round down when reducing resolution).
+pub(super) fn scale_position(position: usize, shift: i8) -> usize {
+    if shift >= 0 {
+        position << shift
+    } else {
+        position >> -shift
+    }
+}
+
 pub enum Stage<Buffer> {
     InPlace(Box<dyn RunInPlaceStage<Buffer>>),
     InOut(Box<dyn RunInOutStage<Buffer>>),
@@ -32,7 +50,7 @@ impl<Buffer: 'static> Stage<Buffer> {
         }
     }
 
-    pub(super) fn shift(&self) -> (u8, u8) {
+    pub(super) fn shift(&self) -> (i8, i8) {
         match self {
             Stage::InOut(s) => s.shift(),
             _ => (0, 0),
@@ -97,6 +115,8 @@ pub struct ChannelInfo {
 
 pub struct RenderPipelineShared<Buffer> {
     pub channel_info: Vec<Vec<ChannelInfo>>,
+    /// Resolution at the end of each channel's processing, relative to the virtual grid.
+    pub channel_output_downsamples: Vec<u8>,
     pub input_size: (usize, usize),
     pub log_group_size: usize,
     pub group_count: (usize, usize),
@@ -206,7 +226,7 @@ impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
 
 pub trait InOutStage: Any + Display + Send + Sync {
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>>;
-    fn shift(&self) -> (u8, u8);
+    fn shift(&self) -> (i8, i8);
     fn border(&self) -> (u8, u8);
     fn uses_channel(&self, c: usize) -> bool;
     fn input_type(&self) -> DataTypeTag;
@@ -220,7 +240,7 @@ impl<T: RenderPipelineInOutStage> InOutStage for T {
     fn uses_channel(&self, c: usize) -> bool {
         self.uses_channel(c)
     }
-    fn shift(&self) -> (u8, u8) {
+    fn shift(&self) -> (i8, i8) {
         T::SHIFT
     }
     fn border(&self) -> (u8, u8) {

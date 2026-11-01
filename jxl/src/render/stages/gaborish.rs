@@ -90,7 +90,7 @@ simd_function!(
 impl RenderPipelineInOutStage for GaborishStage {
     type InputT = f32;
     type OutputT = f32;
-    const SHIFT: (u8, u8) = (0, 0);
+    const SHIFT: (i8, i8) = (0, 0);
     const BORDER: (u8, u8) = (1, 1);
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -105,6 +105,7 @@ impl RenderPipelineInOutStage for GaborishStage {
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
+        _flush_output_row: bool,
     ) {
         gaborish_process_dispatch(self, xsize, input_rows, output_rows);
     }

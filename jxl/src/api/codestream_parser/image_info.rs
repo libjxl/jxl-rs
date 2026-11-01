@@ -52,6 +52,16 @@ impl ImageInfo {
         self.basic_info.as_ref().unwrap()
     }
 
+    pub(in crate::api) fn update_size(&mut self, options: &JxlDecoderOptions) {
+        let Some(file_header) = &self.file_header else {
+            return;
+        };
+        let Some(basic_info) = &mut self.basic_info else {
+            return;
+        };
+        basic_info.update_size(file_header, options);
+    }
+
     pub fn embedded_color_profile(&self) -> &JxlColorProfile {
         self.embedded_color_profile.as_ref().unwrap()
     }
@@ -71,6 +81,14 @@ impl ImageInfo {
         bits: &mut usize,
         level5_limits: bool,
     ) -> Result<()> {
+        if decode_options.downsample_factor > 3 {
+            return Err(Error::InvalidOutputDownsamplingShift(
+                decode_options.downsample_factor,
+            ));
+        }
+        if decode_options.downsample_factor != 0 && !decode_options.skip_preview {
+            return Err(Error::ApiUsageError("downsampling requires skip_preview"));
+        }
         let file_header = FileHeader::read(br)?;
         let num_ec = file_header.image_metadata.extra_channel_info.len();
         let max_num_ec = if level5_limits { 4 } else { 256 };
@@ -98,12 +116,9 @@ impl ImageInfo {
             )?;
         }
         let data = &file_header.image_metadata;
-        self.basic_info = Some(JxlBasicInfo {
-            size: if decode_options.adjust_orientation && data.orientation.is_transposing() {
-                (ysize, xsize)
-            } else {
-                (xsize, ysize)
-            },
+        let mut basic_info = JxlBasicInfo {
+            // Will be set by `update_size` below
+            size: (xsize, ysize),
             bit_depth: if data.bit_depth.floating_point_sample() {
                 JxlBitDepth::Float {
                     bits_per_sample: data.bit_depth.bits_per_sample(),
@@ -143,7 +158,9 @@ impl ImageInfo {
                 .preview
                 .as_ref()
                 .map(|p| (p.xsize() as usize, p.ysize() as usize)),
-        });
+        };
+        basic_info.update_size(&file_header, decode_options);
+        self.basic_info = Some(basic_info);
         self.file_header = Some(file_header);
         *bits = br.total_bits_read();
         Ok(())

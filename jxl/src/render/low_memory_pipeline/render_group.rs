@@ -117,7 +117,7 @@ impl<'a> BufferFiller<'a> {
         }
 
         let x0 = x0 >> dx;
-        let xsize = xsize >> dx;
+        let xsize = xsize.shrc(dx);
         let group_ysize = 1 << (rp.shared.log_group_size - dy as usize);
         let group_xsize = 1 << (rp.shared.log_group_size - dx as usize);
 
@@ -302,6 +302,7 @@ impl LowMemoryRenderPipeline {
             origin: (x0, y0),
             size: (xsize, num_rows),
         } = image_area;
+        let image_y_end = y0 + num_rows;
 
         let num_channels = self.shared.num_channels();
         let num_extra_rows = self.border_size.1;
@@ -325,7 +326,7 @@ impl LowMemoryRenderPipeline {
             .max()
             .unwrap_or(0);
         let vy0 = y0.saturating_sub(num_extra_rows + (1 << max_dy) - 1);
-        let vy1 = image_area.end().1 + num_extra_rows;
+        let vy1 = image_y_end + num_extra_rows + self.max_stage_y_delay;
 
         let fillers: ChannelVec<_> = (0..num_channels)
             .map(|c| BufferFiller::new(self, c, (x0, xsize), (gx, gy), y0..image_area.end().1))
@@ -350,6 +351,9 @@ impl LowMemoryRenderPipeline {
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
+                if stage_vy >= (image_y_end + scaled_y_border) as isize {
+                    continue;
+                }
                 let y = stage_vy >> dy;
                 // The first needed row is computed with *floor* semantics (matching the
                 // x direction and BufferFiller::new): if y0 - scaled_y_border is not
@@ -370,17 +374,22 @@ impl LowMemoryRenderPipeline {
                 let (dx, dy) = self.downsampling_for_stage[i];
                 // The logic below uses *virtual* y coordinates, so we need to convert the border
                 // amount appropriately.
-                let scaled_y_border = self.stage_output_border_pixels[i].1 << dy;
-                // I knew the reason behind this formula at some point, but now I don't.
-                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
+                let schedule = &self.stage_row_schedules[i];
+                let scaled_y_border = schedule.lead;
+                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize
+                    - schedule.delay as isize;
                 if stage_vy % (1 << dy) != 0 {
+                    continue;
+                }
+                // Skip if the virtual row points outside of the image area of current stage.
+                if stage_vy >= (image_y_end + scaled_y_border) as isize {
                     continue;
                 }
                 let y = stage_vy >> dy;
                 if matches!(stage, Stage::Save(_)) {
                     // Save stages write to shared output buffers, so they must only
                     // process rows owned by this rect; keep ceil semantics for them.
-                    if stage_vy - (y0 as isize) < -(scaled_y_border as isize) {
+                    if stage_vy < y0 as isize || stage_vy >= image_y_end as isize {
                         continue;
                     }
                 } else if y < (y0 as isize - scaled_y_border as isize) >> dy {
@@ -431,10 +440,14 @@ impl LowMemoryRenderPipeline {
                             &input_data,
                             data.save_scratch.as_mut().unwrap(),
                             &mut *buffers,
-                            (xsize >> dx, num_rows >> dy),
+                            (xsize.shrc(dx), num_rows.shrc(dy)),
                             y,
                             (x0 >> dx, y0 >> dy),
-                            current_size,
+                            if self.shared.extend_stage_index.is_some_and(|e| i > e) {
+                                current_size
+                            } else {
+                                (current_size.0.shrc(dx), current_size.1.shrc(dy))
+                            },
                             current_origin,
                         )?;
                     }
@@ -544,7 +557,10 @@ impl LowMemoryRenderPipeline {
             }
             // Step 2: go through remaining stages one by one.
             for (i, stage) in self.shared.stages.iter().enumerate().skip(extend + 1) {
-                assert_eq!(self.downsampling_for_stage[i], (0, 0));
+                assert_eq!(
+                    self.downsampling_for_stage[i],
+                    self.downsampling_for_stage[extend]
+                );
 
                 match stage {
                     Stage::InPlace(s) => {
@@ -582,7 +598,7 @@ impl LowMemoryRenderPipeline {
                             (xsize, ysize),
                             y,
                             (x0, y0),
-                            (xrange.end, yrange.end), // this is not true, but works out correctly.
+                            extend_stage.image_size,
                             (0, 0),
                         )?;
                     }

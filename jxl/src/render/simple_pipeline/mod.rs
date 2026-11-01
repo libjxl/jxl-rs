@@ -52,13 +52,18 @@ impl SimpleRenderPipeline {
         for (i, stage) in self.shared.stages.iter().enumerate() {
             debug!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
-            if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
-                // Replace buffers of different sizes.
+            if stage.shift() != (0, 0) || matches!(stage, Stage::Extend(_)) {
+                // Extend's size is already in its actual pixel grid.
                 current_size = stage.new_size(current_size);
                 for (c, info) in self.shared.channel_info[i + 1].iter().enumerate() {
                     if stage.uses_channel(c) {
-                        let xsize = current_size.0.shrc(info.downsample.0);
-                        let ysize = current_size.1.shrc(info.downsample.1);
+                        let (dx, dy) = if matches!(stage, Stage::Extend(_)) {
+                            (0, 0)
+                        } else {
+                            info.downsample
+                        };
+                        let xsize = current_size.0.shrc(dx);
+                        let ysize = current_size.1.shrc(dy);
                         debug!("reallocating channel {c} to new size {xsize}x{ysize}");
                         output_buffers[c] = Image::new((xsize, ysize))?;
                     }
@@ -149,6 +154,10 @@ impl RenderPipeline for SimpleRenderPipeline {
         })
     }
 
+    fn input_downsample(&self, channel: usize) -> (u8, u8) {
+        self.shared.channel_info[0][channel].downsample
+    }
+
     #[instrument(skip_all, err)]
     fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
         let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
@@ -170,18 +179,27 @@ impl RenderPipeline for SimpleRenderPipeline {
             T::DATA_TYPE_ID,
         );
         if self.shared.channel_is_used[channel] {
-            let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
-            let goffset = self.shared.group_offset(group_id);
-            let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
-            let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
+            let (gx, gy) = self.shared.group_offset(group_id);
+            let (gw, gh) = self.shared.group_size(group_id);
+            let ChannelInfo {
+                ty,
+                downsample: (dx, dy),
+            } = self.shared.channel_info[0][channel];
             assert_eq!(ty, T::DATA_TYPE_ID);
+            let gx = gx >> dx;
+            let gy = gy >> dy;
+            let gw = gw.shrc(dx);
+            let gh = gh.shrc(dy);
+
             let mut buffers = self.input_buffers.lock().unwrap();
-            let total_sz = buffers[channel].size();
-            for y in 0..sz.1.min(total_sz.1 - off.1) {
-                let row_in = buf.row(y);
-                let row_out = buffers[channel].row_mut(y + off.1);
-                for x in 0..sz.0.min(total_sz.0 - off.0) {
-                    row_out[x + off.0] = row_in[x].to_f64();
+            let (sx, sy) = buffers[channel].size();
+            let sx = sx.min(gx + gw);
+            let sy = sy.min(gy + gh);
+            for y in gy..sy {
+                let row_in = buf.row(y - gy);
+                let row_out = buffers[channel].row_mut(y);
+                for x in gx..sx {
+                    row_out[x] = row_in[x - gx].to_f64();
                 }
             }
             self.shared.group_chan_complete[group_id][channel].store(complete, Ordering::Relaxed);
