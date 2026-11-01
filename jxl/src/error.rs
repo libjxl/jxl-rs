@@ -122,6 +122,8 @@ pub enum Error {
     ImageOutOfMemory(usize, usize),
     #[error("Image size too large: {0}x{1}")]
     ImageSizeTooLarge(usize, usize),
+    #[error("Too many codestream boxes in the container, limit is {0}")]
+    TooManyCodestreamBoxes(usize),
     #[error("Image dimension too large: {0}")]
     ImageDimensionTooLarge(u64),
     #[error("Invalid image size: {0}x{1}")]

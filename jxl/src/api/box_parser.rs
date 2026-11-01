@@ -153,6 +153,11 @@ pub(super) struct BoxParser {
     container_level: Option<ProfileLevel>,
     aux: AuxBoxState,
     input_closed: bool,
+    // The most codestream boxes the container may hold, the boxes counted so far, and the file
+    // position past the last counted, so a box parsed again after a rewind counts once.
+    codestream_box_limit: Option<usize>,
+    codestream_boxes: usize,
+    codestream_boxes_counted_to: u64,
 }
 
 #[derive(Default)]
@@ -180,6 +185,29 @@ impl BoxParser {
                 ..Default::default()
             },
             input_closed: false,
+            codestream_box_limit: None,
+            codestream_boxes: 0,
+            codestream_boxes_counted_to: 0,
+        }
+    }
+
+    pub(super) fn set_codestream_box_limit(&mut self, limit: Option<usize>) {
+        self.codestream_box_limit = limit;
+    }
+
+    // Count the codestream box whose header begins at `position`, once: past the limit,
+    // `TooManyCodestreamBoxes`.
+    fn count_codestream_box(&mut self, position: u64) -> Result<()> {
+        if position < self.codestream_boxes_counted_to {
+            return Ok(());
+        }
+        self.codestream_boxes_counted_to = position + 1;
+        self.codestream_boxes += 1;
+        match self.codestream_box_limit {
+            Some(limit) if self.codestream_boxes > limit => {
+                Err(Error::TooManyCodestreamBoxes(limit))
+            }
+            _ => Ok(()),
         }
     }
 
@@ -215,6 +243,8 @@ impl BoxParser {
         self.aux.next_box_idx = 0;
         self.aux.seen_box_count = 0;
         self.input_closed = false;
+        self.codestream_boxes = 0;
+        self.codestream_boxes_counted_to = 0;
     }
 
     pub(super) fn reset_to_checkpoint(&mut self, box_checkpoint: BoxParserCheckpoint) {
@@ -687,6 +717,9 @@ impl BoxParser {
             [0, 0, 0, 1, ..] => u64::from_be_bytes(self.local_buffer[8..16].try_into().unwrap()),
             _ => u32::from_be_bytes(self.local_buffer[0..4].try_into().unwrap()) as u64,
         };
+        if matches!(&ty, b"jxlc" | b"jxlp") {
+            self.count_codestream_box(self.local_buffer.consumed())?;
+        }
 
         self.local_buffer.consume(min_len);
 
