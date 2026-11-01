@@ -82,12 +82,6 @@ impl JxlBasicInfo {
         } else {
             (xsize, ysize)
         };
-        self.preview_size = data.preview.as_ref().map(|p| {
-            (
-                (p.xsize() as usize).shrc(shift),
-                (p.ysize() as usize).shrc(shift),
-            )
-        });
     }
 }
 

@@ -20,6 +20,8 @@ pub struct JxlDecoderOptions {
     /// and the caller is responsible for applying the orientation.
     pub adjust_orientation: bool,
     /// Render at 1 / 2^factor resolution (0 = full resolution, maximum 3).
+    ///
+    /// Must be zero if `skip_preview` is false.
     pub downsample_factor: u8,
     pub render_spot_colors: bool,
     pub coalescing: bool,

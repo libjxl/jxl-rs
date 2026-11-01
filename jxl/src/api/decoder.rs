@@ -183,7 +183,8 @@ impl JxlDecoder {
     ///
     /// # Errors
     ///
-    /// Returns API usage error when called after the first frame header is decoded.
+    /// Returns API usage error when called after the first frame header is decoded,
+    /// or when a nonzero factor is requested while [`JxlDecoderOptions::skip_preview`] is false.
     pub fn set_downsample_factor(&mut self, factor: u8) -> Result<()> {
         if self.codestream_parser.frame_header_was_decoded() {
             return Err(Error::ApiUsageError(
@@ -192,6 +193,9 @@ impl JxlDecoder {
         }
         if factor > 3 {
             return Err(Error::InvalidOutputDownsamplingShift(factor));
+        }
+        if factor != 0 && !self.options.skip_preview {
+            return Err(Error::ApiUsageError("downsampling requires skip_preview"));
         }
 
         self.options.downsample_factor = factor;

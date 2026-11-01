@@ -86,6 +86,9 @@ impl ImageInfo {
                 decode_options.downsample_factor,
             ));
         }
+        if decode_options.downsample_factor != 0 && !decode_options.skip_preview {
+            return Err(Error::ApiUsageError("downsampling requires skip_preview"));
+        }
         let file_header = FileHeader::read(br)?;
         let num_ec = file_header.image_metadata.extra_channel_info.len();
         let max_num_ec = if level5_limits { 4 } else { 256 };
@@ -151,8 +154,10 @@ impl ImageInfo {
                 relative_to_max_display: data.tone_mapping.relative_to_max_display,
                 linear_below: data.tone_mapping.linear_below,
             },
-            // Will be set by `update_size` below
-            preview_size: None,
+            preview_size: data
+                .preview
+                .as_ref()
+                .map(|p| (p.xsize() as usize, p.ysize() as usize)),
         };
         basic_info.update_size(&file_header, decode_options);
         self.basic_info = Some(basic_info);
