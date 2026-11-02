@@ -210,7 +210,9 @@ pub fn perform_blending(
 
     // Fast path: if color is None (keep bg) and all ec are None, nothing to do.
     if color_blending.mode == PatchBlendMode::None
-        && ec_blending.iter().all(|b| b.mode == PatchBlendMode::None)
+        && ec_blending[..num_ec]
+            .iter()
+            .all(|b| b.mode == PatchBlendMode::None)
     {
         return;
     }
@@ -544,6 +546,38 @@ mod tests {
         // For kMul mode: Co = Cb * Cs
         fn expected_mul_blend(c_bg: f32, c_fg: f32) -> f32 {
             c_bg * c_fg
+        }
+
+        // A patch's blending is followed in the dictionary by every later patch's, so `ec_blending`
+        // may run past its `num_ec` entries: the fast path reads only its own.
+        #[test]
+        fn test_none_reads_only_its_extra_channels() {
+            let none = PatchBlending {
+                mode: PatchBlendMode::None,
+                alpha_channel: 0,
+                clamp: false,
+            };
+            let later = PatchBlending {
+                mode: PatchBlendMode::Replace,
+                ..none
+            };
+            let (mut r, mut g, mut b, mut ec) = ([0.1], [0.2], [0.3], [0.4]);
+            let mut bg: [&mut [f32]; 4] = [&mut r, &mut g, &mut b, &mut ec];
+            let fg: [&[f32]; 4] = [&[0.5]; 4];
+            let info = [ExtraChannelInfo::new(
+                false,
+                ExtraChannel::Alpha,
+                BitDepth::f32(),
+                0,
+                "".to_string(),
+                false,
+                None,
+                None,
+            )];
+            let mut tmp = Vec::new();
+            perform_blending(&mut bg, &fg, &none, &[none, later], &info, &mut tmp);
+            assert!(tmp.is_empty());
+            assert_eq!(ec, [0.4]);
         }
 
         #[test]
