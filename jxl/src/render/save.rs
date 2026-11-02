@@ -81,6 +81,10 @@ impl SaveStage {
         self.color_type.samples_per_pixel()
     }
 
+    pub fn bytes_per_pixel(&self) -> usize {
+        self.data_format.bytes_per_pixel(self.color_type)
+    }
+
     pub fn uses_channel(&self, c: usize) -> bool {
         self.channels.contains(&c)
     }
@@ -100,7 +104,7 @@ impl SaveStage {
         };
         let osize = self.orientation.map_size(size);
 
-        let expected_w = self.output_channels() * self.data_format.bytes_per_sample() * osize.0;
+        let expected_w = self.bytes_per_pixel() * osize.0;
 
         if buf.byte_size() != (expected_w, osize.1) {
             return Err(Error::InvalidOutputBufferSize(

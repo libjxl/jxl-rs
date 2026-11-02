@@ -237,7 +237,9 @@ impl CodestreamParser {
                     .unwrap_or(JxlDataFormat::U8 { bit_depth: 8 });
                 let is_float = matches!(
                     data_format,
-                    JxlDataFormat::F32 { .. } | JxlDataFormat::F16 { .. }
+                    JxlDataFormat::F32 { .. }
+                        | JxlDataFormat::F16 { .. }
+                        | JxlDataFormat::Custom { .. }
                 );
                 if is_float {
                     JxlColorEncoding::linear_srgb(self.image_info.is_gray())

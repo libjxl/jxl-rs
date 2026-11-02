@@ -93,6 +93,28 @@ impl<'a, 'b> OutputChannelRef<'a, 'b> {
     pub(crate) fn typed_row_mut<T: ImageDataType>(&mut self, row: usize) -> &mut [T] {
         self.buf.as_mut().unwrap().typed_row_mut(row)
     }
+
+    #[inline(always)]
+    pub fn write_transformed(
+        &mut self,
+        row: usize,
+        col_pixel: usize,
+        bytes_per_pixel: usize,
+        src: &[&[f32]],
+    ) {
+        let num_pixels = src[0].len();
+        debug_assert!(num_pixels > 0);
+        debug_assert!(src.iter().all(|s| s.len() == num_pixels));
+        let buf = self.buf.as_mut().unwrap();
+        let transform = buf
+            .transform()
+            .expect("JxlDataFormat::Custom requires JxlOutputBuffer::with_transform");
+        let x = self.r.origin.0 / bytes_per_pixel + col_pixel;
+        let y = self.r.origin.1 + row;
+        let dst = &mut buf.row_mut(row)
+            [col_pixel * bytes_per_pixel..(col_pixel + num_pixels) * bytes_per_pixel];
+        transform(x, y, src, dst);
+    }
 }
 
 impl<'a, 'b> Deref for OutputChannelRef<'a, 'b> {

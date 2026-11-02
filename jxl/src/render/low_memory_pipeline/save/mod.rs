@@ -95,7 +95,10 @@ impl SaveStage {
         for (i, (&in_buf, &ch_ty)) in data.iter().zip(self.channel_types.iter()).enumerate() {
             let ch = self.channels[i];
             if ch_ty == SaveChannelType::F32
-                && matches!(self.data_format, JxlDataFormat::F32 { .. })
+                && matches!(
+                    self.data_format,
+                    JxlDataFormat::F32 { .. } | JxlDataFormat::Custom { .. }
+                )
             {
                 save_buffers.push(in_buf);
                 continue;
@@ -186,7 +189,7 @@ impl SaveStage {
                     let off = RowBuffer::x0_offset::<u16>();
                     s_buf.get_row_mut::<u16>(0)[off + conv_start..off + save_end.0].fill(0x3c00);
                 }
-                JxlDataFormat::F32 { .. } => {
+                JxlDataFormat::F32 { .. } | JxlDataFormat::Custom { .. } => {
                     let off = RowBuffer::x0_offset::<f32>();
                     s_buf.get_row_mut::<f32>(0)[off + conv_start..off + save_end.0].fill(1.0);
                 }
@@ -194,6 +197,31 @@ impl SaveStage {
             save_buffers.push(&*s_buf);
         }
         let data = &save_buffers[..];
+        let nc = self.output_channels();
+        debug_assert_eq!(nc, data.len());
+
+        if let JxlDataFormat::Custom { bytes_per_pixel } = self.data_format {
+            let bytes_per_pixel = bytes_per_pixel as usize;
+            let off = RowBuffer::x0_offset::<f32>() + conv_start;
+            let mut src_rows = [&[] as &[f32]; 4];
+            for (c, d) in data.iter().enumerate() {
+                src_rows[c] = &d.get_row::<f32>(frame_y)[off..off + conv_len];
+            }
+            if let Some(output_y) = output_y {
+                buf.write_transformed(output_y, 0, bytes_per_pixel, &src_rows[..nc]);
+            } else {
+                let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
+                let (dx, dy) = self.orientation.display_row_step();
+                for i in 0..conv_len {
+                    let x = (x0 as isize + dx * i as isize) as usize;
+                    let y = (y0 as isize + dy * i as isize) as usize;
+                    let px: [&[f32]; 4] =
+                        std::array::from_fn(|c| src_rows[c].get(i..i + 1).unwrap_or(&[]));
+                    buf.write_transformed(y, x, bytes_per_pixel, &px[..nc]);
+                }
+            }
+            return Ok(());
+        }
 
         if let Some(output_y) = output_y
             && identity::store(
@@ -208,8 +236,6 @@ impl SaveStage {
             return Ok(());
         }
 
-        let nc = self.output_channels();
-        debug_assert_eq!(nc, data.len());
         let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
         let x0 = x0 as isize;
         let y0 = y0 as isize;
@@ -283,6 +309,7 @@ impl SaveStage {
             JxlDataFormat::F32 { endianness, .. } => {
                 write_oriented!(f32, 4, endianness);
             }
+            JxlDataFormat::Custom { .. } => unreachable!(),
         }
         Ok(())
     }

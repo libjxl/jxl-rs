@@ -242,7 +242,7 @@ impl Frame {
         let info = SaveStageBufferInfo {
             downsample: (0, 0),
             orientation,
-            byte_size: data_format.bytes_per_sample() * color_type.samples_per_pixel(),
+            byte_size: data_format.bytes_per_pixel(color_type),
             after_extend: false,
         };
         let info = [Some(info)];

@@ -269,10 +269,6 @@ impl JxlDecoder {
     /// This function will return when reaching the next decoding stage (i.e. finished decoding
     /// file/frame header, finished decoding a frame, or finished the entire decode).
     ///
-    /// Output `buffers` may be provided any time after [`Event::BasicInfo`]; they will only be
-    /// written to when decoding a visible frame's sections (between [`Event::FrameHeader`] and
-    /// [`Event::FrameComplete`]).
-    ///
     /// If called when decoding a frame with `None` for `buffers`, the frame will still be read,
     /// but pixel data will not be produced. Note that reference frames that may be needed by
     /// later frames are still decoded internally even if `buffers` is `None`.
@@ -281,9 +277,8 @@ impl JxlDecoder {
     /// and use [`Self::start_new_frame()`] to seek directly to the desired frame's keyframe.
     ///
     /// Note: the data in `buffers` should have alignment that is compatible with the requested
-    /// pixel format. This means that, if we are asking for 2-byte or 4-byte output (i.e. u16/f16
-    /// and f32 respectively), each row in the provided buffers must be aligned to 2 or 4 bytes
-    /// respectively. If that is not the case, the library may panic.
+    /// pixel format (2-byte or 4-byte row alignment for u16/f16 and f32 respectively) for
+    /// optimal performance.
     #[inline(never)]
     pub fn process(
         &mut self,

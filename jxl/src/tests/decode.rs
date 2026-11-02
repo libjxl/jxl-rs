@@ -19,6 +19,7 @@ use crate::image::{Image, ImageDataType, JxlOutputBuffer, Rect};
 pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub chunk_size: usize,
     pub use_simple_pipeline: bool,
+    pub use_callback: bool,
     pub do_flush: bool,
     pub flush_callback: Option<&'a mut dyn FnMut(usize, usize, &[Image<T>]) -> Result<(), Error>>,
     pub parallel_runner: Option<&'a mut dyn JxlParallelRunner>,
@@ -34,6 +35,7 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
         Self {
             chunk_size: usize::MAX,
             use_simple_pipeline: false,
+            use_callback: false,
             do_flush: false,
             flush_callback: None,
             parallel_runner: None,
@@ -86,6 +88,7 @@ pub fn decode<'a, T: ImageDataType>(
     let mut frames = vec![];
 
     let init = T::from_f64(f64::NAN);
+    let extra = if params.use_callback { 2 } else { 0 };
     let make_buffers = |decoder: &JxlDecoder| -> Result<Vec<Image<T>>, Error> {
         let (w, h) = decoder.basic_info().unwrap().size;
         let pixel_format = decoder.current_pixel_format().unwrap();
@@ -94,13 +97,16 @@ pub fn decode<'a, T: ImageDataType>(
         let mut buffers = vec![];
         if pixel_format.color_data_format.is_some() {
             // First channel is interleaved.
-            buffers.push(Image::new_with_value((w * num_channels, h), init)?);
+            buffers.push(Image::new_with_value(
+                (w * (num_channels + extra), h),
+                init,
+            )?);
         }
         for ecf in pixel_format.extra_channel_format.iter() {
             if ecf.is_none() {
                 continue;
             }
-            buffers.push(Image::new_with_value((w, h), init)?);
+            buffers.push(Image::new_with_value((w * (1 + extra), h), init)?);
         }
         Ok(buffers)
     };
@@ -110,7 +116,30 @@ pub fn decode<'a, T: ImageDataType>(
     loop {
         chunk_input = &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
         let available_before = chunk_input.len();
-        let mut out_bufs = buffers.as_deref_mut().map(as_output_buffers);
+        let mut out_bufs = buffers.as_deref_mut().map(|bufs| {
+            let mut out = as_output_buffers(bufs);
+            if params.use_callback {
+                out = out
+                    .into_iter()
+                    .map(|b| {
+                        b.with_transform(&|x, y, src, dst| {
+                            let nc = src.len();
+                            let stride = nc + 2;
+                            let num_pixels = src[0].len();
+                            let dst_typed = T::cast_slice_mut(dst);
+                            for i in 0..num_pixels {
+                                for (c, ch) in src.iter().enumerate() {
+                                    dst_typed[i * stride + c] = T::from_f64(ch[i] as f64);
+                                }
+                                dst_typed[i * stride + nc] = T::from_f64((x + i) as f64);
+                                dst_typed[i * stride + nc + 1] = T::from_f64(y as f64);
+                            }
+                        })
+                    })
+                    .collect();
+            }
+            out
+        });
         let process_result = decoder.process(
             &mut chunk_input,
             out_bufs.as_deref_mut(),
@@ -129,11 +158,28 @@ pub fn decode<'a, T: ImageDataType>(
                 if let Some(ref fmt) = params.pixel_format {
                     decoder.set_pixel_format(fmt.clone())?;
                 }
+                if params.use_callback {
+                    let mut fmt = decoder.current_pixel_format().unwrap().clone();
+                    let color_type = fmt.color_type;
+                    if let Some(df) = &mut fmt.color_data_format {
+                        *df = crate::api::JxlDataFormat::Custom {
+                            bytes_per_pixel: (df.bytes_per_pixel(color_type)
+                                + 2 * df.bytes_per_sample())
+                                as u8,
+                        };
+                    }
+                    for df in fmt.extra_channel_format.iter_mut().flatten() {
+                        *df = crate::api::JxlDataFormat::Custom {
+                            bytes_per_pixel: (3 * df.bytes_per_sample()) as u8,
+                        };
+                    }
+                    decoder.set_pixel_format(fmt)?;
+                }
                 buffers = Some(make_buffers(&decoder)?);
             }
             Event::FrameHeader => {}
             Event::FrameComplete { has_more_frames } => {
-                let completed = buffers.take().unwrap();
+                let mut completed = buffers.take().unwrap();
                 if !allow_partial {
                     // All pixels should have been overwritten, so they should no longer be NaNs.
                     for buf in completed.iter() {
@@ -148,6 +194,35 @@ pub fn decode<'a, T: ImageDataType>(
                             }
                         }
                     }
+                }
+                if params.use_callback {
+                    let w = decoder.basic_info().unwrap().size.0;
+                    completed = completed
+                        .into_iter()
+                        .map(|buf| {
+                            let (xs, ys) = buf.size();
+                            let stride = xs / w;
+                            let nc = stride - 2;
+                            let mut unpacked = Image::<T>::new((w * nc, ys)).unwrap();
+                            for y in 0..ys {
+                                let row = buf.row(y);
+                                let dst_row = unpacked.row_mut(y);
+                                for x in 0..w {
+                                    assert_eq!(
+                                        row[x * stride + nc].to_f64(),
+                                        T::from_f64(x as f64).to_f64()
+                                    );
+                                    assert_eq!(
+                                        row[x * stride + nc + 1].to_f64(),
+                                        T::from_f64(y as f64).to_f64()
+                                    );
+                                    dst_row[x * nc..(x + 1) * nc]
+                                        .copy_from_slice(&row[x * stride..x * stride + nc]);
+                                }
+                            }
+                            unpacked
+                        })
+                        .collect();
                 }
                 frames.push(completed);
                 if has_more_frames {

@@ -27,6 +27,26 @@ impl SaveStage {
         self.check_buffer_size(size, Some(buf))?;
 
         let output_channels = self.output_channels();
+        if let JxlDataFormat::Custom { bytes_per_pixel } = self.data_format {
+            for y in 0..size.1 {
+                for x in 0..size.0 {
+                    let (dx, dy) = self.orientation.display_pixel((x, y), size);
+                    let mut px = [1.0f32; 4];
+                    for (c, &chan) in self.channels.iter().enumerate() {
+                        px[c] = data[chan].row(y)[x] as f32;
+                    }
+                    let px_slices: [&[f32]; 4] =
+                        std::array::from_fn(|c| std::slice::from_ref(&px[c]));
+                    buf.write_transformed(
+                        dy,
+                        dx,
+                        bytes_per_pixel as usize,
+                        &px_slices[..output_channels],
+                    );
+                }
+            }
+            return Ok(());
+        }
 
         for (c, (&chan, &ch_ty)) in self
             .channels

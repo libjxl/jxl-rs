@@ -16,7 +16,7 @@ mod test;
 mod typed;
 
 pub use data_type::{DataTypeTag, ImageDataType};
-pub use output_buffer::JxlOutputBuffer;
+pub use output_buffer::{JxlOutputBuffer, JxlOutputTransform};
 pub use raw::{OwnedRawImage, RawImageRect, RawImageRectMut};
 pub use rect::Rect;
 pub(crate) use recycler::BufferRecycler;
