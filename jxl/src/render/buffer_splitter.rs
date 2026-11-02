@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use std::collections::BTreeSet;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use crate::api::JxlOutputBuffer;
 use crate::headers::Orientation;
@@ -21,14 +21,12 @@ pub struct OutputChannelSplitter<'a> {
 
 impl<'a> Drop for OutputChannelSplitter<'a> {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
-            assert!(
-                self.borrowed_rects
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_empty()
-            );
-        }
+        assert!(
+            self.borrowed_rects
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        )
     }
 }
 
@@ -57,6 +55,7 @@ impl<'a> OutputChannelSplitter<'a> {
 
     #[allow(unsafe_code)]
     pub fn borrow_rect(&self, rect: Rect) -> OutputChannelRef<'a, '_> {
+        assert!(rect.size.0 != 0 && rect.size.1 != 0);
         let mut rects = self
             .borrowed_rects
             .lock()
@@ -64,13 +63,13 @@ impl<'a> OutputChannelSplitter<'a> {
         for r in rects.iter() {
             assert!(!r.intersects(&rect));
         }
-        rects.insert(rect);
-
-        // SAFETY: we just checked that `self.borrowed_rects` does not contain
-        // any rects that intersect with the new rect. Since by safety invariant
-        // all the currently-borrowed rects are in `self.borrowed_rects`, the
+        // SAFETY: `rect` is non-empty and we just checked that `self.borrowed_rects`
+        // does not contain any rects that intersect with the new rect. Since by safety
+        // invariant all the currently-borrowed rects are in `self.borrowed_rects`, the
         // new rect does not intersect the old ones.
         let buf = unsafe { self.buffer.rect(rect) };
+        assert!(rects.insert(rect));
+
         OutputChannelRef {
             s: self,
             r: rect,
@@ -80,22 +79,26 @@ impl<'a> OutputChannelSplitter<'a> {
 }
 
 pub struct OutputChannelRef<'a, 'b> {
-    s: &'a OutputChannelSplitter<'b>,
+    s: &'b OutputChannelSplitter<'a>,
     buf: Option<JxlOutputBuffer<'b>>,
     // Safety invariant: `r` is the rect that was used to obtain `buf` from `s`.
     r: Rect,
+}
+
+impl<'a, 'b> OutputChannelRef<'a, 'b> {
+    pub(crate) fn row_mut(&mut self, row: usize) -> &mut [u8] {
+        self.buf.as_mut().unwrap().row_mut(row)
+    }
+
+    pub(crate) fn typed_row_mut<T: ImageDataType>(&mut self, row: usize) -> &mut [T] {
+        self.buf.as_mut().unwrap().typed_row_mut(row)
+    }
 }
 
 impl<'a, 'b> Deref for OutputChannelRef<'a, 'b> {
     type Target = JxlOutputBuffer<'b>;
     fn deref(&self) -> &Self::Target {
         self.buf.as_ref().unwrap()
-    }
-}
-
-impl<'a, 'b> DerefMut for OutputChannelRef<'a, 'b> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buf.as_mut().unwrap()
     }
 }
 
