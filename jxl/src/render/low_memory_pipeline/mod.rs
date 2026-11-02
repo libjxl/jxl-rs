@@ -176,7 +176,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                     let info = SaveStageBufferInfo {
                         downsample: ci.downsample,
                         orientation: s.orientation,
-                        byte_size: s.data_format.bytes_per_sample() * s.output_channels(),
+                        byte_size: s.bytes_per_pixel(),
                         after_extend: shared.extend_stage_index.is_some_and(|e| i > e),
                     };
                     while save_buffer_info.len() <= s.output_buffer_index {

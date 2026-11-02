@@ -113,14 +113,30 @@ pub enum JxlDataFormat {
     F32 {
         endianness: Endianness,
     },
+    /// Custom output format with `bytes_per_pixel` bytes per pixel in the destination buffer.
+    ///
+    /// Requires the corresponding [`crate::api::JxlOutputBuffer`] to have a transform attached
+    /// via [`crate::api::JxlOutputBuffer::with_transform`], which receives planar `f32` channel
+    /// slices.
+    Custom {
+        bytes_per_pixel: u8,
+    },
 }
 
 impl JxlDataFormat {
     pub fn bytes_per_sample(&self) -> usize {
-        match self {
+        match *self {
             Self::U8 { .. } => 1,
             Self::U16 { .. } | Self::F16 { .. } => 2,
             Self::F32 { .. } => 4,
+            Self::Custom { bytes_per_pixel } => bytes_per_pixel as usize,
+        }
+    }
+
+    pub fn bytes_per_pixel(&self, color_type: JxlColorType) -> usize {
+        match *self {
+            Self::Custom { bytes_per_pixel } => bytes_per_pixel as usize,
+            _ => self.bytes_per_sample() * color_type.samples_per_pixel(),
         }
     }
 
@@ -135,6 +151,7 @@ impl JxlDataFormat {
             Self::U8 { bit_depth } => (1..=8).contains(&bit_depth),
             Self::U16 { bit_depth, .. } => (1..=16).contains(&bit_depth),
             Self::F16 { .. } | Self::F32 { .. } => true,
+            Self::Custom { bytes_per_pixel } => bytes_per_pixel > 0,
         }
     }
 
@@ -175,6 +192,7 @@ impl JxlDataFormat {
                     val.to_be_bytes().to_vec()
                 }
             }
+            JxlDataFormat::Custom { .. } => unreachable!(),
         }
     }
 }

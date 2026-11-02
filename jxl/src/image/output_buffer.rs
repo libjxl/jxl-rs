@@ -10,12 +10,29 @@ use super::internal::RawImageBuffer;
 use super::{RawImageRectMut, Rect};
 use crate::image::ImageDataType;
 
-#[derive(Debug)]
-#[repr(transparent)]
+/// Callback that transforms a horizontal span of `num_pixels` decoded pixels from planar `f32`
+/// channel slices `src` into `dst`: `(x, y, src, dst)`, starting at output coordinates `(x, y)`.
+///
+/// Used when the channel's [`crate::api::JxlDataFormat`] is [`crate::api::JxlDataFormat::Custom`].
+/// `src` contains one `&[f32]` slice of length `num_pixels` per channel (in
+/// [`crate::api::JxlColorType`] order for the color buffer, or 1 slice for extra channels), and
+/// `dst` has length `num_pixels * bytes_per_pixel`.
+pub type JxlOutputTransform<'a> = dyn Fn(usize, usize, &[&[f32]], &mut [u8]) + Sync + 'a;
+
 pub struct JxlOutputBuffer<'a> {
     // Safety invariant: `self` has exclusive (write) access to the accessible bytes of `inner`.
     inner: RawImageBuffer,
+    transform: Option<&'a JxlOutputTransform<'a>>,
     _ph: PhantomData<&'a mut u8>,
+}
+
+impl Debug for JxlOutputBuffer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JxlOutputBuffer")
+            .field("inner", &self.inner)
+            .field("has_transform", &self.transform.is_some())
+            .finish()
+    }
 }
 
 impl<'a> JxlOutputBuffer<'a> {
@@ -46,6 +63,7 @@ impl<'a> JxlOutputBuffer<'a> {
                     bytes_between_rows,
                 )
             },
+            transform: None,
             _ph: PhantomData,
         }
     }
@@ -55,6 +73,7 @@ impl<'a> JxlOutputBuffer<'a> {
             // Safety note: since `raw` has exclusive access to the data, we are just transferring
             // this access.
             inner: raw.data,
+            transform: None,
             _ph: PhantomData,
         }
     }
@@ -81,6 +100,17 @@ impl<'a> JxlOutputBuffer<'a> {
 
     pub fn new(buf: &'a mut [u8], num_rows: usize, bytes_per_row: usize) -> Self {
         Self::new_with_stride(buf, num_rows, bytes_per_row, bytes_per_row)
+    }
+
+    /// Attaches a pixel transform to this [`JxlOutputBuffer`] for use with
+    /// [`crate::api::JxlDataFormat::Custom`].
+    pub fn with_transform(mut self, transform: &'a JxlOutputTransform<'a>) -> Self {
+        self.transform = Some(transform);
+        self
+    }
+
+    pub(crate) fn transform(&self) -> Option<&'a JxlOutputTransform<'a>> {
+        self.transform
     }
 
     pub(crate) fn reborrow(lender: &'a mut JxlOutputBuffer<'_>) -> JxlOutputBuffer<'a> {
@@ -114,6 +144,7 @@ impl<'a> JxlOutputBuffer<'a> {
         // exclusive access to that region.
         Self {
             inner: self.inner.rect(rect),
+            transform: self.transform,
             _ph: PhantomData,
         }
     }

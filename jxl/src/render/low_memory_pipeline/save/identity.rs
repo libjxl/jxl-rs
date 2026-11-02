@@ -615,6 +615,7 @@ pub(super) fn store(
         JxlDataFormat::F16 { endianness, .. }
         | JxlDataFormat::U16 { endianness, .. }
         | JxlDataFormat::F32 { endianness, .. } => endianness == Endianness::native(),
+        JxlDataFormat::Custom { .. } => unreachable!(),
     };
     let output_buf = output_buf.row_mut(output_y);
     let output_buf = &mut output_buf[0..(byte_end - byte_start) * input_buf.len()];

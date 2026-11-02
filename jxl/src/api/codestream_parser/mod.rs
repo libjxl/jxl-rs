@@ -90,6 +90,19 @@ fn validate_output_buffers(
     if output_buffers.len() != expected_len {
         return Err(Error::WrongBufferCount(output_buffers.len(), expected_len));
     }
+    let formats = std::iter::once(&px.color_data_format)
+        .chain(px.extra_channel_format.iter())
+        .filter_map(|x| x.as_ref());
+    for (buf, fmt) in output_buffers.iter().zip(formats) {
+        let is_custom = matches!(fmt, crate::api::JxlDataFormat::Custom { .. });
+        if is_custom != buf.transform().is_some() {
+            return Err(Error::ApiUsageError(if is_custom {
+                "JxlDataFormat::Custom requires JxlOutputBuffer::with_transform"
+            } else {
+                "JxlOutputBuffer::with_transform requires JxlDataFormat::Custom"
+            }));
+        }
+    }
     Ok(())
 }
 
