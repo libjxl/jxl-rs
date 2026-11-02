@@ -10,8 +10,9 @@ use jxl_simd::{
     U16SimdVec, simd_function,
 };
 
-use crate::api::{Endianness, JxlDataFormat, JxlOutputBuffer};
+use crate::api::{Endianness, JxlDataFormat};
 use crate::image::ImageDataType;
+use crate::render::buffer_splitter::OutputChannelRef;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::save::{SaveChannelType, SaveStage};
 use crate::util::DITHER_TABLE;
@@ -491,7 +492,7 @@ pub(super) fn store_fused(
     input_y: usize,
     group_x0: usize,
     xrange: Range<usize>,
-    output_buf: &mut JxlOutputBuffer,
+    output_buf: &mut OutputChannelRef,
     output_y: usize,
 ) -> bool {
     let len = xrange.len();
@@ -603,7 +604,7 @@ pub(super) fn store(
     input_buf: &[&RowBuffer],
     input_y: usize,
     xrange: Range<usize>,
-    output_buf: &mut JxlOutputBuffer,
+    output_buf: &mut OutputChannelRef,
     output_y: usize,
     data_format: JxlDataFormat,
 ) -> bool {
