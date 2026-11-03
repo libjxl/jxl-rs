@@ -101,6 +101,35 @@ pub fn pq_to_linear_precise(intensity_target: f32, samples: &mut [f32]) {
     }
 }
 
+const PQ_EOTF_P: [f32; 5] = [
+    2.6297566e-4,
+    -6.235531e-3,
+    7.386023e-1,
+    2.6455317,
+    5.500349e-1,
+];
+const PQ_EOTF_Q: [f32; 5] = [
+    4.213501e2,
+    -4.2873682e2,
+    1.7436467e2,
+    -3.3907887e1,
+    2.6771877,
+];
+
+/// PQ EOTF of a vector, linear 1.0 being 10000 / `y_mult` nits; rational, max error ~3e-6.
+#[inline(always)]
+pub fn pq_to_linear_simd_vec<D: SimdDescriptor>(
+    d: D,
+    y_mult: D::F32Vec,
+    s: D::F32Vec,
+) -> D::F32Vec {
+    let a = s.abs();
+    // a + a * a
+    let x = a.mul_add(a, a);
+    let y = eval_rational_poly_simd(d, x, PQ_EOTF_P, PQ_EOTF_Q);
+    (y * y_mult).copysign(s)
+}
+
 const PQ_INV_EOTF_P: [f32; 5] = [1.351392e-2, -1.095778, 5.522776e1, 1.492516e2, 4.838434e1];
 const PQ_INV_EOTF_Q: [f32; 5] = [1.012416, 2.016708e1, 9.26371e1, 1.120607e2, 2.590418e1];
 const PQ_INV_EOTF_P_SMALL: [f32; 5] = [
@@ -290,62 +319,28 @@ mod test {
 
     use super::*;
     use crate::tests::assert_close;
-    use crate::util::eval_rational_poly;
-
-    const PQ_EOTF_P: [f32; 5] = [
-        2.6297566e-4,
-        -6.235531e-3,
-        7.386023e-1,
-        2.6455317,
-        5.500349e-1,
-    ];
-    const PQ_EOTF_Q: [f32; 5] = [
-        4.213501e2,
-        -4.2873682e2,
-        1.7436467e2,
-        -3.3907887e1,
-        2.6771877,
-    ];
 
     fn srgb_to_linear(samples: &mut [f32]) {
-        #[allow(clippy::excessive_precision)]
-        const P: [f32; 5] = [
-            2.200248328e-4,
-            1.043637593e-2,
-            1.624820318e-1,
-            7.961564959e-1,
-            8.210152774e-1,
-        ];
-
-        #[allow(clippy::excessive_precision)]
-        const Q: [f32; 5] = [
-            2.631846970e-1,
-            1.076976492,
-            4.987528350e-1,
-            -5.512498495e-2,
-            6.521209011e-3,
-        ];
-
         for x in samples {
-            let a = x.abs();
-            *x = if a <= 0.04045 {
-                a * (1.0 / 12.92)
+            let a = x.abs() as f64;
+            let y = if a <= 0.04045 {
+                a / 12.92
             } else {
-                eval_rational_poly(a, P, Q)
-            }
-            .copysign(*x);
+                ((a + 0.055) / 1.055).powf(2.4)
+            };
+            *x = (y as f32).copysign(*x);
         }
     }
 
     fn bt709_to_linear(samples: &mut [f32]) {
         for s in samples {
-            let a = s.abs();
-            *s = if a <= 0.081 {
+            let a = s.abs() as f64;
+            let y = if a <= 0.081 {
                 a / 4.5
             } else {
-                crate::util::fast_powf(a.mul_add(1.0 / 1.099, 0.099 / 1.099), 1.0 / 0.45)
-            }
-            .copysign(*s);
+                ((a + 0.099) / 1.099).powf(1.0 / 0.45)
+            };
+            *s = (y as f32).copysign(*s);
         }
     }
 
@@ -390,130 +385,21 @@ mod test {
         }
     }
 
-    fn linear_to_pq(intensity_target: f32, samples: &mut [f32]) {
-        let y_mult = intensity_target * 10000f32.recip();
-
-        for s in samples {
-            let a = s.abs();
-            let a_scaled = a * y_mult;
-            let a_1_4 = a_scaled.sqrt().sqrt();
-
-            let y = if a < 1e-4 {
-                eval_rational_poly(a_1_4, PQ_INV_EOTF_P_SMALL, PQ_INV_EOTF_Q_SMALL)
-            } else {
-                eval_rational_poly(a_1_4, PQ_INV_EOTF_P, PQ_INV_EOTF_Q)
-            };
-
-            *s = y.copysign(*s).clamp(0.0, 1.0);
-        }
-    }
-
-    fn pq_to_linear(intensity_target: f32, samples: &mut [f32]) {
-        let y_mult = 10000.0 / intensity_target;
-
-        for s in samples {
-            let a = s.abs();
-            // a + a * a
-            let x = a.mul_add(a, a);
-            let y = eval_rational_poly(x, PQ_EOTF_P, PQ_EOTF_Q);
-            *s = (y * y_mult).copysign(*s);
-        }
-    }
-
-    #[inline(always)]
-    fn pq_to_linear_simd<D: SimdDescriptor>(
-        d: D,
-        intensity_target: f32,
-        xsize: usize,
-        samples: &mut [f32],
-    ) {
-        let y_mult = D::F32Vec::splat(d, 10000.0 / intensity_target);
-
-        for vec in samples
-            .chunks_exact_mut(D::F32Vec::LEN)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let s = D::F32Vec::load(d, vec);
-            let a = s.abs();
-            // a + a * a
-            let x = a.mul_add(a, a);
-            let y = eval_rational_poly_simd(d, x, PQ_EOTF_P, PQ_EOTF_Q);
-            (y * y_mult).copysign(s).store(vec);
-        }
-    }
-
-    fn hlg_ootf_inner_precise(exp: f64, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut [f32]; 3]) {
-        if exp.abs() < 0.1 {
-            return;
-        }
-
-        let lr = lr as f64;
-        let lg = lg as f64;
-        let lb = lb as f64;
-        for ((r, g), b) in std::iter::zip(sr, sg).zip(sb) {
-            let dr = *r as f64;
-            let dg = *g as f64;
-            let db = *b as f64;
-            let mixed = dr.mul_add(lr, dg.mul_add(lg, db * lb));
-            let mult = if mixed == 0.0 { mixed } else { mixed.powf(exp) };
-            *r = (dr * mult) as f32;
-            *g = (dg * mult) as f32;
-            *b = (db * mult) as f32;
-        }
-    }
-
-    fn hlg_ootf_inner(exp: f32, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut [f32]; 3]) {
-        if exp.abs() < 0.1 {
-            return;
-        }
-
-        for ((r, g), b) in std::iter::zip(sr, sg).zip(sb) {
-            let mixed = r.mul_add(lr, g.mul_add(lg, *b * lb));
-            let mult = crate::util::fast_powf(mixed, exp);
-            *r *= mult;
-            *g *= mult;
-            *b *= mult;
-        }
-    }
-
-    fn hlg_scene_to_display_precise(
-        intensity_display: f32,
-        luminance_rgb: [f32; 3],
-        samples_rgb: [&mut [f32]; 3],
-    ) {
-        let system_gamma = hlg_system_gamma(intensity_display) as f64;
-        let gamma_sub_one = system_gamma - 1.0;
-        hlg_ootf_inner_precise(gamma_sub_one, luminance_rgb, samples_rgb);
-    }
-
     fn hlg_display_to_scene_precise(
         intensity_display: f32,
         luminance_rgb: [f32; 3],
-        samples_rgb: [&mut [f32]; 3],
-    ) {
+        rgb: [f32; 3],
+    ) -> [f32; 3] {
         let system_gamma = hlg_system_gamma(intensity_display) as f64;
-        let one_sub_gamma = 1.0 - system_gamma;
-        hlg_ootf_inner_precise(one_sub_gamma / system_gamma, luminance_rgb, samples_rgb);
-    }
-
-    fn hlg_scene_to_display(
-        intensity_display: f32,
-        luminance_rgb: [f32; 3],
-        samples_rgb: [&mut [f32]; 3],
-    ) {
-        let system_gamma = hlg_system_gamma(intensity_display);
-        let gamma_sub_one = system_gamma - 1.0;
-        hlg_ootf_inner(gamma_sub_one, luminance_rgb, samples_rgb);
-    }
-
-    fn hlg_display_to_scene(
-        intensity_display: f32,
-        luminance_rgb: [f32; 3],
-        samples_rgb: [&mut [f32]; 3],
-    ) {
-        let system_gamma = hlg_system_gamma(intensity_display);
-        let one_sub_gamma = 1.0 - system_gamma;
-        hlg_ootf_inner(one_sub_gamma / system_gamma, luminance_rgb, samples_rgb);
+        let exp = (1.0 - system_gamma) / system_gamma;
+        if exp.abs() < 0.1 {
+            return rgb;
+        }
+        let [lr, lg, lb] = luminance_rgb.map(f64::from);
+        let [r, g, b] = rgb.map(f64::from);
+        let mixed = r.mul_add(lr, g.mul_add(lg, b * lb));
+        let mult = if mixed == 0.0 { mixed } else { mixed.powf(exp) };
+        [r, g, b].map(|c| (c * mult) as f32)
     }
 
     fn scene_to_hlg_precise(samples: &mut [f32]) {
@@ -538,21 +424,6 @@ mod test {
                 (((a - HLG_C) / HLG_A).exp() + HLG_B) / 12.0
             };
             *s = (y as f32).copysign(*s);
-        }
-    }
-
-    fn scene_to_hlg(samples: &mut [f32]) {
-        for s in samples {
-            let a = s.abs();
-            let y = if a <= 1.0 / 12.0 {
-                (3.0 * a).sqrt()
-            } else {
-                // TODO(tirr-c): maybe use mul_add?
-                let log = crate::util::fast_log2f(12.0 * a - HLG_B as f32);
-                // log2 x = ln x / ln 2, therefore ln x = (ln 2)(log2 x)
-                (HLG_A * std::f64::consts::LN_2) as f32 * log + HLG_C as f32
-            };
-            *s = y.copysign(*s).clamp(-0.074, 1.1);
         }
     }
 
@@ -665,35 +536,6 @@ mod test {
     }
 
     #[test]
-    fn linear_to_pq_arb() {
-        arbtest::arbtest(|u| {
-            let intensity_target = u.int_in_range(9900..=10100)? as f32;
-            let mut samples = arb_samples(u)?;
-            let mut precise = samples.clone();
-
-            linear_to_pq(intensity_target, &mut samples);
-            linear_to_pq_precise(intensity_target, &mut precise);
-            // Error seems to increase at intensity_target < 10000
-            assert_close!(all, &samples, &precise, 8e-7);
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn pq_to_linear_arb() {
-        arbtest::arbtest(|u| {
-            let intensity_target = u.int_in_range(9900..=10100)? as f32;
-            let mut samples = arb_samples(u)?;
-            let mut precise = samples.clone();
-
-            pq_to_linear(intensity_target, &mut samples);
-            pq_to_linear_precise(intensity_target, &mut precise);
-            assert_close!(all, &samples, &precise, 3e-6);
-            Ok(())
-        });
-    }
-
-    #[test]
     fn bt709_to_linear_simd_arb() {
         arbtest::arbtest(|u| {
             let mut samples = arb_samples(u)?;
@@ -713,16 +555,15 @@ mod test {
             let intensity_target = u.int_in_range(9900..=10100)? as f32;
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
-            let xsize = samples.len();
 
-            pq_to_linear(intensity_target, &mut samples);
-            pq_to_linear_simd(
-                jxl_simd::ScalarDescriptor::new().unwrap(),
-                intensity_target,
-                xsize,
-                &mut simd,
-            );
-            assert_close!(all, &samples, &simd, 2e-5);
+            pq_to_linear_precise(intensity_target, &mut samples);
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            let y_mult = jxl_simd::F32SimdVec::splat(d, 10000.0 / intensity_target);
+            for s in &mut simd {
+                *s = pq_to_linear_simd_vec(d, y_mult, *s);
+            }
+            // Up to 3.1e-6 with ScalarDescriptor's unfused mul_add.
+            assert_close!(all, &samples, &simd, 3.2e-6);
             Ok(())
         });
     }
@@ -734,86 +575,15 @@ mod test {
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
 
-            linear_to_pq(intensity_target, &mut samples);
+            linear_to_pq_precise(intensity_target, &mut samples);
             let d = jxl_simd::ScalarDescriptor::new().unwrap();
             let y_mult = jxl_simd::F32SimdVec::splat(d, intensity_target * 10000f32.recip());
             let threshold = jxl_simd::F32SimdVec::splat(d, 1e-4);
             for s in &mut simd {
                 *s = linear_to_pq_simd_vec(d, y_mult, threshold, *s);
             }
-            assert_close!(all, &samples, &simd, 2e-5);
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn hlg_ootf_arb() {
-        arbtest::arbtest(|u| {
-            let intensity_target = u.int_in_range(900..=1100)? as f32;
-
-            let lr = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0 * 0.2;
-            let lb = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0 * 0.2;
-            let lg = 1.0 - lr - lb;
-            let luminance_rgb = [lr, lg, lb];
-
-            let r = u.int_in_range(0u32..=(1 << 24))? as f32 / (1 << 24) as f32;
-            let g = u.int_in_range(0u32..=(1 << 24))? as f32 / (1 << 24) as f32;
-            let b = u.int_in_range(0u32..=(1 << 24))? as f32 / (1 << 24) as f32;
-
-            let mut fast_r = r;
-            let mut fast_g = g;
-            let mut fast_b = b;
-            let fast = [
-                std::slice::from_mut(&mut fast_r),
-                std::slice::from_mut(&mut fast_g),
-                std::slice::from_mut(&mut fast_b),
-            ];
-            hlg_display_to_scene(intensity_target, luminance_rgb, fast);
-
-            let mut precise_r = r;
-            let mut precise_g = g;
-            let mut precise_b = b;
-            let precise = [
-                std::slice::from_mut(&mut precise_r),
-                std::slice::from_mut(&mut precise_g),
-                std::slice::from_mut(&mut precise_b),
-            ];
-            hlg_display_to_scene_precise(intensity_target, luminance_rgb, precise);
-
-            assert_close!(
-                all,
-                &[fast_r, fast_g, fast_b],
-                &[precise_r, precise_g, precise_b],
-                7.2e-7,
-            );
-
-            let mut fast_r = r;
-            let mut fast_g = g;
-            let mut fast_b = b;
-            let fast = [
-                std::slice::from_mut(&mut fast_r),
-                std::slice::from_mut(&mut fast_g),
-                std::slice::from_mut(&mut fast_b),
-            ];
-            hlg_scene_to_display(intensity_target, luminance_rgb, fast);
-
-            let mut precise_r = r;
-            let mut precise_g = g;
-            let mut precise_b = b;
-            let precise = [
-                std::slice::from_mut(&mut precise_r),
-                std::slice::from_mut(&mut precise_g),
-                std::slice::from_mut(&mut precise_b),
-            ];
-            hlg_scene_to_display_precise(intensity_target, luminance_rgb, precise);
-
-            assert_close!(
-                all,
-                &[fast_r, fast_g, fast_b],
-                &[precise_r, precise_g, precise_b],
-                7.2e-7,
-            );
-
+            // Error seems to increase at intensity_target < 10000
+            assert_close!(all, &samples, &simd, 8e-7);
             Ok(())
         });
     }
@@ -837,31 +607,9 @@ mod test {
             let system_gamma = hlg_system_gamma(intensity_target);
             let simd = hlg_display_to_scene_vec(d, system_gamma, luminance_rgb, [r, g, b]);
 
-            let mut scalar_r = r;
-            let mut scalar_g = g;
-            let mut scalar_b = b;
-            let scalar = [
-                std::slice::from_mut(&mut scalar_r),
-                std::slice::from_mut(&mut scalar_g),
-                std::slice::from_mut(&mut scalar_b),
-            ];
-            hlg_display_to_scene(intensity_target, luminance_rgb, scalar);
+            let precise = hlg_display_to_scene_precise(intensity_target, luminance_rgb, [r, g, b]);
+            assert_close!(all, &simd, &precise, 7.2e-7);
 
-            assert_close!(all, &simd, &[scalar_r, scalar_g, scalar_b], 7.2e-7);
-
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn scene_to_hlg_arb() {
-        arbtest::arbtest(|u| {
-            let mut samples = arb_samples(u)?;
-            let mut precise = samples.clone();
-
-            scene_to_hlg(&mut samples);
-            scene_to_hlg_precise(&mut precise);
-            assert_close!(all, &samples, &precise, 5e-7);
             Ok(())
         });
     }
@@ -874,8 +622,8 @@ mod test {
             let mut samples = arb_samples(u)?;
             let mut precise = samples.clone();
 
-            scene_to_hlg(&mut samples);
-            for s in &mut precise {
+            scene_to_hlg_precise(&mut precise);
+            for s in &mut samples {
                 *s = scene_to_hlg_vec(d, *s);
             }
             assert_close!(all, &samples, &precise, 5e-7);
