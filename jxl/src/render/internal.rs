@@ -61,7 +61,7 @@ impl<Buffer: 'static> Stage<Buffer> {
 
     pub(super) fn uses_channel(&self, c: usize) -> bool {
         match self {
-            Stage::Extend(_) => true,
+            Stage::Extend(e) => c < e.num_channels,
             Stage::InPlace(s) => s.uses_channel(c),
             Stage::InOut(s) => s.uses_channel(c),
             Stage::Downsample(s) => s.uses_channel(c),
