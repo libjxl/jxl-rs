@@ -29,6 +29,7 @@ pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
     pub sample_limit: Option<usize>,
+    pub downsample_factor: u8,
 }
 
 impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
@@ -46,6 +47,7 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
             alpha_mode: AlphaMode::AsIs,
             adjust_orientation: true,
             sample_limit: None,
+            downsample_factor: 0,
         }
     }
 }
@@ -81,6 +83,7 @@ pub fn decode<'a, T: ImageDataType>(
         ..Default::default()
     };
     let mut decoder = JxlDecoder::new(options);
+    decoder.set_downsample_factor(params.downsample_factor)?;
 
     let original_input_len = input.len();
     let mut chunk_input = &input[0..0];
