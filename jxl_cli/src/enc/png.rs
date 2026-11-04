@@ -141,7 +141,9 @@ pub fn to_png<Writer: Write>(
         }
         JxlColorProfile::Simple(encoding) => {
             info.coding_independent_code_points = make_cicp(encoding);
-            let icc_bytes = encoding.maybe_create_profile()?.unwrap();
+            let icc_bytes = encoding
+                .maybe_create_profile(image_data.tone_mapping.intensity_target)?
+                .unwrap();
             info.icc_profile = Some(Cow::from(icc_bytes));
         }
         JxlColorProfile::Icc(icc_bytes) => {
