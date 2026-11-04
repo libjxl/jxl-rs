@@ -94,6 +94,7 @@ impl SimpleRenderPipeline {
                         output_buffers[c] = chan;
                     }
                 }
+                Stage::Downsample(_) => todo!(),
                 Stage::InPlace(stage) => {
                     let mut output_buf: Vec<_> = output_buffers
                         .iter_mut()
