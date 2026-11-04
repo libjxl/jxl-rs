@@ -351,6 +351,7 @@ impl Frame {
                     self.header.size_padded().0,
                     self.header.size_padded().1,
                     self.decoder_state.extra_channel_info().len(),
+                    0,
                     &self.decoder_state.reference_frames[..],
                     self.decoder_state.level5_limits,
                     &mut self.buffer_recycler.modular_scratch.get().lz77_window,
@@ -418,6 +419,7 @@ impl Frame {
                     &color_correlation_params,
                     self.decoder_state.high_precision,
                     self.decoder_state.level5_limits,
+                    0,
                 )?;
                 self.splines.set(splines);
             }
