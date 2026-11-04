@@ -62,6 +62,10 @@ struct Opt {
     #[clap(long, short, action)]
     info: bool,
 
+    /// Render at 1 / 2^factor resolution (0 = full resolution, maximum 3).
+    #[clap(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+    downsample_factor: u8,
+
     /// Use high precision mode for decoding
     #[clap(long)]
     high_precision: bool,
@@ -177,6 +181,7 @@ fn main() -> Result<()> {
                 linear_output,
                 opt.render_interval,
                 opt.allow_partial_files,
+                opt.downsample_factor,
                 $prev_output,
             )
             .map_err(|err| {

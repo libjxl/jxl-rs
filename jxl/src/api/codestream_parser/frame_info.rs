@@ -235,6 +235,7 @@ impl FrameInfo {
         output_profile: &JxlColorProfile,
         process_mode: ProcessMode,
         level5_limits: bool,
+        downsample_factor: u8,
     ) -> Result<()> {
         self.section_size = toc.entries.iter().map(|x| *x as u64).sum();
         self.ready_section_data = 0;
@@ -262,7 +263,12 @@ impl FrameInfo {
                 .map(|x| x.finalize())
                 .transpose()?
                 .unwrap_or_else(|| {
-                    DecoderState::new(file_header.clone(), decode_options, level5_limits)
+                    DecoderState::new(
+                        file_header.clone(),
+                        decode_options,
+                        level5_limits,
+                        downsample_factor,
+                    )
                 });
             decoder_state.level5_limits = level5_limits;
             decoder_state.keep_slots(std::mem::replace(&mut self.keep_slots, [true; 8]));

@@ -161,7 +161,12 @@ impl DecoderState {
         }
     }
 
-    pub fn new(file_header: FileHeader, options: &JxlDecoderOptions, level5_limits: bool) -> Self {
+    pub fn new(
+        file_header: FileHeader,
+        options: &JxlDecoderOptions,
+        level5_limits: bool,
+        downsample_factor: u8,
+    ) -> Self {
         Self {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
@@ -174,7 +179,7 @@ impl DecoderState {
             high_precision: options.high_precision,
             alpha_mode: options.alpha_mode,
             adjust_orientation: options.adjust_orientation,
-            output_downsampling_shift: 0,
+            output_downsampling_shift: downsample_factor as u32,
             level5_limits,
             sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,
