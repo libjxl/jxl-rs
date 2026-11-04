@@ -24,11 +24,15 @@ impl JxlCms for MoxCms {
         _max_pixels_per_transform: usize,
         input: JxlColorProfile,
         output: JxlColorProfile,
-        _intensity_target: f32,
+        intensity_target: f32,
     ) -> Result<(usize, Vec<Box<dyn JxlCmsTransformer + Send>>)> {
         // Convert profiles to ICC
-        let input_icc = input.try_as_icc().ok_or(Error::InputIccError)?;
-        let output_icc = output.try_as_icc().ok_or(Error::OutputIccError)?;
+        let input_icc = input
+            .try_as_icc(intensity_target)
+            .ok_or(Error::InputIccError)?;
+        let output_icc = output
+            .try_as_icc(intensity_target)
+            .ok_or(Error::OutputIccError)?;
 
         // Determine channel counts from parsed ICC profiles
         let input = ColorProfile::new_from_slice(&input_icc)
