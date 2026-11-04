@@ -256,10 +256,17 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                     });
                 }
             }
-            if self.shared.extend_stage_index.is_some()
-                && (shift != (0, 0) || border != (0, 0) || is_extend)
-            {
-                return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
+            if let Some(extend_index) = self.shared.extend_stage_index {
+                let Stage::Extend(extend) = &self.shared.stages[extend_index] else {
+                    unreachable!("extend stage is not an extend stage");
+                };
+
+                // Channels not in Extend stage have no data outside the frame; also reject those.
+                let uses_unextended_channel =
+                    (extend.num_channels..num_channels).any(|c| stage.uses_channel(c));
+                if shift != (0, 0) || border != (0, 0) || is_extend || uses_unextended_channel {
+                    return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
+                }
             }
             if is_extend {
                 self.shared.extend_stage_index = Some(i);

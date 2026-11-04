@@ -766,6 +766,8 @@ impl Frame {
                 frame_header,
                 &decoder_state.file_header,
                 decoder_state.reference_frames.clone(),
+                0,
+                num_channels,
             )?);
         }
 
