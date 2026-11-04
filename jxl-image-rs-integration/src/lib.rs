@@ -74,7 +74,7 @@ impl<R: Read + Seek> JxlDecoder<R> {
         let icc_profile = decoder
             .output_color_profile()
             .unwrap()
-            .try_as_icc()
+            .try_as_icc(info.tone_mapping.intensity_target)
             .map(|profile| profile.into_owned());
 
         Ok(Self {

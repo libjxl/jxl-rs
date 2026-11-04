@@ -257,8 +257,9 @@ fn main() -> Result<()> {
     };
 
     // Get metadata from typed output before converting
-    let output_icc = output.output_profile.as_icc().to_vec();
-    let embedded_icc = output.embedded_profile.as_icc().to_vec();
+    let intensity_target = decoder.basic_info().unwrap().tone_mapping.intensity_target;
+    let output_icc = output.output_profile.as_icc(intensity_target).to_vec();
+    let embedded_icc = output.embedded_profile.as_icc(intensity_target).to_vec();
     let image_size = output.size;
 
     if opt.speedtest {

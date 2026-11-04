@@ -1208,7 +1208,7 @@ fn test_fuzzer_xyb_icc_no_panic() {
     if let Ok(Event::BasicInfo) = decoder.process(&mut input, None, None)
         && let Some(profile) = decoder.output_color_profile()
     {
-        let _ = profile.try_as_icc();
+        let _ = profile.try_as_icc(255.0);
     }
 }
 

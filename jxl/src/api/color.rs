@@ -818,7 +818,7 @@ impl JxlColorEncoding {
         Ok(())
     }
 
-    pub fn maybe_create_profile(&self) -> Result<Option<Vec<u8>>, Error> {
+    pub fn maybe_create_profile(&self, intensity_target: f32) -> Result<Option<Vec<u8>>, Error> {
         if let JxlColorEncoding::XYB { rendering_intent } = self
             && *rendering_intent != RenderingIntent::Perceptual
         {
@@ -964,6 +964,7 @@ impl JxlColorEncoding {
             {
                 let a2b0_start = tags_data.len() as u32;
                 create_icc_lut_atob_tag_for_hdr(
+                    intensity_target,
                     transfer_function,
                     primaries,
                     white_point,
@@ -1279,21 +1280,26 @@ impl JxlColorProfile {
     /// # Panics
     /// Panics if the color encoding cannot generate an ICC profile.
     /// Consider using `try_as_icc` for fallible conversion.
-    pub fn as_icc(&self) -> Cow<'_, Vec<u8>> {
+    pub fn as_icc(&self, intensity_target: f32) -> Cow<'_, Vec<u8>> {
         match self {
             Self::Icc(x) => Cow::Borrowed(x),
-            Self::Simple(encoding) => Cow::Owned(encoding.maybe_create_profile().unwrap().unwrap()),
+            Self::Simple(encoding) => Cow::Owned(
+                encoding
+                    .maybe_create_profile(intensity_target)
+                    .unwrap()
+                    .unwrap(),
+            ),
         }
     }
 
     /// Attempts to get an ICC profile, returning None if unavailable.
     ///
     /// Returns `None` for color encodings that cannot generate ICC profiles.
-    pub fn try_as_icc(&self) -> Option<Cow<'_, Vec<u8>>> {
+    pub fn try_as_icc(&self, intensity_target: f32) -> Option<Cow<'_, Vec<u8>>> {
         match self {
             Self::Icc(x) => Some(Cow::Borrowed(x)),
             Self::Simple(encoding) => encoding
-                .maybe_create_profile()
+                .maybe_create_profile(intensity_target)
                 .ok()
                 .flatten()
                 .map(Cow::Owned),
@@ -1754,6 +1760,7 @@ const HDR_LUT_DIM: usize = 17;
 
 /// Create mft1 (8-bit LUT) A2B0 tag for HDR tone mapping.
 fn create_icc_lut_atob_tag_for_hdr(
+    intensity_target: f32,
     transfer_function: &JxlTransferFunction,
     primaries: &JxlPrimaries,
     white_point: &JxlWhitePoint,
@@ -1793,7 +1800,13 @@ fn create_icc_lut_atob_tag_for_hdr(
     let to_xyzd50: [[f32; 3]; 3] =
         std::array::from_fn(|r| std::array::from_fn(|c| (to_xyzd50[r][c] / WHITE_D50[r]) as f32));
 
-    create_hdr_clut(transfer_function, luminances, to_xyzd50, tags)?;
+    create_hdr_clut(
+        intensity_target,
+        transfer_function,
+        luminances,
+        to_xyzd50,
+        tags,
+    )?;
 
     // Output tables (identity, 256 entries per channel)
     for _ in 0..3 {
@@ -1808,6 +1821,7 @@ simd_function!(
     d: D,
     /// Appends the 3D CLUT of the HDR tone-mapping A2B0 tag.
     fn create_hdr_clut_simd(
+        intensity_target: f32,
         transfer_function: &JxlTransferFunction,
         luminances: [f32; 3],
         to_xyzd50: [[f32; 3]; 3],
@@ -1817,30 +1831,35 @@ simd_function!(
         let mut eotf_lut: [f32; HDR_LUT_DIM] =
             std::array::from_fn(|i| i as f32 / (HDR_LUT_DIM - 1) as f32);
 
-        // Tone map as libjxl (BT.2408 10000 -> 250 nits for PQ, HLG OOTF from 300 to 80 nits)
+        // Tone map as libjxl (BT.2408 from intensity_target to 250 nits for PQ, HLG OOTF from 300
+        // to 80 nits)
         match transfer_function {
             JxlTransferFunction::PQ => {
                 pq_to_linear_precise(10000.0, &mut eotf_lut);
-                // PQ(250 nits)
-                const MAX_LUM: f32 = 0.602_559_15;
-                const KS: f32 = 1.5 * MAX_LUM - 0.5;
-                // BT.2408's spline is MAX_LUM - SPLINE_K (1 - q)^3, as KS = 1.5 MAX_LUM - 0.5.
-                const SPLINE_K: f32 = 4.0 / (27.0 * (1.0 - MAX_LUM) * (1.0 - MAX_LUM));
                 let zero = D::F32Vec::zero(d);
                 let one = D::F32Vec::splat(d, 1.0);
-                let ks = D::F32Vec::splat(d, KS);
-                let spline_k = D::F32Vec::splat(d, SPLINE_K);
-                let max_lum = D::F32Vec::splat(d, MAX_LUM);
+                let pq_of_intensity_target = if intensity_target > 255.0 {
+                    linear_to_pq_simd_vec(d, one, zero, D::F32Vec::splat(d, intensity_target / 10000.0))
+                } else {
+                    // failsafe: if a PQ image somehow has the default SDR intensity_target, act as if it were 10000
+                    one
+                };
+                let inv_pq_of_intensity_target = one / pq_of_intensity_target;
+                // PQ(250 nits)
+                let max_lum = D::F32Vec::splat(d, 0.602_559_15) / pq_of_intensity_target;
+                let ks = max_lum.mul_add(D::F32Vec::splat(d, 1.5), D::F32Vec::splat(d, -0.5));
+                // BT.2408's spline is MAX_LUM - SPLINE_K (1 - q)^3, as KS = 1.5 MAX_LUM - 0.5.
+                let spline_k = D::F32Vec::splat(d, 4.0) / (D::F32Vec::splat(d, 27.0) * (one - max_lum) * (one - max_lum));
                 let scale = D::F32Vec::splat(d, 10000.0 / 250.0);
                 append_hdr_clut(d, &eotf_lut, luminances, to_xyzd50, tags, {
                     #[inline(always)]
                     |y| {
                         // q only matters above KS, far above PQ(1e-4): no small-input polynomial.
-                        let q = linear_to_pq_simd_vec(d, one, zero, y);
+                        let q = linear_to_pq_simd_vec(d, one, zero, y) * inv_pq_of_intensity_target;
                         let w = one - q;
                         let spline = (w * w * w).neg_mul_add(spline_k, max_lum);
                         // The spline rises from KS to MAX_LUM, so lin is within (0, 1).
-                        let lin = pq_to_linear_simd_vec(d, scale, spline);
+                        let lin = pq_to_linear_simd_vec(d, scale, spline * pq_of_intensity_target);
                         // The curve is the identity below the knee.
                         ks.gt(q).if_then_else_f32(scale, lin / y)
                     }
@@ -2085,7 +2104,7 @@ mod test {
 
         assert!(encoding.can_tone_map_for_icc());
 
-        let result = encoding.maybe_create_profile();
+        let result = encoding.maybe_create_profile(10000.0);
         assert!(result.is_ok(), "Profile creation should succeed");
         let profile_opt = result.unwrap();
         assert!(profile_opt.is_some(), "Profile should be generated for PQ");
@@ -2130,8 +2149,9 @@ mod test {
         let scalar_d = jxl_simd::ScalarDescriptor::new().unwrap();
         let [pq, hlg] = [JxlTransferFunction::PQ, JxlTransferFunction::HLG].map(|tf| {
             let (mut clut, mut scalar) = (Vec::new(), Vec::new());
-            create_hdr_clut_simd(d, &tf, luminances, to_xyzd50, &mut clut).unwrap();
-            create_hdr_clut_simd(scalar_d, &tf, luminances, to_xyzd50, &mut scalar).unwrap();
+            create_hdr_clut_simd(d, 10000.0, &tf, luminances, to_xyzd50, &mut clut).unwrap();
+            create_hdr_clut_simd(scalar_d, 10000.0, &tf, luminances, to_xyzd50, &mut scalar)
+                .unwrap();
             assert_eq!(clut.len(), 3 * 17 * 17 * 17);
             assert!(clut.iter().zip(&scalar).all(|(a, b)| a.abs_diff(*b) <= 1));
             clut
@@ -2163,7 +2183,7 @@ mod test {
 
         assert!(encoding.can_tone_map_for_icc());
 
-        let result = encoding.maybe_create_profile();
+        let result = encoding.maybe_create_profile(10000.0);
         assert!(result.is_ok(), "Profile creation should succeed");
         let profile_opt = result.unwrap();
         assert!(profile_opt.is_some(), "Profile should be generated for HLG");
@@ -2234,7 +2254,7 @@ mod test {
         let color_profile = decoder.output_color_profile().unwrap();
 
         // For HDR PQ content, we should be able to generate an ICC profile
-        let icc = color_profile.try_as_icc();
+        let icc = color_profile.try_as_icc(10000.0);
         assert!(
             icc.is_some(),
             "Should generate ICC profile for HDR PQ content"
@@ -2276,7 +2296,7 @@ mod test {
         let color_profile = decoder.output_color_profile().unwrap();
 
         // For HDR HLG content, we should be able to generate an ICC profile
-        let icc = color_profile.try_as_icc();
+        let icc = color_profile.try_as_icc(1000.0);
         assert!(
             icc.is_some(),
             "Should generate ICC profile for HDR HLG content"
@@ -2433,7 +2453,9 @@ mod test {
             rendering_intent: RenderingIntent::Perceptual,
         });
 
-        let icc = xyb.try_as_icc().expect("XYB should generate ICC profile");
+        let icc = xyb
+            .try_as_icc(255.0)
+            .expect("XYB should generate ICC profile");
         assert!(!icc.is_empty());
         assert!(icc.windows(4).any(|w| w == b"mAB "));
         assert!(icc.windows(4).any(|w| w == b"mBA "));
