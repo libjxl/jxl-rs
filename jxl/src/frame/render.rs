@@ -24,14 +24,14 @@ use crate::headers::Orientation;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::extra_channels::ExtraChannel;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
-use crate::image::{DataTypeTag, Image, OwnedRawImage, Rect};
+use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect, box_average};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::stages::*;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
 use crate::util::sync::Arc;
-use crate::util::{SharedSnapshot, SmallVec};
+use crate::util::{SharedSnapshot, ShiftRightCeil, SmallVec};
 
 #[cfg(test)]
 macro_rules! pipeline_mut {
@@ -69,6 +69,7 @@ macro_rules! pipeline_mut {
 macro_rules! pipeline {
     ($frame: expr, $pipeline: ident, $op: expr) => {
         if $frame.use_simple_pipeline {
+            use crate::render::SimpleRenderPipeline;
             let $pipeline = $frame
                 .render_pipeline
                 .as_ref()
@@ -100,6 +101,128 @@ macro_rules! pipeline {
 pub(super) use pipeline;
 
 impl Frame {
+    pub(super) fn expected_input_shift(&self, channel: usize) -> (usize, usize) {
+        let (x, y) = pipeline!(self, p, p.input_downsample(channel));
+        (x as usize, y as usize)
+    }
+
+    pub(super) fn set_render_input<T: ImageDataType>(
+        &self,
+        channel: usize,
+        group: usize,
+        complete: bool,
+        decoded_shift: (usize, usize),
+        mut image: Image<T>,
+        buffer_splitter: &BufferSplitter,
+    ) -> Result<()> {
+        if !pipeline!(self, p, p.used_channel_mask()[channel]) {
+            self.buffer_recycler.recycle_buffer(image);
+            return Ok(());
+        }
+
+        // Input producer may return partially downsampled buffers by itself (e.g. unsqueeze skip
+        // and LF image-only decoding), and its shift level is unknown during pipeline building.
+        // If initial inputs don't match expected shift level, they are downsampled before being
+        // fed into the pipeline, in order to handle this dynamicity.
+        let expected_shift = self.expected_input_shift(channel);
+        let additional_shift = match (
+            expected_shift.0.checked_sub(decoded_shift.0),
+            expected_shift.1.checked_sub(decoded_shift.1),
+        ) {
+            (Some(x), Some(y)) if x == y => x,
+            _ => panic!(
+                "Cannot downsample decoded input shift {decoded_shift:?} \
+                to expected shift {expected_shift:?}"
+            ),
+        };
+
+        if additional_shift != 0 {
+            let mut destination = pipeline!(self, p, p.get_buffer(channel))?;
+            let size = self.header.size_upsampled();
+            let group_shift = self.header.log_group_dim() + self.header.upsampling.ilog2() as usize;
+            let gx = group % self.header.size_groups().0;
+            let gy = group / self.header.size_groups().0;
+            // Padding at the frame edge must not contribute to the average.
+            let valid_size = (
+                (size.0 - (gx << group_shift))
+                    .min(1 << group_shift)
+                    .shrc(decoded_shift.0),
+                (size.1 - (gy << group_shift))
+                    .min(1 << group_shift)
+                    .shrc(decoded_shift.1),
+            );
+            // NOTE(tirr-c): Box averaging integer Modular buffers may cause noticeable loss of
+            // precision on low bitdepth channels, but I don't think we really care.
+            let source = image
+                .get_rect(Rect {
+                    origin: (0, 0),
+                    size: valid_size,
+                })
+                .into_raw();
+            let output_size = (
+                valid_size.0.shrc(additional_shift),
+                valid_size.1.shrc(additional_shift),
+            );
+            let mut output = destination
+                .get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: output_size,
+                })
+                .into_raw();
+            for y in 0..output_size.1 {
+                let rows: SmallVec<_, 8> = ((y << additional_shift)
+                    ..((y + 1) << additional_shift).min(valid_size.1))
+                    .map(|y| source.row(y))
+                    .collect();
+                box_average(
+                    T::DATA_TYPE_ID,
+                    &rows,
+                    additional_shift,
+                    None,
+                    false,
+                    output.row(y),
+                );
+            }
+            self.buffer_recycler.recycle_buffer(image);
+            image = destination;
+        }
+
+        pipeline!(
+            self,
+            p,
+            p.set_buffer_for_group(channel, group, complete, image, buffer_splitter)
+        )
+    }
+
+    pub(super) fn set_modular_render_input(
+        &self,
+        channel: usize,
+        group: usize,
+        complete: bool,
+        decoded_shift: (usize, usize),
+        image: OwnedRawImage,
+        buffer_splitter: &BufferSplitter,
+    ) -> Result<()> {
+        match self.lf_global.as_ref().unwrap().modular_global.storage() {
+            ModularStorage::I16 => self.set_render_input(
+                channel,
+                group,
+                complete,
+                decoded_shift,
+                Image::<i16>::from_raw(image),
+                buffer_splitter,
+            ),
+            ModularStorage::I32 => self.set_render_input(
+                channel,
+                group,
+                complete,
+                decoded_shift,
+                Image::<i32>::from_raw(image),
+                buffer_splitter,
+            ),
+        }
+    }
+
     /// Returns `true` if any pixels were written to the output buffers during
     /// this call, `false` if the call was a no-op for the buffers (e.g. no new
     /// HF groups, no flush work, or the render pipeline was not yet ready).
@@ -186,6 +309,9 @@ impl Frame {
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
+        let expected_shifts: SmallVec<_, 8> = (0..3 + self.header.num_extra_channels as usize)
+            .map(|c| self.expected_input_shift(c))
+            .collect();
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
 
         modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
@@ -392,28 +518,15 @@ impl Frame {
 
         // STEP 4: actually run the steps.
 
-        let storage = self.lf_global.as_ref().unwrap().modular_global.storage();
-
-        let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
-            match storage {
-                ModularStorage::I16 => {
-                    let image = Image::<i16>::from_raw(raw_image);
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
-                    );
-                }
-                ModularStorage::I32 => {
-                    let image = Image::<i32>::from_raw(raw_image);
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
-                    );
-                }
-            }
-            Ok(())
+        let pass_to_pipeline = |chan, group, complete, decoded_shift, raw_image| {
+            self.set_modular_render_input(
+                chan,
+                group,
+                complete,
+                decoded_shift,
+                raw_image,
+                &buffer_splitter,
+            )
         };
 
         // Avoid significantly more than one thread per largest-group worth of work.
@@ -428,10 +541,17 @@ impl Frame {
                         &mut new_passes,
                         &buffer_splitter,
                         should_render_non_final,
+                        &expected_shifts,
                     )?;
                 }
                 RenderStep::FlushVarDCT { group } => {
-                    self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
+                    self.decode_hf_group(
+                        *group,
+                        &mut [],
+                        &buffer_splitter,
+                        true,
+                        &expected_shifts,
+                    )?;
                 }
                 RenderStep::RunTransformSteps => {
                     self.lf_global
