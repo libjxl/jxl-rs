@@ -29,8 +29,10 @@ pub use options::*;
 pub use signature::*;
 
 use crate::error::Result;
+use crate::headers::FileHeader;
 pub use crate::headers::image_metadata::Orientation;
 pub use crate::image::{JxlOutputBuffer, JxlOutputTransform};
+use crate::util::ShiftRightCeil;
 
 /// Events emitted by [`JxlDecoder::process`] as decoding progresses.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -58,6 +60,7 @@ pub struct ToneMapping {
 
 #[derive(Clone)]
 pub struct JxlBasicInfo {
+    /// Output dimensions, after the requested downsampling and orientation.
     pub size: (usize, usize),
     pub bit_depth: JxlBitDepth,
     pub orientation: Orientation,
@@ -66,6 +69,26 @@ pub struct JxlBasicInfo {
     pub uses_original_profile: bool,
     pub tone_mapping: ToneMapping,
     pub preview_size: Option<(usize, usize)>,
+}
+
+impl JxlBasicInfo {
+    fn update_size(
+        &mut self,
+        file_header: &FileHeader,
+        adjust_orientation: bool,
+        downsample_factor: u8,
+    ) {
+        let xsize = file_header.size.xsize() as usize;
+        let ysize = file_header.size.ysize() as usize;
+        let data = &file_header.image_metadata;
+
+        let (xsize, ysize) = (xsize.shrc(downsample_factor), ysize.shrc(downsample_factor));
+        self.size = if adjust_orientation && data.orientation.is_transposing() {
+            (ysize, xsize)
+        } else {
+            (xsize, ysize)
+        };
+    }
 }
 
 pub type JxlParallelRunnerFun<'a> = dyn Fn(usize) -> Result<()> + Sync + 'a;

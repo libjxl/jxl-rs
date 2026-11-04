@@ -145,6 +145,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     linear_output: bool,
     render_interval: Option<usize>,
     allow_partial_files: bool,
+    downsample_factor: u8,
     prev_output: Option<DecodeOutput>,
 ) -> Result<(DecodeOutput, Duration)> {
     let mut recycled_buffers: Vec<Vec<OwnedRawImage>> = prev_output
@@ -154,6 +155,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     let total_bytes = input.available_bytes()?;
 
     decoder.reset();
+    decoder.set_downsample_factor(downsample_factor)?;
     while input.with_capped_size(render_interval, |inp| decoder.process(inp, None, None))?
         != Event::BasicInfo
     {
