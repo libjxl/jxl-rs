@@ -35,10 +35,16 @@ impl JxlCms for MoxCms {
             .ok_or(Error::OutputIccError)?;
 
         // Determine channel counts from parsed ICC profiles
-        let input = ColorProfile::new_from_slice(&input_icc)
+        let mut input = ColorProfile::new_from_slice(&input_icc)
             .map_err(|e| Error::CmsInputParseError(e.to_string()))?;
-        let output = ColorProfile::new_from_slice(&output_icc)
+        let mut output = ColorProfile::new_from_slice(&output_icc)
             .map_err(|e| Error::CmsOutputParseError(e.to_string()))?;
+        if input.lut_a_to_b_colorimetric.is_none() {
+            input.lut_a_to_b_colorimetric = input.lut_a_to_b_perceptual.clone();
+        }
+        if output.lut_b_to_a_colorimetric.is_none() {
+            output.lut_b_to_a_colorimetric = output.lut_b_to_a_perceptual.clone();
+        }
         let input_layout = layout_from_color_space(input.color_space)?;
         let output_layout = layout_from_color_space(output.color_space)?;
         let input_channels = input_layout.channels();
@@ -200,6 +206,54 @@ mod tests {
             assert!(
                 (element - 0.214).abs() < 0.01,
                 "Output {i} = {element}, expected ~0.214",
+            );
+        }
+    }
+
+    #[test]
+    fn test_transform_hdr_pq_tonemap() {
+        let cms = MoxCms;
+        let pq_bt2100 = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::BT2100,
+            transfer_function: JxlTransferFunction::PQ,
+            rendering_intent: RenderingIntent::Relative,
+        });
+        let linear_bt2100 = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::BT2100,
+            transfer_function: JxlTransferFunction::Linear,
+            rendering_intent: RenderingIntent::Relative,
+        });
+        let (_, mut transforms) = cms
+            .initialize_transforms(1, 1024, pq_bt2100, linear_bt2100, 1000.0)
+            .unwrap();
+
+        // 1000-nit white, ~227-nit pure blue (151/255, near midpoint of 17-grid), and 1000-nit pure blue.
+        let pq_1000 = 0.7518271f32;
+        let input = [
+            pq_1000,
+            pq_1000,
+            pq_1000, // 1000-nit white
+            0.0,
+            0.0,
+            151.0 / 255.0, // ~227-nit pure blue
+            0.0,
+            0.0,
+            pq_1000, // 1000-nit pure blue
+        ];
+        let mut output = [0.0f32; 9];
+        transforms[0].do_transform(&input, &mut output).unwrap();
+
+        let expected = [
+            1.0, 1.0, 1.0, // white
+            0.0, 0.0, 0.9072, // ~227-nit blue (old mft1 gave ~0.825)
+            0.0697, 0.0697, 1.0, // 1000-nit blue
+        ];
+        for (i, (&actual, expected)) in output.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 0.01,
+                "Output {i} = {actual}, expected ~{expected}",
             );
         }
     }
