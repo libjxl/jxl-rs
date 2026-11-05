@@ -9,7 +9,6 @@ use num_traits::FromPrimitive;
 use crate::error::{Error, Result};
 use crate::headers::modular::WeightedHeader;
 use crate::image::Image;
-use crate::util::floor_log2_nonzero;
 
 #[repr(u8)]
 #[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq, Default)]
@@ -192,26 +191,44 @@ const DIVLOOKUP: [u32; 64] = [
     289262, 284359, 279620, 275036, 270600, 266305, 262144,
 ];
 
+// 1-based lookup table for dividing by `weight_sum` (which is in 1..=31):
+// `WEIGHT_SUM_DIVLOOKUP[i] = (1 << 24) / i` for i in 1..32, with 0 at index 0.
+const WEIGHT_SUM_DIVLOOKUP: [u32; 32] = [
+    0, 16777216, 8388608, 5592405, 4194304, 3355443, 2796202, 2396745, 2097152, 1864135, 1677721,
+    1525201, 1398101, 1290555, 1198372, 1118481, 1048576, 986895, 932067, 883011, 838860, 798915,
+    762600, 729444, 699050, 671088, 645277, 621378, 599186, 578524, 559240, 541200,
+];
+
 #[inline(always)]
 fn add_bits(x: i32) -> i64 {
     (x as i64) << PRED_EXTRA_BITS
+}
+
+#[inline(always)]
+fn ilog2_shifted<const SHIFT: u32>(x: u64) -> usize {
+    #[cfg(target_arch = "aarch64")]
+    {
+        ((x | (1 << SHIFT)).ilog2() - SHIFT) as usize
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        (((x >> SHIFT) | 1).ilog2()) as usize
+    }
+}
+
+#[repr(C, align(32))]
+#[derive(Clone, Copy, Debug, Default)]
+struct WpRowEntry {
+    pred_errors: [u32; NUM_PREDICTORS],
+    // Note: we store errors in positions [1..=xsize], and error[0] == 0.
+    error: i32,
 }
 
 #[derive(Debug)]
 pub struct WeightedPredictorState<'a> {
     prediction: [i64; NUM_PREDICTORS],
     pred: i64,
-    // Safety invariant:
-    // - computing `(xsize + 1) * 2` does not overflow
-    // - `pred_errors_buffer.len() == (xsize + 1) * 2`
-    // - `error.len() == (xsize + 1) * 2`
-    // Note that (at least as of June 2026) the use of unsafe code
-    // that needs these invariants seems to provide meaningful speedups.
-    xsize: usize,
-    pred_errors_buffer: &'a mut [[u32; NUM_PREDICTORS]],
-    // Note: we store errors in positions [1..=xsize], and error[0] == 0.
-    // (this is not a safety invariant)
-    error: &'a mut [i32],
+    buffers: &'a mut [[WpRowEntry; 2]],
     w: [u8; 4],
     p1c: u8,
     p2c: u8,
@@ -220,8 +237,7 @@ pub struct WeightedPredictorState<'a> {
 
 #[derive(Debug, Default)]
 pub struct WeightedPredictorScratch {
-    pred_errors_buffer: Vec<[u32; NUM_PREDICTORS]>,
-    error: Vec<i32>,
+    buffers: Vec<[WpRowEntry; 2]>,
 }
 
 impl<'a> WeightedPredictorState<'a> {
@@ -230,21 +246,13 @@ impl<'a> WeightedPredictorState<'a> {
         xsize: usize,
         scratch: &'a mut WeightedPredictorScratch,
     ) -> WeightedPredictorState<'a> {
-        let num_errors = xsize.checked_add(1).unwrap().checked_mul(2).unwrap();
-        scratch.pred_errors_buffer.clear();
-        scratch
-            .pred_errors_buffer
-            .resize(num_errors, [0; NUM_PREDICTORS]);
-        scratch.error.clear();
-        scratch.error.resize(num_errors, 0);
+        let row_len = xsize.checked_add(1).unwrap();
+        scratch.buffers.clear();
+        scratch.buffers.resize(row_len, [WpRowEntry::default(); 2]);
         WeightedPredictorState {
             prediction: [0; NUM_PREDICTORS],
             pred: 0,
-            // Safety note: safety invariant is true by construction (we checked no
-            // overflows above)
-            xsize,
-            pred_errors_buffer: &mut scratch.pred_errors_buffer[..num_errors],
-            error: &mut scratch.error[..num_errors],
+            buffers: &mut scratch.buffers[..row_len],
             // These casts are lossless because w fits in 4 bits and p fits in 5 by
             // bitstream constraints.
             w: [
@@ -266,138 +274,87 @@ impl<'a> WeightedPredictorState<'a> {
     }
 
     pub fn save_state(&self, wp_image: &mut Image<i32>) {
-        let row_stride = self.xsize + 1;
-        wp_image
-            .row_mut(0)
-            .copy_from_slice(&self.error[0..row_stride]);
-        let src = &*self.pred_errors_buffer;
-        let [d0, d1, d2, d3] = wp_image.distinct_rows_mut([1, 2, 3, 4]);
-        for ((((d0, d1), d2), d3), &s) in d0
+        let [d_err, d0, d1, d2, d3] = wp_image.distinct_rows_mut([0, 1, 2, 3, 4]);
+        for (((((d_err, d0), d1), d2), d3), s) in d_err
             .iter_mut()
+            .zip(d0.iter_mut())
             .zip(d1.iter_mut())
             .zip(d2.iter_mut())
             .zip(d3.iter_mut())
-            .zip(src)
+            .zip(self.buffers.iter())
         {
-            *d0 = s[0] as i32;
-            *d1 = s[1] as i32;
-            *d2 = s[2] as i32;
-            *d3 = s[3] as i32;
+            *d_err = s[0].error;
+            *d0 = s[0].pred_errors[0] as i32;
+            *d1 = s[0].pred_errors[1] as i32;
+            *d2 = s[0].pred_errors[2] as i32;
+            *d3 = s[0].pred_errors[3] as i32;
         }
     }
 
     pub fn restore_state(&mut self, wp_image: &Image<i32>) {
-        let row_stride = self.xsize + 1;
-        self.error[0..row_stride].copy_from_slice(wp_image.row(0));
+        let s_err = wp_image.row(0);
         let s0 = wp_image.row(1);
         let s1 = wp_image.row(2);
         let s2 = wp_image.row(3);
         let s3 = wp_image.row(4);
-        let dst = &mut *self.pred_errors_buffer;
-        for (d, (&s0, (&s1, (&s2, &s3)))) in dst
-            .iter_mut()
-            .zip(s0.iter().zip(s1.iter().zip(s2.iter().zip(s3.iter()))))
-        {
-            *d = [s0 as u32, s1 as u32, s2 as u32, s3 as u32];
+        for (d, (&s_err, (&s0, (&s1, (&s2, &s3))))) in self.buffers.iter_mut().zip(
+            s_err
+                .iter()
+                .zip(s0.iter().zip(s1.iter().zip(s2.iter().zip(s3.iter())))),
+        ) {
+            d[0].error = s_err;
+            d[0].pred_errors = [s0 as u32, s1 as u32, s2 as u32, s3 as u32];
         }
     }
 
     // Note: optimizations in this function are a bit finnicky.
-    #[allow(unsafe_code)]
     #[inline(always)]
     pub fn predict_and_property(
         &mut self,
         pos: (usize, usize),
         data: &PredictionData,
     ) -> (i64, i32) {
-        assert!(pos.0 < self.xsize);
-        // Safety note: the index arithmetic in this function is guaranteed
-        // not to overflow thanks to the safety invariant and the check on `pos.0`
-        // above.
-        // The debug_assert! are documentation of safety-relevant properties in
-        // code form.
-        let (cur_row, prev_row) = if pos.1 & 1 != 0 {
-            (0, self.xsize + 1)
-        } else {
-            (self.xsize + 1, 0)
-        };
-        // Safety note: guaranteed to be < self.xsize.
-        let pos_ne = if pos.0 + 1 < self.xsize {
-            pos.0 + 1
-        } else {
-            pos.0
-        };
-        // Safety note: guaranteed to be < self.xsize.
-        let pos_nw = pos.0.saturating_sub(1);
+        let x = pos.0 & (isize::MAX as usize);
+        assert!(x + 1 < self.buffers.len());
+        let xsize = self.buffers.len() - 1;
 
-        debug_assert!(prev_row + pos.0 < self.pred_errors_buffer.len());
-        // SAFETY: prev_row <= xsize + 1, so the index is < 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.pred_error_buffers.len() == 2*(xsize+1)`).
-        let err_n = unsafe { self.pred_errors_buffer.get_unchecked(prev_row + pos.0) };
-        debug_assert!(prev_row + pos_ne < self.pred_errors_buffer.len());
-        // SAFETY: prev_row <= xsize + 1, so the index is < 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.pred_error_buffers.len() == 2*(xsize+1)`).
-        let err_ne = unsafe { self.pred_errors_buffer.get_unchecked(prev_row + pos_ne) };
-        debug_assert!(prev_row + pos_nw < self.pred_errors_buffer.len());
-        // SAFETY: prev_row <= xsize + 1, so the index is < 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.pred_error_buffers.len() == 2*(xsize+1)`).
-        let err_nw = unsafe { self.pred_errors_buffer.get_unchecked(prev_row + pos_nw) };
+        let cur_row = (pos.1 & 1) ^ 1;
+        let prev_row = pos.1 & 1;
+
+        let pos_ne = (x + 1).min(xsize - 1);
+        let pos_nw = x.saturating_sub(1);
+
+        let err_n = &self.buffers[x][prev_row].pred_errors;
+        let err_ne = &self.buffers[pos_ne][prev_row].pred_errors;
+        let err_nw = &self.buffers[pos_nw][prev_row].pred_errors;
 
         let err0 = err_n[0].wrapping_add(err_ne[0]).wrapping_add(err_nw[0]);
         let err1 = err_n[1].wrapping_add(err_ne[1]).wrapping_add(err_nw[1]);
         let err2 = err_n[2].wrapping_add(err_ne[2]).wrapping_add(err_nw[2]);
         let err3 = err_n[3].wrapping_add(err_ne[3]).wrapping_add(err_nw[3]);
 
-        let shift0 = (err0 as u64 + 1).ilog2().saturating_sub(5);
-        let shift1 = (err1 as u64 + 1).ilog2().saturating_sub(5);
-        let shift2 = (err2 as u64 + 1).ilog2().saturating_sub(5);
-        let shift3 = (err3 as u64 + 1).ilog2().saturating_sub(5);
+        let shift0 = ilog2_shifted::<5>(err0 as u64 + 1);
+        let shift1 = ilog2_shifted::<5>(err1 as u64 + 1);
+        let shift2 = ilog2_shifted::<5>(err2 as u64 + 1);
+        let shift3 = ilog2_shifted::<5>(err3 as u64 + 1);
 
-        debug_assert!(err0 >> shift0 < 64);
-        // SAFETY: x >> ((x+1).ilog2().saturating_sub(5)) < 64 for any x (see `error_weight_bounds`).
-        // (Note: the compiler doesn't seem to realize this)
-        let div0 = unsafe { *DIVLOOKUP.get_unchecked(err0 as usize >> shift0) };
-        debug_assert!(err1 >> shift1 < 64);
-        // SAFETY: same as div0
-        let div1 = unsafe { *DIVLOOKUP.get_unchecked(err1 as usize >> shift1) };
-        debug_assert!(err2 >> shift2 < 64);
-        // SAFETY: same as div0
-        let div2 = unsafe { *DIVLOOKUP.get_unchecked(err2 as usize >> shift2) };
-        debug_assert!(err3 >> shift3 < 64);
-        // SAFETY: same as div0
-        let div3 = unsafe { *DIVLOOKUP.get_unchecked(err3 as usize >> shift3) };
+        let div0 = DIVLOOKUP[((err0 as usize) >> shift0) & 63];
+        let div1 = DIVLOOKUP[((err1 as usize) >> shift1) & 63];
+        let div2 = DIVLOOKUP[((err2 as usize) >> shift2) & 63];
+        let div3 = DIVLOOKUP[((err3 as usize) >> shift3) & 63];
 
-        let w0 = 4u32 + ((self.w[0] as u32 * div0) >> shift0);
-        let w1 = 4u32 + ((self.w[1] as u32 * div1) >> shift1);
-        let w2 = 4u32 + ((self.w[2] as u32 * div2) >> shift2);
-        let w3 = 4u32 + ((self.w[3] as u32 * div3) >> shift3);
-        // Safety note: we know that w0, w1, w2, w3 >= 4 because u8 * DIVLOOKUP[i] + 4 never
-        // overflows.
-        debug_assert!(w0 >= 4);
-        debug_assert!(w1 >= 4);
-        debug_assert!(w2 >= 4);
-        debug_assert!(w3 >= 4);
+        let w0 = (4 + ((self.w[0] as u32 * div0) >> shift0)) as u64;
+        let w1 = (4 + ((self.w[1] as u32 * div1) >> shift1)) as u64;
+        let w2 = (4 + ((self.w[2] as u32 * div2) >> shift2)) as u64;
+        let w3 = (4 + ((self.w[3] as u32 * div3) >> shift3)) as u64;
 
         // Note: this might access what's morally equivalent to position -1,
         // but that value is guaranteed to be 0.
-
-        debug_assert!(cur_row + pos.0 < self.error.len());
-        // SAFETY: cur_row <= xsize + 1, so the index is < 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.error.len() == 2*(xsize+1)`).
-        let te_w = unsafe { *self.error.get_unchecked(cur_row + pos.0) as i64 };
-        debug_assert!(prev_row + 1 + pos.0 < self.error.len());
-        // SAFETY: prev_row <= xsize + 1, so the index is <= 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.error.len() == 2*(xsize+1)`).
-        let te_n = unsafe { *self.error.get_unchecked(prev_row + 1 + pos.0) as i64 };
-        debug_assert!(prev_row + 1 + pos_nw < self.error.len());
-        // SAFETY: prev_row <= xsize + 1, so the index is <= 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.error.len() == 2*(xsize+1)`).
-        let te_nw = unsafe { *self.error.get_unchecked(prev_row + 1 + pos_nw) as i64 };
+        let te_w = self.buffers[x][cur_row].error as i64;
+        let te_n = self.buffers[x + 1][prev_row].error as i64;
+        let te_nw = self.buffers[pos_nw + 1][prev_row].error as i64;
         let sum_wn = te_n + te_w;
-        debug_assert!(prev_row + 1 + pos_ne < self.error.len());
-        // SAFETY: prev_row <= xsize + 1, so the index is <= 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.error.len() == 2*(xsize+1)`).
-        let te_ne = unsafe { *self.error.get_unchecked(prev_row + 1 + pos_ne) as i64 };
+        let te_ne = self.buffers[pos_ne + 1][prev_row].error as i64;
 
         let mut p = te_w;
         if te_n.abs() > p.abs() {
@@ -427,34 +384,19 @@ impl<'a> WeightedPredictorState<'a> {
                 + ((nw - w) * (self.p3c[4] as i64)))
                 >> 5);
 
-        let log_weight = floor_log2_nonzero(w0 as u64 + w1 as u64 + w2 as u64 + w3 as u64);
-        debug_assert!(log_weight >= 4);
-        // Safety note: due to all weights being >= 4, their sum is >= 16 so the base2 log
-        // is at least 4. Thus, the subtractions below do not overflow.
+        let log_weight_m4 = ilog2_shifted::<4>(w0 + w1 + w2 + w3);
 
-        let w0s = w0 as i64 >> (log_weight - 4);
-        let w1s = w1 as i64 >> (log_weight - 4);
-        let w2s = w2 as i64 >> (log_weight - 4);
-        let w3s = w3 as i64 >> (log_weight - 4);
+        let w0s = (w0 >> log_weight_m4) as i64;
+        let w1s = (w1 >> log_weight_m4) as i64;
+        let w2s = (w2 >> log_weight_m4) as i64;
+        let w3s = (w3 >> log_weight_m4) as i64;
 
         let weight_sum = w0s + w1s + w2s + w3s;
-        debug_assert!(weight_sum > 0);
-        // Safety note: weight_sum > 0.
-        // Let wM be the largest of w0, w1, w2, w3. Then, their sum is at most 4*wM,
-        // so log_weight <= wM.ilog2() + 2. It follows that log_weight - 4 < wM.ilog2(),
-        // which guarantees that the shift to compute wMs does not return 0.
-        debug_assert!(weight_sum <= 64);
-        // Safety note: weight_sum <= 64.
-        // Note that w0s + w1s + w2s + w3s <= (w0 + w1 + w2 + w3) >> (log_weight - 4) since
-        // shifting rounds down. This last quantity is at most 64 (in fact, at most 31),
-        // as checked in scaled_weight_bounds (note that 16 <= w0 + w1 + w2 + w3 <= 4 * u32::MAX)
 
         let sum = (weight_sum >> 1) - 1 + w0s * p0 + w1s * p1 + w2s * p2 + w3s * p3;
 
-        // SAFETY: given that weight_sum > 0 and weight_sum <= 64, weight_sum - 1 is
-        // in bounds of DIVLOOKUP.
-        let mut pred =
-            (sum * unsafe { *DIVLOOKUP.get_unchecked((weight_sum - 1) as usize) } as i64) >> 24;
+        let div_sum = WEIGHT_SUM_DIVLOOKUP[(weight_sum as usize) & 31] as i64;
+        let mut pred = (sum * div_sum) >> 24;
 
         if ((te_n ^ te_w) | (te_n ^ te_nw)) <= 0 {
             let mx = w.max(ne.max(n));
@@ -466,20 +408,16 @@ impl<'a> WeightedPredictorState<'a> {
         ((pred + PREDICTION_ROUND) >> PRED_EXTRA_BITS, p as i32)
     }
 
-    #[allow(unsafe_code)]
     #[inline(always)]
     pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize)) {
-        assert!(pos.0 < self.xsize);
-        let (cur_row, prev_row) = if pos.1 & 1 != 0 {
-            (0, self.xsize + 1)
-        } else {
-            (self.xsize + 1, 0)
-        };
+        let x = pos.0 & (isize::MAX as usize);
+        assert!(x + 1 < self.buffers.len());
+
+        let cur_row = (pos.1 & 1) ^ 1;
+        let prev_row = pos.1 & 1;
+
         let val = add_bits(correct_val);
-        debug_assert!(cur_row + pos.0 + 1 < self.error.len());
-        // SAFETY: cur_row <= xsize + 1, so the index is <= 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.error.len() == 2*(xsize+1)`).
-        unsafe { *self.error.get_unchecked_mut(cur_row + pos.0 + 1) = (self.pred - val) as i32 };
+        self.buffers[x + 1][cur_row].error = (self.pred - val) as i32;
 
         // Compute errors for all predictors
         let err0 =
@@ -491,21 +429,9 @@ impl<'a> WeightedPredictorState<'a> {
         let err3 =
             (((self.prediction[3] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
 
-        debug_assert!(cur_row + pos.0 < self.pred_errors_buffer.len());
-        // SAFETY: cur_row <= xsize + 1, so the index is < 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.pred_errors_buffer.len() == 2*(xsize+1)`).
-        unsafe {
-            *self.pred_errors_buffer.get_unchecked_mut(cur_row + pos.0) = [err0, err1, err2, err3];
-        }
+        self.buffers[x][cur_row].pred_errors = [err0, err1, err2, err3];
 
-        debug_assert!(prev_row + pos.0 + 1 < self.pred_errors_buffer.len());
-        // SAFETY: prev_row <= xsize + 1, so the index is <= 2*xsize + 1, which is in-bounds due to
-        // the safety invariant (`self.pred_errors_buffer.len() == 2*(xsize+1)`).
-        let prev_errors = unsafe {
-            self.pred_errors_buffer
-                .get_unchecked_mut(prev_row + pos.0 + 1)
-        };
-
+        let prev_errors = &mut self.buffers[x + 1][prev_row].pred_errors;
         prev_errors[0] = prev_errors[0].wrapping_add(err0);
         prev_errors[1] = prev_errors[1].wrapping_add(err1);
         prev_errors[2] = prev_errors[2].wrapping_add(err2);
@@ -517,7 +443,6 @@ impl<'a> WeightedPredictorState<'a> {
 mod tests {
     use super::{PredictionData, WeightedPredictorState};
     use crate::headers::modular::{GroupHeader, WeightedHeader};
-    use crate::util::floor_log2_nonzero;
 
     struct SimpleRandom {
         out: i64,
@@ -586,21 +511,5 @@ mod tests {
         assert_eq!(step(&mut rng, &mut state, xsize, ysize), (110i64, -60i32));
         assert_eq!(step(&mut rng, &mut state, xsize, ysize), (165i64, 0i32));
         assert_eq!(step(&mut rng, &mut state, xsize, ysize), (153i64, -60i32));
-    }
-
-    #[test]
-    fn error_weight_bounds() {
-        for i in 0..u32::MAX {
-            let shift = (i as u64 + 1).ilog2().saturating_sub(5);
-            assert!(((i as usize) >> shift) < 64, "i = {i}, shift = {shift}");
-        }
-    }
-
-    #[test]
-    fn scaled_weight_bounds() {
-        for i in 16..u32::MAX as u64 * 4 {
-            let shift = floor_log2_nonzero(i) - 4;
-            assert!((i >> shift) < 32, "i = {i}, shift = {shift}");
-        }
     }
 }
