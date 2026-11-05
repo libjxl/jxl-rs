@@ -167,27 +167,18 @@ impl FrameInfo {
 
         let mut frame_header = FrameHeader::read_unconditional(&(), br, &nonserialized)?;
         frame_header.postprocess(&nonserialized);
-        let next_nonvisible_samples = if frame_header.is_visible() {
-            check_size_limit(
-                decode_options.sample_limit,
-                frame_header.size_upsampled(),
-                frame_header.num_extra_channels as usize,
-                0,
-            )?;
+        let is_visible = frame_header.is_visible();
+        let effective_nonvisible_samples = if is_visible {
             0
         } else {
-            let total = check_size_limit(
-                decode_options.sample_limit,
-                frame_header.size_upsampled(),
-                frame_header.num_extra_channels as usize,
-                self.nonvisible_samples,
-            )?;
-            if is_preview && frame_header.is_last {
-                0
-            } else {
-                total
-            }
+            self.nonvisible_samples
         };
+        let total_samples = check_size_limit(
+            decode_options.sample_limit,
+            frame_header.size_upsampled(),
+            frame_header.num_extra_channels as usize,
+            effective_nonvisible_samples,
+        )?;
 
         if level5_limits
             && frame_header.duration > 0
@@ -205,7 +196,7 @@ impl FrameInfo {
             ));
         }
 
-        self.nonvisible_samples = next_nonvisible_samples;
+        self.nonvisible_samples = if is_visible { 0 } else { total_samples };
         self.frame_header = Some(frame_header);
         *bits = br.total_bits_read();
         Ok(())
