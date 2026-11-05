@@ -931,8 +931,10 @@ fn append_box_header(box_type: &[u8; 4], content_size: usize, output: &mut Vec<u
 }
 
 fn needs_level10(codestream: &[u8]) -> bool {
-    let mut options = JxlDecoderOptions::default();
-    options.skip_preview = false;
+    let options = JxlDecoderOptions {
+        skip_preview: false,
+        ..Default::default()
+    };
 
     let mut decoder = JxlDecoder::new(options);
     let mut input = codestream;
