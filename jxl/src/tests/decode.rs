@@ -28,6 +28,7 @@ pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub pixel_format: Option<JxlPixelFormat>,
     pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
+    pub sample_limit: Option<usize>,
 }
 
 impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
@@ -44,6 +45,7 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
             pixel_format: None,
             alpha_mode: AlphaMode::AsIs,
             adjust_orientation: true,
+            sample_limit: None,
         }
     }
 }
@@ -70,6 +72,7 @@ pub fn decode<'a, T: ImageDataType>(
     let options = JxlDecoderOptions {
         adjust_orientation: params.adjust_orientation,
         alpha_mode: params.alpha_mode,
+        sample_limit: params.sample_limit,
         max_profile_level: ProfileLevel::Main10,
         test_options: TestOptions {
             use_simple_pipeline: params.use_simple_pipeline,

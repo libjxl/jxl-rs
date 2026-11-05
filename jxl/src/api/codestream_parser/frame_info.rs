@@ -80,6 +80,8 @@ pub struct FrameInfo {
     frame_counters: (usize, usize),
     // Which stored frames to keep in the next frame's decoder state (see `reset`).
     keep_slots: [bool; 8],
+    // Cumulative samples across consecutive non-visible frames since the last visible frame.
+    nonvisible_samples: usize,
 }
 
 impl FrameInfo {
@@ -101,6 +103,7 @@ impl FrameInfo {
             buffer_recycler: Arc::new(BufferRecycler::new()),
             frame_counters: (0, 0),
             keep_slots: [true; 8],
+            nonvisible_samples: 0,
         }
     }
 
@@ -114,6 +117,7 @@ impl FrameInfo {
         }
         self.frame_counters = frame_counters;
         self.keep_slots = keep_slots;
+        self.nonvisible_samples = 0;
     }
 
     pub fn clear(&mut self) {
@@ -163,11 +167,27 @@ impl FrameInfo {
 
         let mut frame_header = FrameHeader::read_unconditional(&(), br, &nonserialized)?;
         frame_header.postprocess(&nonserialized);
-        check_size_limit(
-            decode_options.sample_limit,
-            frame_header.size_upsampled(),
-            frame_header.num_extra_channels as usize,
-        )?;
+        let next_nonvisible_samples = if frame_header.is_visible() {
+            check_size_limit(
+                decode_options.sample_limit,
+                frame_header.size_upsampled(),
+                frame_header.num_extra_channels as usize,
+                0,
+            )?;
+            0
+        } else {
+            let total = check_size_limit(
+                decode_options.sample_limit,
+                frame_header.size_upsampled(),
+                frame_header.num_extra_channels as usize,
+                self.nonvisible_samples,
+            )?;
+            if is_preview && frame_header.is_last {
+                0
+            } else {
+                total
+            }
+        };
 
         if level5_limits
             && frame_header.duration > 0
@@ -185,6 +205,7 @@ impl FrameInfo {
             ));
         }
 
+        self.nonvisible_samples = next_nonvisible_samples;
         self.frame_header = Some(frame_header);
         *bits = br.total_bits_read();
         Ok(())
