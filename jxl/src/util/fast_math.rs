@@ -161,11 +161,6 @@ pub fn fast_cbrtf_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     y
 }
 
-#[inline(always)]
-pub fn floor_log2_nonzero(x: u64) -> u32 {
-    (u64::BITS as usize - 1) as u32 ^ x.leading_zeros()
-}
-
 const JINC_WINDOWED_SQ_P: [f32; 6] = [
     1.0,
     -9.49473905e-01,
