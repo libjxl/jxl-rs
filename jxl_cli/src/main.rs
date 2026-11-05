@@ -15,15 +15,8 @@ use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
 
-const VERSION_STRING: &str = concat!(
-    env!("VERGEN_GIT_DESCRIBE"),
-    " (rustc ",
-    env!("VERGEN_RUSTC_SEMVER"),
-    ")"
-);
-
 #[derive(Parser)]
-#[command(version = VERSION_STRING)]
+#[command(version = jxl_cli::VERSION_STRING)]
 struct Opt {
     /// Input JXL file
     input: PathBuf,
@@ -100,15 +93,7 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    #[cfg(feature = "tracing-subscriber")]
-    {
-        use tracing_subscriber::prelude::*;
-        use tracing_subscriber::{EnvFilter, fmt};
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(EnvFilter::from_default_env())
-            .init();
-    }
+    jxl_cli::init_tracing();
 
     let opt = Opt::parse();
     let mut file = fs::File::open(opt.input.clone())

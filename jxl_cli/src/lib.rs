@@ -6,6 +6,25 @@
 pub mod dec;
 pub mod enc;
 
+pub const VERSION_STRING: &str = concat!(
+    env!("VERGEN_GIT_DESCRIBE"),
+    " (rustc ",
+    env!("VERGEN_RUSTC_SEMVER"),
+    ")"
+);
+
+pub fn init_tracing() {
+    #[cfg(feature = "tracing-subscriber")]
+    {
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::{EnvFilter, fmt};
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .init();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

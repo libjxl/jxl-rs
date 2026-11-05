@@ -166,15 +166,7 @@ fn parse_jxl(path: &Path) -> Result<()> {
 }
 
 fn main() {
-    #[cfg(feature = "tracing-subscriber")]
-    {
-        use tracing_subscriber::prelude::*;
-        use tracing_subscriber::{EnvFilter, fmt};
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(EnvFilter::from_default_env())
-            .init();
-    }
+    jxl_cli::init_tracing();
 
     let matches = Command::new("jxlinspect")
         .about("Provides info about a JXL file")
