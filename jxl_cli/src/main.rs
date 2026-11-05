@@ -39,7 +39,7 @@ struct Opt {
     num_reps: usize,
 
     /// Number of warmup decodes before measuring (only valid with --speedtest).
-    #[clap(long, default_value_t = 1, requires = "speedtest")]
+    #[clap(long, short, default_value_t = 1, requires = "speedtest")]
     warmup_reps: usize,
 
     ///  If specified, writes the ICC profile of the decoded image
