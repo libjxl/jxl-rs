@@ -3,13 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::BTreeMap;
 use std::fs;
+use std::io::IoSliceMut;
 use std::path::PathBuf;
 
 use clap::Parser;
-use color_eyre::eyre::{Result, WrapErr, bail, ensure, eyre};
-use jxl::api::{Event, JxlDecoder, JxlDecoderOptions, JxlSignature, ProfileLevel, check_signature};
+use color_eyre::eyre::{Result, WrapErr, bail, ensure};
+use jxl::api::{
+    BoxParser, CONTAINER_SIGNATURE, CodestreamInput, Event, JxlDecoder, JxlDecoderOptions,
+    JxlSignature, ProfileLevel, check_signature,
+};
 use jxl::error::Error;
 
 const VERSION_STRING: &str = concat!(
@@ -18,10 +21,6 @@ const VERSION_STRING: &str = concat!(
     env!("VERGEN_RUSTC_SEMVER"),
     ")"
 );
-
-// Magic bytes for the JPEG XL container signature box ("JXL ").
-const CONTAINER_SIGNATURE_BOX: [u8; 12] =
-    [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
 
 // Standard 20-byte "ftyp" box for a JPEG XL container.
 const FTYP_BOX: [u8; 20] = [
@@ -114,13 +113,13 @@ fn pack_codestream(
     // 12 bytes for "JXL ", 20 bytes for "ftyp", optional 9 bytes for "jxll",
     // and up to 16 bytes for the "jxlc" header.
     let mut container = Vec::with_capacity(
-        CONTAINER_SIGNATURE_BOX.len()
+        CONTAINER_SIGNATURE.len()
             + FTYP_BOX.len()
             + jxll_len
             + LARGE_BOX_HEADER_SIZE as usize
             + input_bytes.len(),
     );
-    container.extend_from_slice(&CONTAINER_SIGNATURE_BOX);
+    container.extend_from_slice(&CONTAINER_SIGNATURE);
     container.extend_from_slice(&FTYP_BOX);
     if use_level10 {
         container.extend_from_slice(&JXLL_LEVEL10_BOX);
@@ -132,103 +131,31 @@ fn pack_codestream(
 }
 
 // Extracts the raw JPEG XL codestream from a JPEG XL container.
-fn extract_codestream(input_bytes: &[u8], signature: JxlSignature) -> Result<Vec<u8>> {
+fn extract_codestream(mut input_bytes: &[u8], signature: JxlSignature) -> Result<Vec<u8>> {
     ensure!(
         signature == JxlSignature::Container,
         "Input file is not a container file."
     );
-    ensure!(
-        input_bytes.starts_with(&CONTAINER_SIGNATURE_BOX),
-        "Invalid JPEG XL container signature"
-    );
 
-    let mut rest = &input_bytes[CONTAINER_SIGNATURE_BOX.len()..];
+    let mut parser = BoxParser::with_aux_boxes(None);
+    parser.close_input();
+
     let mut codestream = Vec::new();
-    let mut saw_jxlc = false;
-    let mut jxlp_parts: BTreeMap<u32, &[u8]> = BTreeMap::new();
-    let mut saw_last_jxlp = false;
-
-    while !rest.is_empty() {
-        ensure!(rest.len() >= 8, "Truncated box header in container");
-        let size32 = u32::from_be_bytes(rest[0..4].try_into().unwrap());
-        let box_type: [u8; 4] = rest[4..8].try_into().unwrap();
-
-        let (header_len, payload_len) = match size32 {
-            0 => (8usize, rest.len() - 8),
-            1 => {
-                ensure!(rest.len() >= 16, "Truncated large box header in container");
-                let size64 = u64::from_be_bytes(rest[8..16].try_into().unwrap());
-                let payload_len = size64
-                    .checked_sub(16)
-                    .ok_or_else(|| eyre!("Invalid large box size"))?;
-                let payload_len =
-                    usize::try_from(payload_len).wrap_err("Box size exceeds addressable memory")?;
-                (16usize, payload_len)
+    {
+        let mut stream = CodestreamInput::new(&mut parser, &mut input_bytes);
+        let mut buf = [0u8; 65536];
+        loop {
+            let n = stream.read(&mut [IoSliceMut::new(&mut buf)])?;
+            if n == 0 {
+                break;
             }
-            2..=7 => return Err(eyre!("Invalid box size {size32}")),
-            n => (8usize, (n as usize) - 8),
-        };
-
-        ensure!(
-            rest.len() >= header_len + payload_len,
-            "Box {:?} extends past end of file",
-            std::str::from_utf8(&box_type).unwrap_or("????")
-        );
-
-        let payload = &rest[header_len..header_len + payload_len];
-        rest = &rest[header_len + payload_len..];
-
-        match &box_type {
-            b"jxlc" => {
-                ensure!(
-                    !saw_jxlc && jxlp_parts.is_empty(),
-                    "Multiple codestream boxes or mixed jxlc and jxlp boxes"
-                );
-                saw_jxlc = true;
-                codestream.extend_from_slice(payload);
-            }
-            b"jxlp" => {
-                ensure!(!saw_jxlc, "Mixed jxlc and jxlp boxes");
-                ensure!(!saw_last_jxlp, "Found jxlp box after the last jxlp box");
-                ensure!(payload.len() >= 4, "jxlp box too small to contain index");
-                let raw_index = u32::from_be_bytes(payload[0..4].try_into().unwrap());
-                let is_last = (raw_index & 0x8000_0000) != 0;
-                let index = raw_index & 0x7fff_ffff;
-                if is_last {
-                    saw_last_jxlp = true;
-                }
-                ensure!(
-                    jxlp_parts.insert(index, &payload[4..]).is_none(),
-                    "Duplicate jxlp box index {index}"
-                );
-            }
-            b"jxll" => {
-                if payload.len() > 1 {
-                    eprintln!("jxll box too large");
-                } else if let Some(&level) = payload.first()
-                    && level > 5
-                {
-                    eprintln!("Warning: extracting raw codestream that is greater than level 5");
-                }
-            }
-            _ => {}
+            codestream.extend_from_slice(&buf[..n]);
         }
     }
 
-    if !jxlp_parts.is_empty() {
-        for (expected_idx, (&actual_idx, part)) in jxlp_parts.iter().enumerate() {
-            ensure!(
-                actual_idx == expected_idx as u32,
-                "Missing or out-of-sequence jxlp box: expected {expected_idx}, found {actual_idx}"
-            );
-            codestream.extend_from_slice(part);
-        }
+    if parser.container_level() == Some(ProfileLevel::Main10) {
+        eprintln!("Warning: extracting raw codestream that is greater than level 5");
     }
-
-    ensure!(
-        saw_jxlc || !jxlp_parts.is_empty(),
-        "Container file does not contain a codestream box"
-    );
 
     Ok(codestream)
 }

@@ -140,7 +140,7 @@ pub(crate) struct BoxParserCheckpoint {
     next_aux_box_idx: usize,
 }
 
-pub(super) struct BoxParser {
+pub struct BoxParser {
     local_buffer: SmallBuffer,
     version: Option<u32>,
     ooo_jxlp_buffer: HashMap<u32, OOOJxlpBox>,
@@ -165,7 +165,7 @@ struct AuxBoxState {
 }
 
 impl BoxParser {
-    pub(super) fn with_aux_boxes(box_types: impl IntoIterator<Item = JxlAuxBoxType>) -> Self {
+    pub fn with_aux_boxes(box_types: impl IntoIterator<Item = JxlAuxBoxType>) -> Self {
         BoxParser {
             local_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
@@ -232,7 +232,7 @@ impl BoxParser {
         self.input_closed = false;
     }
 
-    pub(super) fn close_input(&mut self) {
+    pub fn close_input(&mut self) {
         self.input_closed = true;
     }
 
@@ -277,7 +277,7 @@ impl BoxParser {
             .unwrap_or_default()
     }
 
-    pub(super) fn container_level(&self) -> Option<ProfileLevel> {
+    pub fn container_level(&self) -> Option<ProfileLevel> {
         self.container_level
     }
 
@@ -813,13 +813,13 @@ impl BoxParser {
     }
 }
 
-pub(super) struct CodestreamInput<'a> {
+pub struct CodestreamInput<'a> {
     box_parser: &'a mut BoxParser,
     input: &'a mut dyn JxlBitstreamInput,
 }
 
 impl<'a> CodestreamInput<'a> {
-    pub(super) fn new(box_parser: &'a mut BoxParser, input: &'a mut dyn JxlBitstreamInput) -> Self {
+    pub fn new(box_parser: &'a mut BoxParser, input: &'a mut dyn JxlBitstreamInput) -> Self {
         Self { box_parser, input }
     }
 
@@ -847,7 +847,7 @@ impl<'a> CodestreamInput<'a> {
             .unwrap_or(available))
     }
 
-    pub(super) fn read(&mut self, buf: &mut [IoSliceMut]) -> Result<usize> {
+    pub fn read(&mut self, buf: &mut [IoSliceMut]) -> Result<usize> {
         self.box_parser.advance_to_codestream(self.input)?;
         if let Some(b) = self.box_parser.injected_jxlp() {
             let mut r = &b.data[b.consumed..];
