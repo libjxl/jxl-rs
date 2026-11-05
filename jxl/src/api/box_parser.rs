@@ -8,9 +8,12 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{IoSliceMut, Read};
 
-use crate::api::{JxlBitstreamInput, JxlSignature, ProfileLevel, SmallBuffer, check_signature};
+use crate::api::signature::CONTAINER_SIGNATURE;
+use crate::api::{
+    Event, JxlBitstreamInput, JxlDecoder, JxlDecoderOptions, JxlSignature, ProfileLevel,
+    SmallBuffer, check_signature,
+};
 use crate::error::{Error, Result};
-#[cfg(feature = "brotli")]
 use crate::util::NewWithCapacity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +143,7 @@ pub(crate) struct BoxParserCheckpoint {
     next_aux_box_idx: usize,
 }
 
-pub struct BoxParser {
+pub(super) struct BoxParser {
     local_buffer: SmallBuffer,
     version: Option<u32>,
     ooo_jxlp_buffer: HashMap<u32, OOOJxlpBox>,
@@ -165,7 +168,7 @@ struct AuxBoxState {
 }
 
 impl BoxParser {
-    pub fn with_aux_boxes(box_types: impl IntoIterator<Item = JxlAuxBoxType>) -> Self {
+    pub(super) fn with_aux_boxes(box_types: impl IntoIterator<Item = JxlAuxBoxType>) -> Self {
         BoxParser {
             local_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
@@ -232,7 +235,7 @@ impl BoxParser {
         self.input_closed = false;
     }
 
-    pub fn close_input(&mut self) {
+    pub(super) fn close_input(&mut self) {
         self.input_closed = true;
     }
 
@@ -277,7 +280,7 @@ impl BoxParser {
             .unwrap_or_default()
     }
 
-    pub fn container_level(&self) -> Option<ProfileLevel> {
+    pub(super) fn container_level(&self) -> Option<ProfileLevel> {
         self.container_level
     }
 
@@ -813,13 +816,13 @@ impl BoxParser {
     }
 }
 
-pub struct CodestreamInput<'a> {
+pub(super) struct CodestreamInput<'a> {
     box_parser: &'a mut BoxParser,
     input: &'a mut dyn JxlBitstreamInput,
 }
 
 impl<'a> CodestreamInput<'a> {
-    pub fn new(box_parser: &'a mut BoxParser, input: &'a mut dyn JxlBitstreamInput) -> Self {
+    pub(super) fn new(box_parser: &'a mut BoxParser, input: &'a mut dyn JxlBitstreamInput) -> Self {
         Self { box_parser, input }
     }
 
@@ -847,7 +850,7 @@ impl<'a> CodestreamInput<'a> {
             .unwrap_or(available))
     }
 
-    pub fn read(&mut self, buf: &mut [IoSliceMut]) -> Result<usize> {
+    pub(super) fn read(&mut self, buf: &mut [IoSliceMut]) -> Result<usize> {
         self.box_parser.advance_to_codestream(self.input)?;
         if let Some(b) = self.box_parser.injected_jxlp() {
             let mut r = &b.data[b.consumed..];
@@ -901,6 +904,109 @@ impl<'a> CodestreamInput<'a> {
         self.box_parser.mark_codestream_read(n);
         Ok(n)
     }
+}
+
+const FTYP_BOX: [u8; 20] = [
+    0, 0, 0, 20, b'f', b't', b'y', b'p', b'j', b'x', b'l', b' ', 0, 0, 0, 0, b'j', b'x', b'l', b' ',
+];
+
+const JXLL_LEVEL10_BOX: [u8; 9] = [0, 0, 0, 9, b'j', b'x', b'l', b'l', 10];
+
+const SMALL_BOX_HEADER_SIZE: u64 = 8;
+const LARGE_BOX_HEADER_SIZE: u64 = 16;
+const LARGE_BOX_CONTENT_SIZE_THRESHOLD: u64 = 0x1_0000_0000 - SMALL_BOX_HEADER_SIZE;
+
+fn append_box_header(box_type: &[u8; 4], content_size: usize, output: &mut Vec<u8>) {
+    let size = content_size as u64;
+    if size >= LARGE_BOX_CONTENT_SIZE_THRESHOLD {
+        let box_size = size + LARGE_BOX_HEADER_SIZE;
+        output.extend_from_slice(&1u32.to_be_bytes());
+        output.extend_from_slice(box_type);
+        output.extend_from_slice(&box_size.to_be_bytes());
+    } else {
+        let box_size = (size + SMALL_BOX_HEADER_SIZE) as u32;
+        output.extend_from_slice(&box_size.to_be_bytes());
+        output.extend_from_slice(box_type);
+    }
+}
+
+fn needs_level10(codestream: &[u8]) -> bool {
+    let mut options = JxlDecoderOptions::default();
+    options.skip_preview = false;
+
+    let mut decoder = JxlDecoder::new(options);
+    let mut input = codestream;
+
+    loop {
+        match decoder.process(&mut input, None, None) {
+            Ok(Event::BasicInfo | Event::FrameHeader | Event::FrameComplete { .. }) => {}
+            Ok(Event::Complete | Event::NeedMoreInput { .. }) => return false,
+            Err(Error::LevelLimitExceeded {
+                level: ProfileLevel::Main5,
+                ..
+            }) => return true,
+            Err(_) => return false,
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn pack_codestream(input_bytes: &[u8], force_level10: bool) -> Result<Vec<u8>> {
+    if check_signature(input_bytes) != JxlSignature::Codestream {
+        return Err(Error::InvalidSignature);
+    }
+
+    let use_level10 = force_level10 || needs_level10(input_bytes);
+    let jxll_len = if use_level10 {
+        JXLL_LEVEL10_BOX.len()
+    } else {
+        0
+    };
+
+    // 12 bytes for "JXL ", 20 bytes for "ftyp", optional 9 bytes for "jxll",
+    // and up to 16 bytes for the "jxlc" header.
+    let mut container = Vec::new_with_capacity(
+        CONTAINER_SIGNATURE.len()
+            + FTYP_BOX.len()
+            + jxll_len
+            + LARGE_BOX_HEADER_SIZE as usize
+            + input_bytes.len(),
+    )?;
+    container.extend_from_slice(&CONTAINER_SIGNATURE);
+    container.extend_from_slice(&FTYP_BOX);
+    if use_level10 {
+        container.extend_from_slice(&JXLL_LEVEL10_BOX);
+    }
+    append_box_header(b"jxlc", input_bytes.len(), &mut container);
+    container.extend_from_slice(input_bytes);
+
+    Ok(container)
+}
+
+#[doc(hidden)]
+pub fn extract_codestream(mut input_bytes: &[u8]) -> Result<(Vec<u8>, Option<ProfileLevel>)> {
+    if check_signature(input_bytes) != JxlSignature::Container {
+        return Err(Error::InvalidBox);
+    }
+
+    let mut parser = BoxParser::with_aux_boxes(None);
+    parser.close_input();
+
+    let mut codestream = Vec::new();
+    {
+        let mut stream = CodestreamInput::new(&mut parser, &mut input_bytes);
+        let mut buf = [0u8; 65536];
+        loop {
+            let n = stream.read(&mut [IoSliceMut::new(&mut buf)])?;
+            if n == 0 {
+                break;
+            }
+            codestream.try_reserve(n)?;
+            codestream.extend_from_slice(&buf[..n]);
+        }
+    }
+
+    Ok((codestream, parser.container_level()))
 }
 
 #[cfg(test)]

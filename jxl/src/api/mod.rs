@@ -18,7 +18,9 @@ mod xyb_constants;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(crate) use box_parser::BoxParserCheckpoint;
-pub use box_parser::{BoxParser, CodestreamInput, JxlAuxBox, JxlAuxBoxType};
+pub use box_parser::{JxlAuxBox, JxlAuxBoxType};
+#[doc(hidden)]
+pub use box_parser::{extract_codestream, pack_codestream};
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
