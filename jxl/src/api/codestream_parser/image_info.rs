@@ -89,12 +89,14 @@ impl ImageInfo {
             decode_options.sample_limit,
             (xsize, ysize),
             file_header.image_metadata.extra_channel_info.len(),
+            0,
         )?;
         if let Some(preview) = &file_header.image_metadata.preview {
             check_size_limit(
                 decode_options.sample_limit,
                 (preview.xsize() as usize, preview.ysize() as usize),
                 file_header.image_metadata.extra_channel_info.len(),
+                0,
             )?;
         }
         let data = &file_header.image_metadata;

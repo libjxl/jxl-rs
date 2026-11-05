@@ -60,18 +60,28 @@ fn level5_limits(input: &CodestreamInput, decode_options: &JxlDecoderOptions) ->
 }
 
 fn check_size_limit(
-    pixel_limit: Option<usize>,
+    sample_limit: Option<usize>,
     (xs, ys): (usize, usize),
     num_ec: usize,
-) -> Result<()> {
-    if let Some(limit) = pixel_limit {
-        let xs = xs.max(16); // xsize is always at least 64 bytes.
-        let total_pixels = xs.saturating_mul(ys).saturating_mul(3 + num_ec);
-        if total_pixels >= limit {
-            return Err(Error::ImageSizeTooLarge(xs, ys));
-        }
-    };
-    Ok(())
+    previous_samples: usize,
+) -> Result<usize> {
+    let xs = xs.max(16); // xsize is always at least 64 bytes.
+    let channels = 3 + num_ec;
+    let total_samples = xs
+        .saturating_mul(ys)
+        .saturating_mul(channels)
+        .saturating_add(previous_samples);
+    if let Some(limit) = sample_limit
+        && total_samples >= limit
+    {
+        let err_size = if previous_samples == 0 {
+            (xs, ys)
+        } else {
+            (total_samples / channels, 1)
+        };
+        return Err(Error::ImageSizeTooLarge(err_size.0, err_size.1));
+    }
+    Ok(total_samples)
 }
 
 fn validate_output_buffers(
@@ -133,10 +143,6 @@ pub(super) struct CodestreamParser {
     /// is (as in a sequential decode, unless a seek has not reached its target yet).
     slot_frames: [Option<usize>; 8],
 
-    /// Frames decoded (not skipped) since the last visible frame completed, for
-    /// `JxlDecoderOptions::frame_limit`.
-    frames_for_visible: usize,
-
     /// Number of frames decoded (not skipped), for tests.
     #[cfg(test)]
     pub(super) frames_decoded: usize,
@@ -164,7 +170,6 @@ impl CodestreamParser {
             visible_frames_to_skip: None,
             next_frame_index: 0,
             slot_frames: [None; 8],
-            frames_for_visible: 0,
             #[cfg(test)]
             frames_decoded: 0,
             frame_scan_info: FrameScanInfo::new(),
@@ -185,7 +190,6 @@ impl CodestreamParser {
         self.visible_frames_to_skip = None;
         self.next_frame_index = 0;
         self.slot_frames = [None; 8];
-        self.frames_for_visible = 0;
         #[cfg(test)]
         {
             self.frames_decoded = 0;
@@ -226,7 +230,6 @@ impl CodestreamParser {
         self.next_frame_index = start.frame_index;
         self.state = ParserState::FrameHeader { is_preview: false };
         self.header_needed_bytes = None;
-        self.frames_for_visible = 0;
         start.box_parser_checkpoint
     }
 
@@ -399,14 +402,6 @@ impl CodestreamParser {
                     if decode_options.scan_frames_only {
                         process_mode = ProcessMode::Skip(process_mode.notify_user());
                     }
-                    if !matches!(process_mode, ProcessMode::Skip(_)) {
-                        self.frames_for_visible += 1;
-                        if let Some(limit) = decode_options.frame_limit
-                            && self.frames_for_visible > limit
-                        {
-                            return Err(Error::TooManyFrames(limit));
-                        }
-                    }
                     #[cfg(test)]
                     if !matches!(process_mode, ProcessMode::Skip(_)) {
                         self.frames_decoded += 1;
@@ -474,9 +469,6 @@ impl CodestreamParser {
 
                     let header = self.frame_info.current_frame_header().unwrap();
                     let is_last = header.is_last;
-                    if is_preview || header.is_visible() {
-                        self.frames_for_visible = 0;
-                    }
                     if !is_preview
                         && !matches!(process_mode, ProcessMode::Skip(_))
                         && let Some(slot) = stored_slot(header)
