@@ -10,15 +10,8 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, bail, ensure};
 use jxl::api::{JxlSignature, ProfileLevel, check_signature, extract_codestream, pack_codestream};
 
-const VERSION_STRING: &str = concat!(
-    env!("VERGEN_GIT_DESCRIBE"),
-    " (rustc ",
-    env!("VERGEN_RUSTC_SEMVER"),
-    ")"
-);
-
 #[derive(Parser)]
-#[command(version = VERSION_STRING)]
+#[command(version = jxl_cli::VERSION_STRING)]
 struct Opt {
     /// Input JXL file
     input: PathBuf,
@@ -66,15 +59,7 @@ fn apply_file_format_options(
 }
 
 fn main() -> Result<()> {
-    #[cfg(feature = "tracing-subscriber")]
-    {
-        use tracing_subscriber::prelude::*;
-        use tracing_subscriber::{EnvFilter, fmt};
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(EnvFilter::from_default_env())
-            .init();
-    }
+    jxl_cli::init_tracing();
 
     let opt = Opt::parse();
 
