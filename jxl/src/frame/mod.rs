@@ -310,6 +310,9 @@ impl GroupStatus {
 pub struct Frame {
     pub(super) header: FrameHeader,
     toc: Toc,
+    // Per bitstream position: offset of the section from the start of the section
+    // data, and its spec-order index. Precomputed so `toc_entry` is O(1).
+    toc_layout: Vec<(u64, usize)>,
     color_channels: usize,
     pub(super) lf_global: Option<LfGlobalState>,
     pub(super) hf_global: Option<HfGlobalState>,
@@ -348,6 +351,73 @@ impl Frame {
 
     pub fn header(&self) -> &FrameHeader {
         &self.header
+    }
+
+    /// Returns the TOC entry at `index`, in **bitstream (physical) order**, or
+    /// `None` if out of bounds.
+    ///
+    /// The entry's `offset` is the sum of the sizes of the preceding physical
+    /// sections, relative to the start of the frame's section data. `kind` is
+    /// the logical section stored at this physical position, resolved through
+    /// the TOC permutation when present.
+    pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        use crate::api::TocEntry;
+        let &(offset, spec_idx) = self.toc_layout.get(index)?;
+        Some(TocEntry {
+            kind: self.toc_kind_for_spec_index(spec_idx),
+            offset,
+            size: self.toc.entries[index],
+        })
+    }
+
+    /// Builds `toc_layout`.
+    pub(super) fn toc_layout(toc: &Toc) -> Vec<(u64, usize)> {
+        let mut offset = 0u64;
+        let mut layout: Vec<_> = toc
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, &size)| {
+                let o = offset;
+                offset += size as u64;
+                (o, i)
+            })
+            .collect();
+        // The permutation maps spec index -> bitstream position; invert it.
+        if toc.permuted {
+            for (spec_idx, &pos) in toc.permutation.iter().enumerate() {
+                if let Some(entry) = layout.get_mut(pos as usize) {
+                    entry.1 = spec_idx;
+                }
+            }
+        }
+        layout
+    }
+
+    /// Maps a spec-order TOC index to its [`TocGroupKind`](crate::api::TocGroupKind).
+    ///
+    /// This is the inverse of [`get_section_idx`](Self::get_section_idx) and must
+    /// be kept in sync with it.
+    fn toc_kind_for_spec_index(&self, spec_idx: usize) -> crate::api::TocGroupKind {
+        use crate::api::TocGroupKind;
+        if self.header.num_toc_entries() == 1 {
+            return TocGroupKind::All;
+        }
+        let num_lf_groups = self.header.num_lf_groups();
+        let num_groups = self.header.num_groups();
+        if spec_idx == 0 {
+            TocGroupKind::LfGlobal
+        } else if spec_idx <= num_lf_groups {
+            TocGroupKind::LfGroup((spec_idx - 1) as u32)
+        } else if spec_idx == num_lf_groups + 1 {
+            TocGroupKind::HfGlobal
+        } else {
+            let j = spec_idx - (num_lf_groups + 2);
+            TocGroupKind::GroupPass {
+                pass_idx: (j / num_groups) as u32,
+                group_idx: (j % num_groups) as u32,
+            }
+        }
     }
 
     #[instrument(level = "debug", skip(self), ret)]

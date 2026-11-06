@@ -286,6 +286,8 @@ impl Frame {
 
         let num_extra_channels = image_metadata.extra_channel_info.len();
 
+        let toc_layout = Self::toc_layout(&toc);
+
         Ok(Box::new(Self {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
@@ -293,6 +295,7 @@ impl Frame {
             header: frame_header,
             color_channels,
             toc,
+            toc_layout,
             lf_global: None,
             hf_global: None,
             lf_image,
