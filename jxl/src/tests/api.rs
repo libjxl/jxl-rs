@@ -1921,3 +1921,64 @@ fn empty_jxlp() {
         compare_frames(Path::new(name), 0, &expected[0], &got[0]);
     }
 }
+
+#[test]
+fn test_sample_limit_consecutive_nonvisible_frames() {
+    // `blendmodes_5.jxl` is 1024x1024 with 1 extra channel (4_194_304 samples per full frame):
+    // 4 non-visible 1024x1024 frames followed by 1 visible 1024x1024 frame.
+    let blendmodes =
+        std::fs::read("resources/test/conformance_test_images/blendmodes_5.jxl").unwrap();
+    let nonvisible_total = 4 * 1024 * 1024 * 4;
+    assert_eq!(
+        decode::<f32>(
+            &blendmodes,
+            DecodeParams {
+                sample_limit: Some(nonvisible_total + 1),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    assert!(matches!(
+        decode::<f32>(
+            &blendmodes,
+            DecodeParams {
+                sample_limit: Some(nonvisible_total),
+                ..Default::default()
+            },
+        ),
+        Err(Error::ImageSizeTooLarge(pixels, 1)) if pixels == 4 * 1024 * 1024
+    ));
+
+    // Visible animation frames reset the consecutive non-visible sample counter.
+    let anim =
+        std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
+    let frames = decode::<f32>(&anim, Default::default()).unwrap();
+    assert!(frames.len() > 1);
+    let (w3, h) = frames[0][0].size();
+    let anim_frame_samples = (w3 / 3).max(16) * h * (2 + frames[0].len());
+    assert_eq!(
+        decode::<f32>(
+            &anim,
+            DecodeParams {
+                sample_limit: Some(anim_frame_samples + 1),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .len(),
+        frames.len()
+    );
+    assert!(matches!(
+        decode::<f32>(
+            &anim,
+            DecodeParams {
+                sample_limit: Some(anim_frame_samples),
+                ..Default::default()
+            },
+        ),
+        Err(Error::ImageSizeTooLarge(..))
+    ));
+}

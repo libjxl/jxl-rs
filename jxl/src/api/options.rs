@@ -23,10 +23,11 @@ pub struct JxlDecoderOptions {
     pub coalescing: bool,
     pub desired_intensity_target: Option<f32>,
     pub skip_preview: bool,
-    /// Fail decoding images with more than this number of samples, or with frames with
-    /// more than this number of samples. The limit counts the product of pixels and
-    /// channels, so for example an image with 1 extra channel of size 1024x1024 has 4
-    /// million samples.
+    /// Fail decoding images with more than this number of samples, frames with more
+    /// than this number of samples, or sequences of consecutive non-visible frames
+    /// whose total number of samples exceeds this limit. The limit counts the product
+    /// of pixels and channels, so for example an image with 1 extra channel of size
+    /// 1024x1024 has 4 million samples.
     pub sample_limit: Option<usize>,
     /// Use high precision mode for decoding.
     /// When false (default), uses lower precision settings that match libjxl's default.

@@ -60,18 +60,28 @@ fn level5_limits(input: &CodestreamInput, decode_options: &JxlDecoderOptions) ->
 }
 
 fn check_size_limit(
-    pixel_limit: Option<usize>,
+    sample_limit: Option<usize>,
     (xs, ys): (usize, usize),
     num_ec: usize,
-) -> Result<()> {
-    if let Some(limit) = pixel_limit {
-        let xs = xs.max(16); // xsize is always at least 64 bytes.
-        let total_pixels = xs.saturating_mul(ys).saturating_mul(3 + num_ec);
-        if total_pixels >= limit {
-            return Err(Error::ImageSizeTooLarge(xs, ys));
-        }
-    };
-    Ok(())
+    previous_samples: usize,
+) -> Result<usize> {
+    let xs = xs.max(16); // xsize is always at least 64 bytes.
+    let channels = 3 + num_ec;
+    let total_samples = xs
+        .saturating_mul(ys)
+        .saturating_mul(channels)
+        .saturating_add(previous_samples);
+    if let Some(limit) = sample_limit
+        && total_samples >= limit
+    {
+        let err_size = if previous_samples == 0 {
+            (xs, ys)
+        } else {
+            (total_samples / channels, 1)
+        };
+        return Err(Error::ImageSizeTooLarge(err_size.0, err_size.1));
+    }
+    Ok(total_samples)
 }
 
 fn validate_output_buffers(
