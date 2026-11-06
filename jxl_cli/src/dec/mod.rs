@@ -11,7 +11,7 @@ use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
     Endianness, Event, ExtraChannel, JxlAnimation, JxlBitDepth, JxlBitstreamInput,
     JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder, JxlOutputBuffer,
-    JxlParallelRunner, JxlParallelRunnerFun, JxlPixelFormat,
+    JxlParallelRunner, JxlParallelRunnerFun, JxlPixelFormat, ToneMapping,
 };
 use jxl::image::{OwnedRawImage, Rect, f16};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -36,6 +36,7 @@ pub struct DecodeOutput {
     pub original_bit_depth: JxlBitDepth,
     pub output_profile: JxlColorProfile,
     pub embedded_profile: JxlColorProfile,
+    pub tone_mapping: ToneMapping,
     pub jxl_animation: Option<JxlAnimation>,
     /// A partial file ended before its first frame rendered anything, so that
     /// frame was saved blank.
@@ -258,6 +259,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         original_bit_depth: info.bit_depth.clone(),
         output_profile,
         embedded_profile,
+        tone_mapping: info.tone_mapping,
         jxl_animation: info.animation.clone(),
         nothing_rendered: false,
     };

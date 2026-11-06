@@ -143,24 +143,6 @@ pub fn fast_powf_simd<D: SimdDescriptor>(d: D, base: D::F32Vec, exp: D::F32Vec) 
     fast_pow2f_simd(d, fast_log2f_simd(d, base) * exp)
 }
 
-/// Cube root of a positive normal `x` up to 2^126: a bit-level first guess, refined by two Halley
-/// steps.
-// Max relative error: ~9.7e-8
-#[inline(always)]
-pub fn fast_cbrtf_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
-    // The high half of bits * ((2^32 + 2) / 3) is bits / 3 for bits < 2^31.
-    let bits_div_3 = x
-        .bitcast_to_i32()
-        .mul_wide_take_high(D::I32Vec::splat(d, 0x5555_5556));
-    let mut y = (bits_div_3 + D::I32Vec::splat(d, 0x2a51_4067)).bitcast_to_f32();
-    for _ in 0..2 {
-        // y * (y^3 + 2x) / (2y^3 + x), as a correction to y for precision.
-        let y3 = y * y * y;
-        y = y.mul_add((x - y3) / y3.mul_add(D::F32Vec::splat(d, 2.0), x), y);
-    }
-    y
-}
-
 #[inline(always)]
 pub fn floor_log2_nonzero(x: u64) -> u32 {
     (u64::BITS as usize - 1) as u32 ^ x.leading_zeros()
@@ -275,26 +257,6 @@ mod test {
             Ok(())
         });
     }
-
-    fn fast_cbrtf_simd_arb<D: SimdDescriptor>(d: D) {
-        let mut input = vec![0.0f32; D::F32Vec::LEN];
-        let mut output = vec![0.0f32; D::F32Vec::LEN];
-        arbtest::arbtest(|u| {
-            for v in &mut input {
-                let bits =
-                    u.int_in_range(f32::MIN_POSITIVE.to_bits()..=2f32.powi(126).to_bits())?;
-                *v = f32::from_bits(bits);
-            }
-            fast_cbrtf_simd(d, D::F32Vec::load(d, &input)).store(&mut output);
-            for (&x, &y) in input.iter().zip(&output) {
-                let rel_error = (y as f64 / (x as f64).cbrt() - 1.0).abs();
-                assert!(rel_error < 1e-7, "x: {x}, rel_error: {rel_error}");
-            }
-            Ok(())
-        });
-    }
-
-    jxl_simd::test_all_instruction_sets!(fast_cbrtf_simd_arb);
 
     fn bessel_j1(x: f64) -> f64 {
         if x == 0.0 {
