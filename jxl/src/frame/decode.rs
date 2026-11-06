@@ -17,7 +17,6 @@ use super::modular::{
 };
 use super::quant_weights::DequantMatrices;
 use super::quantizer::{LfQuantFactors, QuantizerParams};
-use super::render::pipeline;
 use super::{HfMetaSplitter, HfMetaViews, LfImageSplitter};
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Histograms;
@@ -40,7 +39,7 @@ use crate::image::{BufferRecycler, DataTypeTag, Image, Rect};
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::stages::Upsample8x;
-use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
+use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage};
 use crate::util::sync::{Arc, Mutex};
 use crate::util::tracing_wrappers::*;
 use crate::util::{CeilLog2, SharedSnapshot, ShiftRightCeil, Xorshift128Plus, mirror};
@@ -696,11 +695,15 @@ impl Frame {
         let buf_ysize = buf_y1.min(upsampled_size.1) - (gy * upsampling * group_dim) as usize;
 
         // Get all 3 noise channel buffers upfront
-        let mut bufs: [Image<u16>; 3] = [
-            pipeline!(self, p, p.get_buffer(num_channels)?),
-            pipeline!(self, p, p.get_buffer(num_channels + 1)?),
-            pipeline!(self, p, p.get_buffer(num_channels + 2)?),
-        ];
+        let noise_buffer = || {
+            let group_dim = (group_dim * upsampling) as usize;
+            // Noise channels are not downsampled.
+            self.buffer_recycler.get_buffer::<u16>((
+                group_dim.min(upsampled_size.0).next_multiple_of(16),
+                group_dim.min(upsampled_size.1).next_multiple_of(16),
+            ))
+        };
+        let mut bufs: [Image<u16>; 3] = [noise_buffer()?, noise_buffer()?, noise_buffer()?];
 
         // libjxl iterates through upsampling subdivisions with separate RNG seeds.
         // For each subregion, a single RNG is shared across all 3 channels.
@@ -762,7 +765,6 @@ impl Frame {
         passes: &mut [(usize, BitReader)],
         buffer_splitter: &BufferSplitter,
         force_render: bool,
-        expected_shifts: &[(usize, usize)],
     ) -> Result<()> {
         // Group was fully rendered already, nothing to do.
         if self.group_status.final_vardct_render_done.contains(&group) {
@@ -806,22 +808,16 @@ impl Frame {
             )
         });
         let decoded_buffer = |c: usize| {
-            if expected_shifts[c] == decoded_shifts[c] {
-                return pipeline!(self, p, p.get_buffer(c));
-            }
-
-            // The pipeline's input buffer may be too small for decoding in codestream resolution,
-            // because it may be downsampled.
-            let size = self.header.size();
-            let group_dim = self.header.group_dim();
+            let size = self.header.size_upsampled();
+            let group_dim = 1 << (self.header.log_group_dim() + upsampling_shift);
             self.buffer_recycler.get_buffer::<f32>((
                 group_dim
                     .min(size.0)
-                    .shrc(self.header.hshift(c))
+                    .shrc(decoded_shifts[c].0)
                     .next_multiple_of(16),
                 group_dim
                     .min(size.1)
-                    .shrc(self.header.vshift(c))
+                    .shrc(decoded_shifts[c].1)
                     .next_multiple_of(16),
             ))
         };
@@ -890,19 +886,12 @@ impl Frame {
         passes: &mut [(usize, BitReader)],
         buffer_splitter: &BufferSplitter,
         force_render: bool,
-        expected_shifts: &[(usize, usize)],
     ) -> Result<()> {
         if passes.is_empty() {
             assert!(force_render);
         }
 
-        self.decode_and_render_varct_and_noise(
-            group,
-            passes,
-            buffer_splitter,
-            force_render,
-            expected_shifts,
-        )?;
+        self.decode_and_render_varct_and_noise(group, passes, buffer_splitter, force_render)?;
 
         let lf_global = self.lf_global.as_ref().unwrap();
         let pass_to_pipeline = |chan, group, complete, decoded_shift, raw_image| {

@@ -424,12 +424,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         self.shared.channel_info[0][channel].downsample
     }
 
-    #[instrument(skip_all, err)]
-    fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
-        let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
-        self.shared.buffer_recycler.get_buffer(sz)
-    }
-
     fn set_buffer_for_group<T: ImageDataType>(
         &self,
         channel: usize,

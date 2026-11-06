@@ -98,8 +98,6 @@ macro_rules! pipeline {
     }};
 }
 
-pub(super) use pipeline;
-
 impl Frame {
     pub(super) fn expected_input_shift(&self, channel: usize) -> (usize, usize) {
         let (x, y) = pipeline!(self, p, p.input_downsample(channel));
@@ -137,9 +135,20 @@ impl Frame {
         };
 
         if additional_shift != 0 {
-            let mut destination = pipeline!(self, p, p.get_buffer(channel))?;
             let size = self.header.size_upsampled();
             let group_shift = self.header.log_group_dim() + self.header.upsampling.ilog2() as usize;
+            let group_dim = 1 << group_shift;
+            let mut destination = self.buffer_recycler.get_buffer::<T>((
+                group_dim
+                    .min(size.0)
+                    .shrc(expected_shift.0)
+                    .next_multiple_of(16),
+                group_dim
+                    .min(size.1)
+                    .shrc(expected_shift.1)
+                    .next_multiple_of(16),
+            ))?;
+
             let gx = group % self.header.size_groups().0;
             let gy = group / self.header.size_groups().0;
             // Padding at the frame edge must not contribute to the average.
@@ -309,11 +318,7 @@ impl Frame {
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
-        let expected_shifts: SmallVec<_, 8> = (0..3 + self.header.num_extra_channels as usize)
-            .map(|c| self.expected_input_shift(c))
-            .collect();
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
-
         modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
 
         // STEP 1: figure out what modular buffers will be finalized during this decode, and mark them
@@ -541,17 +546,10 @@ impl Frame {
                         &mut new_passes,
                         &buffer_splitter,
                         should_render_non_final,
-                        &expected_shifts,
                     )?;
                 }
                 RenderStep::FlushVarDCT { group } => {
-                    self.decode_hf_group(
-                        *group,
-                        &mut [],
-                        &buffer_splitter,
-                        true,
-                        &expected_shifts,
-                    )?;
+                    self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
                 }
                 RenderStep::RunTransformSteps => {
                     self.lf_global

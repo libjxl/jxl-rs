@@ -13,7 +13,6 @@ use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::error::Result;
 use crate::image::{BufferRecycler, DataTypeTag, ImageDataType};
 use crate::render::ErasedLocalState;
-use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::AtomicBool;
 
 pub enum Stage<Buffer> {
@@ -142,34 +141,6 @@ impl<Buffer> RenderPipelineShared<Buffer> {
                 .1
                 .min(goffset.1 + (1 << self.log_group_size))
                 - goffset.1,
-        )
-    }
-
-    pub fn group_size_for_channel(
-        &self,
-        channel: usize,
-        requested_data_type: DataTypeTag,
-    ) -> (usize, usize) {
-        let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
-        // Channels that no stage consumes are not marked as used. Callers may still ask for a
-        // scratch buffer for them (e.g. VarDCT always decodes three colour channels, but a
-        // grayscale pipeline only ever reads the first one); the data written there is
-        // discarded, so any type is acceptable.
-        if self.channel_is_used[channel] && ty != requested_data_type {
-            panic!(
-                "Invalid pipeline usage: incorrect channel type, requested {requested_data_type:?}, but pipeline wants {ty:?}"
-            );
-        }
-        // 420 JPEGs are padded to 16 pixels, not to 8.
-        (
-            (1 << self.log_group_size)
-                .min(self.input_size.0)
-                .shrc(downsample.0 as usize)
-                .next_multiple_of(16),
-            (1 << self.log_group_size)
-                .min(self.input_size.1)
-                .shrc(downsample.1 as usize)
-                .next_multiple_of(16),
         )
     }
 
