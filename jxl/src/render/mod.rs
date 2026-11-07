@@ -112,10 +112,7 @@ pub trait RenderPipeline: Sized {
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
 
-    /// Obtains a buffer suitable for storing the input in channel `channel`.
-    /// This *might* be a buffer that was used to store that channel for that group in a previous
-    /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.
-    fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>>;
+    fn input_downsample(&self, channel: usize) -> (u8, u8);
 
     /// Gives back the buffer for a channel and group to the render pipeline, marking whether
     /// this will be the last time that this function is called for this group.

@@ -67,6 +67,7 @@ impl ImageInfo {
     pub fn parse_file_header(
         &mut self,
         decode_options: &JxlDecoderOptions,
+        downsample_factor: u8,
         br: &mut BitReader,
         bits: &mut usize,
         level5_limits: bool,
@@ -100,12 +101,9 @@ impl ImageInfo {
             )?;
         }
         let data = &file_header.image_metadata;
-        self.basic_info = Some(JxlBasicInfo {
-            size: if decode_options.adjust_orientation && data.orientation.is_transposing() {
-                (ysize, xsize)
-            } else {
-                (xsize, ysize)
-            },
+        let mut basic_info = JxlBasicInfo {
+            // Will be set by `update_size` below
+            size: (xsize, ysize),
             bit_depth: if data.bit_depth.floating_point_sample() {
                 JxlBitDepth::Float {
                     bits_per_sample: data.bit_depth.bits_per_sample(),
@@ -145,7 +143,13 @@ impl ImageInfo {
                 .preview
                 .as_ref()
                 .map(|p| (p.xsize() as usize, p.ysize() as usize)),
-        });
+        };
+        basic_info.update_size(
+            &file_header,
+            decode_options.adjust_orientation,
+            downsample_factor,
+        );
+        self.basic_info = Some(basic_info);
         self.file_header = Some(file_header);
         *bits = br.total_bits_read();
         Ok(())
@@ -189,6 +193,20 @@ impl ImageInfo {
 }
 
 impl CodestreamParser {
+    pub(in crate::api) fn update_size(&mut self, options: &JxlDecoderOptions) {
+        let Some(file_header) = &self.image_info.file_header else {
+            return;
+        };
+        let Some(basic_info) = &mut self.image_info.basic_info else {
+            return;
+        };
+        basic_info.update_size(
+            file_header,
+            options.adjust_orientation,
+            self.downsample_factor,
+        );
+    }
+
     pub fn update_default_output_options(&mut self) {
         assert!(self.image_info.is_complete());
 

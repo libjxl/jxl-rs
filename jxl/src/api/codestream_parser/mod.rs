@@ -123,6 +123,7 @@ pub(super) struct CodestreamParser {
     pub image_info: ImageInfo,
     pub frame_info: FrameInfo,
     frame_scan_info: FrameScanInfo,
+    frame_header_decoded: bool,
 
     /// Total length of the file.
     pub file_length: Option<u64>,
@@ -134,6 +135,7 @@ pub(super) struct CodestreamParser {
     // Output information
     pub output_color_profile: Option<JxlColorProfile>,
     pub pixel_format: Option<JxlPixelFormat>,
+    pub downsample_factor: u8,
 
     /// While seeking: the number of visible frames still to skip before the target.
     visible_frames_to_skip: Option<usize>,
@@ -164,6 +166,7 @@ impl CodestreamParser {
             state: ParserState::FileHeader,
             output_color_profile: None,
             pixel_format: None,
+            downsample_factor: 0,
             local_buffer: SmallBuffer::new(4096),
             header_needed_bytes: None,
             frame_info: FrameInfo::new(),
@@ -173,6 +176,7 @@ impl CodestreamParser {
             #[cfg(test)]
             frames_decoded: 0,
             frame_scan_info: FrameScanInfo::new(),
+            frame_header_decoded: false,
             file_length: None,
         }
     }
@@ -182,11 +186,13 @@ impl CodestreamParser {
         self.image_info = ImageInfo::new();
         self.frame_info.reset((0, 0), [false; 8]);
         self.frame_scan_info = FrameScanInfo::new();
+        self.frame_header_decoded = false;
         self.file_length = None;
         self.local_buffer.reset();
         self.header_needed_bytes = None;
         self.output_color_profile = None;
         self.pixel_format = None;
+        self.downsample_factor = 0;
         self.visible_frames_to_skip = None;
         self.next_frame_index = 0;
         self.slot_frames = [None; 8];
@@ -231,6 +237,10 @@ impl CodestreamParser {
         self.state = ParserState::FrameHeader { is_preview: false };
         self.header_needed_bytes = None;
         start.box_parser_checkpoint
+    }
+
+    pub(super) fn frame_header_was_decoded(&self) -> bool {
+        self.frame_header_decoded
     }
 
     fn has_more_frames(&self) -> bool {
@@ -320,8 +330,13 @@ impl CodestreamParser {
                     self.refill_and_parse(input, |c, input| {
                         c.local_buffer.with_br(|br, bits| {
                             let level5_limits = level5_limits(input, decode_options);
-                            c.image_info
-                                .parse_file_header(decode_options, br, bits, level5_limits)
+                            c.image_info.parse_file_header(
+                                decode_options,
+                                c.downsample_factor,
+                                br,
+                                bits,
+                                level5_limits,
+                            )
                         })
                     })?;
                     self.state = ParserState::ColorEncoding;
@@ -361,6 +376,7 @@ impl CodestreamParser {
                             )
                         })
                     })?;
+                    self.frame_header_decoded = true;
                     self.state = ParserState::Toc { is_preview };
                 }
 
@@ -421,6 +437,11 @@ impl CodestreamParser {
                     }
 
                     let level5_limits = level5_limits(input, decode_options);
+                    let downsample_factor = if is_preview {
+                        0
+                    } else {
+                        self.downsample_factor
+                    };
                     self.frame_info.make_frame(
                         &mut self.local_buffer,
                         toc,
@@ -430,6 +451,7 @@ impl CodestreamParser {
                         self.output_color_profile.as_ref().unwrap(),
                         process_mode,
                         level5_limits,
+                        downsample_factor,
                     )?;
 
                     if !matches!(process_mode, ProcessMode::Skip(..)) {

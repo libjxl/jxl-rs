@@ -7,18 +7,21 @@ use crate::error::Result;
 use crate::frame::ReferenceFrame;
 use crate::headers::FileHeader;
 use crate::headers::frame_header::*;
+use crate::image::align_origin;
+use crate::util::ShiftRightCeil;
 use crate::util::sync::Arc;
 
 /// Does not directly modify the current image pixels, but extends the current image with
 /// additional data.
 ///
-/// `uses_channel` must always return true, and stages of this type should override
+/// Image channels of index up to `num_channels` are extended. Stages of this type should override
 /// `new_size` and `original_data_origin`.
 /// `process_row_chunk` will be called with the *new* image coordinates, and will only be called
 /// on row chunks outside of the original image data.
 /// After stages of this type, no stage can have a non-0 SHIFT_X, SHIFT_Y, BORDER_X or BORDER_Y.
 /// There can be at most one extend stage per image.
 pub struct ExtendToImageDimensionsStage {
+    pub num_channels: usize,
     pub frame_origin: (isize, isize),
     pub image_size: (usize, usize),
     pub blending_info: BlendingInfo,
@@ -33,11 +36,18 @@ impl ExtendToImageDimensionsStage {
         frame_header: &FrameHeader,
         file_header: &FileHeader,
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
+        shift: usize,
+        num_channels: usize,
     ) -> Result<ExtendToImageDimensionsStage> {
-        let xsize = file_header.size.xsize() as usize;
+        let xsize = (file_header.size.xsize() as usize).shrc(shift);
+        let ysize = (file_header.size.ysize() as usize).shrc(shift);
         Ok(ExtendToImageDimensionsStage {
-            frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
-            image_size: (xsize, file_header.size.ysize() as usize),
+            num_channels,
+            frame_origin: (
+                align_origin(frame_header.x0 as isize, shift),
+                align_origin(frame_header.y0 as isize, shift),
+            ),
+            image_size: (xsize, ysize),
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
             reference_frames,
@@ -101,6 +111,8 @@ mod test {
                     &frame_header,
                     &file_header,
                     reference_frames.clone(),
+                    0,
+                    4,
                 )
                 .unwrap()
             },

@@ -8,17 +8,17 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use super::save::SaveStage;
-use super::stages::ExtendToImageDimensionsStage;
+use super::stages::{DownsampleStage, ExtendToImageDimensionsStage};
 use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::error::Result;
 use crate::image::{BufferRecycler, DataTypeTag, ImageDataType};
 use crate::render::ErasedLocalState;
-use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::AtomicBool;
 
 pub enum Stage<Buffer> {
     InPlace(Box<dyn RunInPlaceStage<Buffer>>),
     InOut(Box<dyn RunInOutStage<Buffer>>),
+    Downsample(DownsampleStage),
     Save(SaveStage),
     Extend(ExtendToImageDimensionsStage),
 }
@@ -32,9 +32,13 @@ impl<Buffer: 'static> Stage<Buffer> {
         }
     }
 
-    pub(super) fn shift(&self) -> (u8, u8) {
+    pub(super) fn shift(&self) -> (i8, i8) {
         match self {
-            Stage::InOut(s) => s.shift(),
+            Stage::InOut(s) => {
+                let (x, y) = s.shift();
+                (x as i8, y as i8)
+            }
+            Stage::Downsample(s) => (-(s.shift() as i8), -(s.shift() as i8)),
             _ => (0, 0),
         }
     }
@@ -56,15 +60,16 @@ impl<Buffer: 'static> Stage<Buffer> {
 
     pub(super) fn uses_channel(&self, c: usize) -> bool {
         match self {
-            Stage::Extend(_) => true,
+            Stage::Extend(e) => c < e.num_channels,
             Stage::InPlace(s) => s.uses_channel(c),
             Stage::InOut(s) => s.uses_channel(c),
+            Stage::Downsample(s) => s.uses_channel(c),
             Stage::Save(s) => s.uses_channel(c),
         }
     }
     pub(super) fn input_type(&self, c: usize) -> DataTypeTag {
         match self {
-            Stage::Extend(_) => DataTypeTag::F32,
+            Stage::Extend(_) | Stage::Downsample(_) => DataTypeTag::F32,
             Stage::InPlace(s) => s.ty(),
             Stage::InOut(s) => s.input_type(),
             Stage::Save(s) => s.input_type(c),
@@ -73,6 +78,7 @@ impl<Buffer: 'static> Stage<Buffer> {
     pub(super) fn output_type(&self) -> Option<DataTypeTag> {
         match self {
             Stage::InOut(s) => Some(s.output_type()),
+            Stage::Downsample(_) => Some(DataTypeTag::F32),
             _ => None,
         }
     }
@@ -82,6 +88,7 @@ impl<Buffer> Display for Stage<Buffer> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Stage::InOut(s) => write!(f, "{}", s),
+            Stage::Downsample(s) => write!(f, "{}", s),
             Stage::InPlace(s) => write!(f, "{}", s),
             Stage::Save(s) => write!(f, "{}", s),
             Stage::Extend(e) => write!(f, "{}", e),
@@ -97,6 +104,8 @@ pub struct ChannelInfo {
 
 pub struct RenderPipelineShared<Buffer> {
     pub channel_info: Vec<Vec<ChannelInfo>>,
+    /// Downsampling level of the final output channels.
+    pub channel_output_downsamples: Vec<u8>,
     pub input_size: (usize, usize),
     pub log_group_size: usize,
     pub group_count: (usize, usize),
@@ -132,34 +141,6 @@ impl<Buffer> RenderPipelineShared<Buffer> {
                 .1
                 .min(goffset.1 + (1 << self.log_group_size))
                 - goffset.1,
-        )
-    }
-
-    pub fn group_size_for_channel(
-        &self,
-        channel: usize,
-        requested_data_type: DataTypeTag,
-    ) -> (usize, usize) {
-        let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
-        // Channels that no stage consumes are not marked as used. Callers may still ask for a
-        // scratch buffer for them (e.g. VarDCT always decodes three colour channels, but a
-        // grayscale pipeline only ever reads the first one); the data written there is
-        // discarded, so any type is acceptable.
-        if self.channel_is_used[channel] && ty != requested_data_type {
-            panic!(
-                "Invalid pipeline usage: incorrect channel type, requested {requested_data_type:?}, but pipeline wants {ty:?}"
-            );
-        }
-        // 420 JPEGs are padded to 16 pixels, not to 8.
-        (
-            (1 << self.log_group_size)
-                .min(self.input_size.0)
-                .shrc(downsample.0 as usize)
-                .next_multiple_of(16),
-            (1 << self.log_group_size)
-                .min(self.input_size.1)
-                .shrc(downsample.1 as usize)
-                .next_multiple_of(16),
         )
     }
 

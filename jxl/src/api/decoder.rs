@@ -164,13 +164,7 @@ impl JxlDecoder {
         {
             return Err(Error::ApiUsageError("invalid bit_depth for data format"));
         }
-        let frame_header_was_decoded = self
-            .codestream_parser
-            .frame_info
-            .current_frame_header()
-            .is_some()
-            || !self.codestream_parser.scanned_frames().is_empty();
-        if frame_header_was_decoded
+        if self.codestream_parser.frame_header_was_decoded()
             && self.codestream_parser.pixel_format.as_ref() != Some(&pixel_format)
         {
             return Err(Error::ApiUsageError(
@@ -179,6 +173,30 @@ impl JxlDecoder {
         }
         self.codestream_parser.pixel_format = Some(pixel_format);
         self.codestream_parser.update_default_output_options();
+        Ok(())
+    }
+
+    /// Sets the downsample factor for decoding.
+    ///
+    /// The downsampling factor is an integer between 0 and 3 (both inclusive). If set above 0, the
+    /// decoder will render the final image downsampled by `2^factor` times.
+    ///
+    /// # Errors
+    ///
+    /// - Returns API usage error when called after the first frame header is decoded.
+    /// - Returns an error if the downsampling factor is out of supported range.
+    pub fn set_downsample_factor(&mut self, factor: u8) -> Result<()> {
+        if self.codestream_parser.frame_header_was_decoded() {
+            return Err(Error::ApiUsageError(
+                "cannot change downsample factor after first frame header",
+            ));
+        }
+        if factor > 3 {
+            return Err(Error::InvalidOutputDownsamplingShift(factor));
+        }
+
+        self.codestream_parser.downsample_factor = factor;
+        self.codestream_parser.update_size(&self.options);
         Ok(())
     }
 

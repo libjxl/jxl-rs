@@ -78,6 +78,7 @@ fn decode_benches(c: &mut Criterion) {
                         false,
                         None,
                         false,
+                        0,
                         last_output.take(),
                     )
                     .unwrap();
