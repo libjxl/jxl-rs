@@ -930,9 +930,10 @@ fn append_box_header(box_type: &[u8; 4], content_size: usize, output: &mut Vec<u
     }
 }
 
-fn needs_level10(codestream: &[u8]) -> bool {
+fn needs_level10(codestream: &[u8], scan_frames_only: bool) -> bool {
     let options = JxlDecoderOptions {
         skip_preview: false,
+        scan_frames_only,
         ..Default::default()
     };
 
@@ -953,12 +954,17 @@ fn needs_level10(codestream: &[u8]) -> bool {
 }
 
 #[doc(hidden)]
-pub fn pack_codestream(input_bytes: &[u8], force_level10: bool) -> Result<Vec<u8>> {
+pub fn pack_codestream(input_bytes: &[u8], level10_mode: u8) -> Result<Vec<u8>> {
     if check_signature(input_bytes) != JxlSignature::Codestream {
         return Err(Error::InvalidSignature);
     }
 
-    let use_level10 = force_level10 || needs_level10(input_bytes);
+    let use_level10 = match level10_mode {
+        0 => false,
+        1 => true,
+        2 => needs_level10(input_bytes, true),
+        _ => needs_level10(input_bytes, false),
+    };
     let jxll_len = if use_level10 {
         JXLL_LEVEL10_BOX.len()
     } else {

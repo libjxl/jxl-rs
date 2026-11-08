@@ -19,13 +19,24 @@ struct Opt {
     /// Output JXL file
     output: PathBuf,
 
-    /// Pack a JPEG XL codestream into a file in the container file format. Automatically writes a jxll box if the codestream exceeds Level 5 limits
-    #[clap(long, action, conflicts_with = "extract")]
+    /// Pack a JPEG XL codestream into a file in the container file format.
+    /// Automatically writes a jxll box if the codestream exceeds Level 5 limits
+    #[clap(long, action, conflicts_with = "extract", verbatim_doc_comment)]
     pack: bool,
 
-    /// Force writing a Level 10 jxll box when packing (implies --pack)
-    #[clap(long, action, conflicts_with = "extract")]
-    level10: bool,
+    /// How to handle a Level 10 container box (implies --pack):
+    ///   0 = never check (don't add jxll box)
+    ///   1 = always add level 10 box
+    ///   2 = fast check (minimal decode, header check only)
+    ///   3 = accurate check (full decode, default when packing)
+    #[clap(
+        long,
+        value_name = "0|1|2|3",
+        value_parser = clap::value_parser!(u8).range(0..=3),
+        conflicts_with = "extract",
+        verbatim_doc_comment
+    )]
+    level10: Option<u8>,
 
     /// Extract the JXL codestream from a container file
     #[clap(long, action, conflicts_with_all = ["pack", "level10"])]
@@ -47,12 +58,12 @@ fn apply_file_format_options(
             eprintln!("Warning: extracting raw codestream that is greater than level 5");
         }
         Ok(codestream)
-    } else if opt.pack || opt.level10 {
+    } else if opt.pack || opt.level10.is_some() {
         ensure!(
             signature == JxlSignature::Codestream,
             "Input file is not a codestream file"
         );
-        Ok(pack_codestream(input_bytes, opt.level10)?)
+        Ok(pack_codestream(input_bytes, opt.level10.unwrap_or(3))?)
     } else {
         Ok(input_bytes.to_vec())
     }
