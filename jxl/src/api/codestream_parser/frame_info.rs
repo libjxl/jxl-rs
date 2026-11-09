@@ -142,6 +142,18 @@ impl FrameInfo {
             .or(self.frame.as_ref().map(|x| x.header()))
     }
 
+    pub(super) fn frame(&self) -> Option<&Frame> {
+        self.frame.as_deref()
+    }
+
+    pub(super) fn remaining_sections(&self) -> usize {
+        self.sections.len()
+    }
+
+    pub(super) fn ready_section_data(&self) -> usize {
+        self.ready_section_data
+    }
+
     #[cfg(test)]
     pub fn current_toc(&self) -> Option<&crate::headers::toc::Toc> {
         self.frame.as_ref().map(|x| x.toc())

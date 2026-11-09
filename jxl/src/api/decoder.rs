@@ -6,9 +6,9 @@
 use super::box_parser::{BoxParser, CodestreamInput};
 use super::codestream_parser::{CodestreamParser, FrameStartInfo};
 use super::{
-    Event, JxlAuxBox, JxlAuxBoxType, JxlBasicInfo, JxlBitstreamInput, JxlColorProfile,
-    JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner, JxlParallelRunnerFun,
-    JxlPixelFormat,
+    Event, JxlAuxBox, JxlAuxBoxType, JxlBasicInfo, JxlBitstreamInput, JxlBytesNeeded,
+    JxlColorProfile, JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner,
+    JxlParallelRunnerFun, JxlPixelFormat, JxlProgressiveStatus,
 };
 use crate::error::{Error, Result};
 
@@ -340,5 +340,19 @@ impl JxlDecoder {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Returns the progressive decoding status reached by the current frame so far,
+    /// or `None` if no progressive level has been reached yet (or no frame is active).
+    pub fn frame_progressive_status(&self) -> Option<JxlProgressiveStatus> {
+        self.codestream_parser
+            .frame_progressive_status(&self.options)
+    }
+
+    /// Returns the number of additional input bytes needed to reach `target` progressive
+    /// decoding status for the current frame.
+    pub fn bytes_needed_for_status(&self, target: JxlProgressiveStatus) -> JxlBytesNeeded {
+        self.codestream_parser
+            .bytes_needed_for_status(target, &self.box_parser, &self.options)
     }
 }

@@ -574,6 +574,11 @@ impl Frame {
         self.dirty_lf_groups.insert(group);
         let lf_global = self.lf_global.as_mut().unwrap();
         lf_global.modular_global.mark_final(1, group);
+        self.group_status.remaining_lf_groups =
+            self.group_status.remaining_lf_groups.saturating_sub(1);
+        if self.group_status.remaining_lf_groups == 0 && self.header.encoding == Encoding::Modular {
+            self.mark_lf_done();
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -668,6 +673,9 @@ impl Frame {
                 self.lf_global.as_ref().unwrap(),
                 &self.hf_meta,
             )?);
+        }
+        if self.header.encoding == Encoding::VarDCT {
+            self.mark_lf_done();
         }
         Ok(())
     }

@@ -11,6 +11,7 @@ use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
 use super::Animation;
+use crate::api::JxlProgressiveStatus;
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::encodings::*;
@@ -74,11 +75,11 @@ pub struct Passes {
 }
 
 impl Passes {
-    pub fn downsampling_bracket(&self, pass: usize) -> (usize, usize) {
-        let mut max_shift = 3;
+    fn bracket(&self, pass: usize) -> (u32, u32, bool, bool) {
         let mut min_shift = 3;
-        for i in 0..=pass {
-            max_shift = min_shift;
+        let mut is_start = true;
+        for i in 0..self.num_passes as usize {
+            let max_shift = min_shift;
             let mut found = false;
             for j in 0..self.num_ds as usize {
                 if i == self.last_pass[j] as usize {
@@ -90,14 +91,41 @@ impl Passes {
                 min_shift = 0;
                 found = true;
             }
+            if i >= pass && found {
+                return (min_shift, max_shift, i == pass, is_start);
+            }
             if !found {
                 min_shift = max_shift;
             }
+            if i < pass {
+                is_start = found;
+            }
         }
-        if min_shift < max_shift {
+        unreachable!()
+    }
+
+    pub fn downsampling_bracket(&self, pass: usize) -> (usize, usize) {
+        let (min_shift, max_shift, is_end, _) = self.bracket(pass);
+        if is_end && min_shift < max_shift {
             (min_shift as usize, (max_shift - 1) as usize)
         } else {
             (1, 0)
+        }
+    }
+
+    /// Returns the progressive status reached when HF pass `pass` (in `0..num_passes`)
+    /// completes across all groups, if `pass` completes a progressive milestone.
+    pub fn pass_status(&self, pass: usize) -> Option<JxlProgressiveStatus> {
+        let (min_shift, _, is_end, is_start) = self.bracket(pass);
+        match (min_shift, is_end, is_start) {
+            (3, true, _) => Some(JxlProgressiveStatus::Pass8x),
+            (2, true, _) => Some(JxlProgressiveStatus::Pass4x),
+            (2, false, true) => Some(JxlProgressiveStatus::Pass4xSalient),
+            (1, true, _) => Some(JxlProgressiveStatus::Pass2x),
+            (1, false, true) => Some(JxlProgressiveStatus::Pass2xSalient),
+            (0, true, _) => Some(JxlProgressiveStatus::Pass1x),
+            (0, false, true) => Some(JxlProgressiveStatus::Pass1xSalient),
+            _ => None,
         }
     }
 }

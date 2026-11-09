@@ -10,8 +10,8 @@ use std::io::{IoSliceMut, Read};
 
 use crate::api::signature::CONTAINER_SIGNATURE;
 use crate::api::{
-    Event, JxlBitstreamInput, JxlDecoder, JxlDecoderOptions, JxlSignature, ProfileLevel,
-    SmallBuffer, check_signature,
+    Event, JxlBitstreamInput, JxlBytesNeeded, JxlDecoder, JxlDecoderOptions, JxlSignature,
+    ProfileLevel, SmallBuffer, check_signature,
 };
 use crate::error::{Error, Result};
 use crate::util::NewWithCapacity;
@@ -301,6 +301,35 @@ impl BoxParser {
             ParseState::Codestream(Some(0)) => true,
             ParseState::Codestream(_) => false,
             _ => true,
+        }
+    }
+
+    pub(super) fn input_bytes_needed(
+        &self,
+        codestream_bytes: usize,
+        is_lower_bound: bool,
+    ) -> JxlBytesNeeded {
+        if codestream_bytes == 0 && !is_lower_bound {
+            return JxlBytesNeeded::Exact(0);
+        }
+        if !self.ooo_jxlp_buffer.is_empty() {
+            return JxlBytesNeeded::Unknown;
+        }
+        let needed = codestream_bytes
+            .max(usize::from(is_lower_bound))
+            .saturating_sub(self.local_buffer.len());
+        if self.latest_codestream_box == CodestreamBoxType::Jxlc
+            && matches!(self.state, ParseState::Codestream(_))
+        {
+            if is_lower_bound {
+                JxlBytesNeeded::LowerBound(needed.max(1))
+            } else {
+                JxlBytesNeeded::Exact(needed)
+            }
+        } else if needed > 0 {
+            JxlBytesNeeded::LowerBound(needed)
+        } else {
+            JxlBytesNeeded::Unknown
         }
     }
 

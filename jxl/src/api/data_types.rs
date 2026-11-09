@@ -345,3 +345,35 @@ pub struct JxlFrameHeader {
     /// Frame size (width, height)
     pub size: (usize, usize),
 }
+
+/// Progressive decoding status for a frame, ordered from coarsest (`Pass8x`) to finest (`Pass1x`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum JxlProgressiveStatus {
+    /// 8x downsampled (DC / LF) data is complete.
+    Pass8x,
+    /// Salient pass for 4x downsampled data is complete.
+    Pass4xSalient,
+    /// 4x downsampled data is complete.
+    Pass4x,
+    /// Salient pass for 2x downsampled data is complete.
+    Pass2xSalient,
+    /// 2x downsampled data is complete.
+    Pass2x,
+    /// Salient pass for 1x (full resolution) data is complete.
+    Pass1xSalient,
+    /// Full 1x resolution data (or the entire frame) is complete.
+    Pass1x,
+}
+
+/// Estimate of the additional input bytes required to reach a target [`JxlProgressiveStatus`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JxlBytesNeeded {
+    /// Exact number of additional input bytes required (`0` if already reached).
+    Exact(usize),
+    /// Lower bound on the number of additional input bytes required (`> 0`).
+    /// Returned when future container boxes, an in-progress TOC, or an upcoming frame
+    /// header/TOC prevent knowing the exact byte count.
+    LowerBound(usize),
+    /// Not enough information is available to estimate the required bytes.
+    Unknown,
+}

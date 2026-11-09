@@ -3,14 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::box_parser::CodestreamInput;
+use crate::api::box_parser::{BoxParser, CodestreamInput};
 use crate::api::codestream_parser::frame_info::FrameInfo;
 use crate::api::codestream_parser::frame_scan_info::FrameScanInfo;
 pub(crate) use crate::api::codestream_parser::frame_scan_info::FrameStartInfo;
 use crate::api::codestream_parser::image_info::ImageInfo;
 use crate::api::{
-    BoxParserCheckpoint, Event, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer,
-    JxlParallelRunner, JxlPixelFormat, ProfileLevel, SmallBuffer, VisibleFrameSeekTarget,
+    BoxParserCheckpoint, Event, JxlBytesNeeded, JxlColorProfile, JxlDecoderOptions,
+    JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat, JxlProgressiveStatus, ProfileLevel,
+    SmallBuffer, VisibleFrameSeekTarget,
 };
 use crate::error::{Error, Result};
 use crate::headers::frame_header::FrameHeader;
@@ -545,5 +546,62 @@ impl CodestreamParser {
             self.state,
             ParserState::Sections { process_mode, .. } if process_mode.notify_user()
         )
+    }
+
+    pub(super) fn frame_progressive_status(
+        &self,
+        decode_options: &JxlDecoderOptions,
+    ) -> Option<JxlProgressiveStatus> {
+        if decode_options.scan_frames_only
+            || matches!(
+                self.state,
+                ParserState::Sections {
+                    is_preview: true,
+                    ..
+                }
+            )
+        {
+            return None;
+        }
+        if matches!(self.state, ParserState::TrailingData | ParserState::Done) {
+            return Some(JxlProgressiveStatus::Pass1x);
+        }
+        self.frame_info.frame()?.progressive_status()
+    }
+
+    pub(super) fn bytes_needed_for_status(
+        &self,
+        target: JxlProgressiveStatus,
+        box_parser: &BoxParser,
+        decode_options: &JxlDecoderOptions,
+    ) -> JxlBytesNeeded {
+        if self
+            .frame_progressive_status(decode_options)
+            .is_some_and(|s| s >= target)
+        {
+            return JxlBytesNeeded::Exact(0);
+        }
+        let ParserState::Sections {
+            is_preview: false,
+            process_mode,
+        } = self.state
+        else {
+            return JxlBytesNeeded::Unknown;
+        };
+        if matches!(process_mode, ProcessMode::Skip(_)) {
+            return JxlBytesNeeded::Unknown;
+        }
+        let Some(frame) = self.frame_info.frame() else {
+            return JxlBytesNeeded::Unknown;
+        };
+        let (needed, mut is_lower_bound) = frame.codestream_bytes_needed_for_status(
+            target,
+            self.frame_info.remaining_sections(),
+            self.frame_info.ready_section_data(),
+        );
+        if process_mode == ProcessMode::SkipOutput && frame.header().is_visible() {
+            is_lower_bound = true;
+        }
+        box_parser.input_bytes_needed(needed, is_lower_bound)
     }
 }
