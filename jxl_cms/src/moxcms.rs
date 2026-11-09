@@ -35,16 +35,10 @@ impl JxlCms for MoxCms {
             .ok_or(Error::OutputIccError)?;
 
         // Determine channel counts from parsed ICC profiles
-        let mut input = ColorProfile::new_from_slice(&input_icc)
+        let input = ColorProfile::new_from_slice(&input_icc)
             .map_err(|e| Error::CmsInputParseError(e.to_string()))?;
-        let mut output = ColorProfile::new_from_slice(&output_icc)
+        let output = ColorProfile::new_from_slice(&output_icc)
             .map_err(|e| Error::CmsOutputParseError(e.to_string()))?;
-        if input.lut_a_to_b_colorimetric.is_none() {
-            input.lut_a_to_b_colorimetric = input.lut_a_to_b_perceptual.clone();
-        }
-        if output.lut_b_to_a_colorimetric.is_none() {
-            output.lut_b_to_a_colorimetric = output.lut_b_to_a_perceptual.clone();
-        }
         let input_layout = layout_from_color_space(input.color_space)?;
         let output_layout = layout_from_color_space(output.color_space)?;
         let input_channels = input_layout.channels();

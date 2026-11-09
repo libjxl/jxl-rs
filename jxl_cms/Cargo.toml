@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 jxl = { path = "../jxl", version = "=0.8.0", default-features = false }
-moxcms = "0.9.1"
+moxcms = "0.9.2"
 thiserror = "2.0"
 
 [lints]
