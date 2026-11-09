@@ -12,7 +12,7 @@ use modular::{FullModularImage, ModularStorage, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
-use crate::api::{AlphaMode, JxlDecoderOptions, JxlParallelRunner};
+use crate::api::{AlphaMode, JxlDecoderOptions, JxlParallelRunner, JxlProgressiveStatus};
 use crate::entropy_coding::decode::Histograms;
 use crate::error::Result;
 use crate::features::epf::SigmaSource;
@@ -281,12 +281,19 @@ struct GroupStatus {
     channel_status: Vec<Vec<DataStatus>>,
     final_vardct_render_done: HashSet<usize>,
     incomplete_groups: usize,
+    remaining_lf_groups: usize,
+    remaining_groups_per_pass: Vec<usize>,
+    progressive_status: Option<JxlProgressiveStatus>,
 }
 
 impl GroupStatus {
     fn new(frame_header: &FrameHeader) -> Self {
         let count = frame_header.num_groups();
         let ecs = frame_header.num_extra_channels as usize;
+        let progressive_status = (frame_header.is_visible()
+            && frame_header.has_lf_frame()
+            && frame_header.lf_level == 0)
+            .then_some(JxlProgressiveStatus::Pass8x);
         // We don't track noise channels because we pretend they always
         // have the same status as VarDCT channels.
         GroupStatus {
@@ -295,6 +302,9 @@ impl GroupStatus {
             channel_status: vec![vec![DataStatus::Zero; 3 + ecs]; count],
             final_vardct_render_done: HashSet::new(),
             incomplete_groups: count,
+            remaining_lf_groups: frame_header.num_lf_groups(),
+            remaining_groups_per_pass: vec![count; frame_header.passes.num_passes as usize],
+            progressive_status,
         }
     }
 
@@ -355,6 +365,84 @@ impl Frame {
 
     pub fn header(&self) -> &FrameHeader {
         &self.header
+    }
+
+    pub fn progressive_status(&self) -> Option<JxlProgressiveStatus> {
+        self.group_status.progressive_status
+    }
+
+    fn has_separate_8x_lf(&self) -> bool {
+        self.header.num_toc_entries() > 1
+            && !(0..self.header.passes.num_passes as usize)
+                .any(|p| self.header.passes.pass_status(p) == Some(JxlProgressiveStatus::Pass8x))
+    }
+
+    pub(super) fn mark_lf_done(&mut self) {
+        if self.header.is_visible() && self.has_separate_8x_lf() {
+            self.group_status.progressive_status = self
+                .group_status
+                .progressive_status
+                .max(Some(JxlProgressiveStatus::Pass8x));
+        }
+    }
+
+    /// Returns `(codestream_bytes_needed, is_lower_bound)` for reaching `target`.
+    pub fn codestream_bytes_needed_for_status(
+        &self,
+        target: JxlProgressiveStatus,
+        remaining_sections: usize,
+        ready_section_data: usize,
+    ) -> (usize, bool) {
+        if self.progressive_status().is_some_and(|s| s >= target) {
+            return (0, false);
+        }
+
+        let is_lower_bound = !self.header.is_visible()
+            && !(self.header.frame_type == FrameType::LFFrame
+                && self.header.lf_level == 1
+                && target == JxlProgressiveStatus::Pass8x);
+
+        let max_toc_idx = if !self.header.is_visible() {
+            self.toc.entries.len() - 1
+        } else {
+            let last_section =
+                if target == JxlProgressiveStatus::Pass8x && self.has_separate_8x_lf() {
+                    if self.header.encoding == Encoding::VarDCT {
+                        Section::HfGlobal
+                    } else {
+                        Section::Lf {
+                            group: self.header.num_lf_groups() - 1,
+                        }
+                    }
+                } else {
+                    let num_passes = self.header.passes.num_passes as usize;
+                    let pass = (0..num_passes)
+                        .find(|&p| self.header.passes.pass_status(p) >= Some(target))
+                        .unwrap_or(num_passes - 1);
+                    Section::Hf {
+                        group: self.header.num_groups() - 1,
+                        pass,
+                    }
+                };
+            let max_logical_idx = self.get_section_idx(last_section);
+            if self.toc.permuted {
+                *self.toc.permutation.0[..=max_logical_idx]
+                    .iter()
+                    .max()
+                    .unwrap() as usize
+            } else {
+                max_logical_idx
+            }
+        };
+
+        let popped = self.toc.entries.len().saturating_sub(remaining_sections);
+        let needed = self.toc.entries.get(popped..=max_toc_idx).map_or(0, |s| {
+            s.iter()
+                .map(|&x| x as usize)
+                .sum::<usize>()
+                .saturating_sub(ready_section_data)
+        });
+        (needed + usize::from(is_lower_bound), is_lower_bound)
     }
 
     #[instrument(level = "debug", skip(self), ret)]

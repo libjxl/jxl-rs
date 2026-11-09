@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use crate::api::{
-    AlphaMode, Event, JxlAuxBoxType, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
-    JxlPixelFormat, JxlTransferFunction, VisibleFrameInfo,
+    AlphaMode, Event, JxlAuxBoxType, JxlBytesNeeded, JxlColorType, JxlDataFormat, JxlDecoder,
+    JxlDecoderOptions, JxlPixelFormat, JxlProgressiveStatus, JxlTransferFunction, VisibleFrameInfo,
 };
 use crate::error::Error;
 use crate::image::{Image, ImageDataType};
@@ -1981,4 +1981,152 @@ fn test_sample_limit_consecutive_nonvisible_frames() {
         ),
         Err(Error::ImageSizeTooLarge(..))
     ));
+}
+
+const ALL_PROGRESSIVE_STATUSES: [JxlProgressiveStatus; 7] = [
+    JxlProgressiveStatus::Pass8x,
+    JxlProgressiveStatus::Pass4xSalient,
+    JxlProgressiveStatus::Pass4x,
+    JxlProgressiveStatus::Pass2xSalient,
+    JxlProgressiveStatus::Pass2x,
+    JxlProgressiveStatus::Pass1xSalient,
+    JxlProgressiveStatus::Pass1x,
+];
+
+fn check_progressive_stepping(data: &[u8], expect_exact: bool) -> Vec<JxlProgressiveStatus> {
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    let mut pos = 0;
+    let mut size = (0, 0);
+    let mut bufs: Option<Vec<Image<f32>>> = None;
+    let mut need_input = true;
+    let mut prev_status = None;
+    let mut seen_statuses = Vec::new();
+
+    let mut step = |decoder: &mut JxlDecoder, len: Option<usize>| -> (Event, bool) {
+        let len = len.unwrap_or(usize::from(need_input));
+        let mut slice = &data[pos..pos + len];
+        let mut out_bufs = bufs.as_mut().map(|b| as_output_buffers(b));
+        let ev = decoder
+            .process(&mut slice, out_bufs.as_deref_mut(), None)
+            .unwrap();
+        pos += len - slice.len();
+        match ev {
+            Event::BasicInfo => size = decoder.basic_info().unwrap().size,
+            Event::FrameHeader => {
+                bufs = Some(vec![Image::<f32>::new((size.0 * 3, size.1)).unwrap()]);
+            }
+            _ => {}
+        }
+        need_input = matches!(ev, Event::NeedMoreInput { .. });
+        let cur = decoder.frame_progressive_status();
+        assert!(cur >= prev_status);
+        if let Some(s) = cur
+            && seen_statuses.last() != Some(&s)
+        {
+            seen_statuses.push(s);
+            if s < JxlProgressiveStatus::Pass1x
+                && let Some(b) = bufs.as_mut()
+            {
+                assert!(
+                    decoder
+                        .flush_pixels(&mut as_output_buffers(b), None)
+                        .unwrap()
+                );
+            }
+        }
+        prev_status = cur;
+        (ev, bufs.is_some())
+    };
+
+    let mut in_visible_frame = false;
+    for target in ALL_PROGRESSIVE_STATUSES {
+        while decoder.frame_progressive_status() < Some(target) {
+            let ev;
+            match decoder.bytes_needed_for_status(target) {
+                JxlBytesNeeded::Exact(0) => {
+                    (_, in_visible_frame) = step(&mut decoder, Some(0));
+                    assert!(decoder.frame_progressive_status() >= Some(target));
+                }
+                JxlBytesNeeded::Exact(n) => {
+                    if n > 1 {
+                        (ev, in_visible_frame) = step(&mut decoder, Some(n - 1));
+                        assert!(matches!(ev, Event::NeedMoreInput { .. }));
+                        assert!(decoder.frame_progressive_status() < Some(target));
+                        assert_eq!(
+                            decoder.bytes_needed_for_status(target),
+                            JxlBytesNeeded::Exact(1)
+                        );
+                    }
+                    if !in_visible_frame {
+                        assert_eq!(
+                            decoder.bytes_needed_for_status(JxlProgressiveStatus::Pass1x),
+                            JxlBytesNeeded::LowerBound(2)
+                        );
+                    }
+                    (_, in_visible_frame) = step(&mut decoder, Some(1));
+                    assert!(decoder.frame_progressive_status() >= Some(target));
+                }
+                JxlBytesNeeded::LowerBound(b) => {
+                    assert!(b >= 1);
+                    if b > 1 {
+                        (ev, _) = step(&mut decoder, Some(b - 1));
+                        assert!(matches!(ev, Event::NeedMoreInput { .. }));
+                        assert!(decoder.frame_progressive_status() < Some(target));
+                    }
+                    (_, in_visible_frame) = step(&mut decoder, Some(1));
+                }
+                JxlBytesNeeded::Unknown => {
+                    assert!(!(expect_exact && in_visible_frame));
+                    (_, in_visible_frame) = step(&mut decoder, None);
+                }
+            }
+        }
+        assert_eq!(
+            decoder.bytes_needed_for_status(target),
+            JxlBytesNeeded::Exact(0)
+        );
+    }
+
+    assert_eq!(
+        decoder.frame_progressive_status(),
+        Some(JxlProgressiveStatus::Pass1x)
+    );
+    seen_statuses
+}
+
+#[test]
+fn test_progressive_status_and_bytes_needed() {
+    for (path, expect_exact, min_milestones) in [
+        ("resources/test/progressive_ac.jxl", false, 3),
+        (
+            "resources/test/conformance_test_images/progressive.jxl",
+            true,
+            3,
+        ),
+        ("resources/test/basic.jxl", true, 1),
+        (
+            "resources/test/conformance_test_images/bicycles.jxl",
+            true,
+            2,
+        ),
+        ("resources/test/has_permutation.jxl", true, 1),
+        (
+            "resources/test/has_permutation_with_container.jxl",
+            false,
+            1,
+        ),
+        ("resources/test/ooo_jxlp_empty_dc_group_boxes.jxl", false, 1),
+        ("resources/test/conformance_test_images/bike.jxl", true, 2),
+    ] {
+        let data = std::fs::read(path).unwrap();
+        let seen = check_progressive_stepping(&data, expect_exact);
+        assert!(
+            seen.len() >= min_milestones,
+            "{path}: expected at least {min_milestones} milestones, got {seen:?}"
+        );
+    }
+
+    let prog = std::fs::read("resources/test/conformance_test_images/progressive.jxl").unwrap();
+    let chunked = wrap_with_jxlp_chunks(&prog, &[0, 50, 200, 600, 1500]);
+    assert!(check_progressive_stepping(&chunked, false).len() >= 3);
 }

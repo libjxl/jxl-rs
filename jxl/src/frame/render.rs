@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use crate::api::{
     AlphaMode, JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
-    JxlPixelFormat,
+    JxlPixelFormat, JxlProgressiveStatus,
 };
 use crate::bit_reader::BitReader;
 use crate::color::tf::TransferFunction;
@@ -341,6 +341,23 @@ impl Frame {
             }
             for (pass, _) in passes.iter() {
                 modular_global.mark_final(2 + *pass, *group);
+                if !do_flush {
+                    self.group_status.remaining_groups_per_pass[*pass] -= 1;
+                    if self.group_status.remaining_groups_per_pass[*pass] == 0 {
+                        if self.header.is_visible() {
+                            if let Some(s) = self.header.passes.pass_status(*pass) {
+                                self.group_status.progressive_status =
+                                    self.group_status.progressive_status.max(Some(s));
+                            }
+                        } else if self.header.frame_type == FrameType::LFFrame
+                            && self.header.lf_level == 1
+                            && *pass + 1 == self.header.passes.num_passes as usize
+                        {
+                            self.group_status.progressive_status =
+                                Some(JxlProgressiveStatus::Pass8x);
+                        }
+                    }
+                }
             }
         }
 
