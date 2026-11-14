@@ -710,8 +710,8 @@ impl Frame {
                 channel_types.push((DataTypeTag::F32, None));
             }
         }
-        for i in 0..frame_header.num_extra_channels as usize {
-            let ec_bit_depth = metadata.extra_channel_info[i].bit_depth();
+        for ec_info in &metadata.extra_channel_info {
+            let ec_bit_depth = ec_info.bit_depth();
             channel_types.push((modular_ty, Some(ec_bit_depth)));
         }
         for _ in 0..num_temp_channels {
@@ -1112,8 +1112,8 @@ impl Frame {
             } else {
                 0
             };
-            for i in 0..frame_header.num_extra_channels as usize {
-                if let Some(df) = &pixel_format.extra_channel_format[i] {
+            for (i, df) in pixel_format.extra_channel_format.iter().enumerate() {
+                if let Some(df) = df {
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         output_orientation,

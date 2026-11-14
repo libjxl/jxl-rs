@@ -96,19 +96,19 @@ impl<'a> BitsetTreeInner<'a> {
                 }
             }
             let mut next_mask_idx = 0usize;
-            for p in 0..num_props {
+            for prop_lut in &mut property_luts[..num_props] {
                 let mut cur_mask_idx = next_mask_idx;
                 for mask_bucket in leaf_masks.iter_mut() {
                     mask_bucket[cur_mask_idx] = 0;
                 }
-                for v in 0..LUT_TABLE_SIZE {
-                    if property_luts[p][v] != 0 {
+                for slot in prop_lut.iter_mut() {
+                    if *slot != 0 {
                         cur_mask_idx += 1;
                         for mask_bucket in leaf_masks.iter_mut() {
                             mask_bucket[cur_mask_idx] = 0;
                         }
                     }
-                    property_luts[p][v] = (cur_mask_idx - next_mask_idx) as u8;
+                    *slot = (cur_mask_idx - next_mask_idx) as u8;
                 }
                 next_mask_idx += 256;
             }
@@ -175,8 +175,8 @@ impl<'a> BitsetTreeInner<'a> {
                                 p * 256 + property_luts[p][start as usize] as usize;
                             let end_interval =
                                 p * 256 + property_luts[p][end as usize - 1] as usize;
-                            for interval in start_interval..=end_interval {
-                                leaf_masks[bucket][interval] |= bit;
+                            for mask in &mut leaf_masks[bucket][start_interval..=end_interval] {
+                                *mask |= bit;
                             }
                         }
                     }
