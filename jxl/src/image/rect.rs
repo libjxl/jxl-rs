@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use super::DataTypeTag;
+use crate::util::ShiftRightCeil;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Rect {
@@ -42,6 +43,16 @@ impl Rect {
         }
     }
 
+    pub fn downsample_ceil(&self, downsample: (u8, u8)) -> Rect {
+        Rect {
+            origin: (self.origin.0 >> downsample.0, self.origin.1 >> downsample.1),
+            size: (
+                self.size.0.shrc(downsample.0),
+                self.size.1.shrc(downsample.1),
+            ),
+        }
+    }
+
     pub fn end(&self) -> (usize, usize) {
         (
             self.origin.0.saturating_add(self.size.0),
@@ -56,6 +67,24 @@ impl Rect {
             size: (
                 end.0.min(size.0).saturating_sub(self.origin.0),
                 end.1.min(size.1).saturating_sub(self.origin.1),
+            ),
+        }
+    }
+
+    pub fn intersection(&self, other: Rect) -> Rect {
+        let origin = (
+            self.origin.0.max(other.origin.0),
+            self.origin.1.max(other.origin.1),
+        );
+        let end = (
+            self.end().0.min(other.end().0),
+            self.end().1.min(other.end().1),
+        );
+        Rect {
+            origin,
+            size: (
+                end.0.saturating_sub(origin.0),
+                end.1.saturating_sub(origin.1),
             ),
         }
     }

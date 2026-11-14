@@ -81,4 +81,17 @@ impl FileHeader {
             img_height,
         }
     }
+
+    pub fn codestream_image_size(&self) -> (usize, usize) {
+        (self.size.xsize() as usize, self.size.ysize() as usize)
+    }
+
+    pub fn display_image_size(&self, adjust_orientation: bool) -> (usize, usize) {
+        let size = self.codestream_image_size();
+        if adjust_orientation {
+            self.image_metadata.orientation.map_size(size)
+        } else {
+            size
+        }
+    }
 }

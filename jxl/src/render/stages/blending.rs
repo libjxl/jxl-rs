@@ -63,10 +63,8 @@ impl BlendingStage {
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
         shift: usize,
     ) -> Result<BlendingStage> {
-        let image_size = (
-            (file_header.size.xsize() as usize).shrc(shift),
-            (file_header.size.ysize() as usize).shrc(shift),
-        );
+        let image_size = file_header.codestream_image_size();
+        let image_size = (image_size.0.shrc(shift), image_size.1.shrc(shift));
         for info in
             std::iter::once(&frame_header.blending_info).chain(frame_header.ec_blending_info.iter())
         {
@@ -201,10 +199,7 @@ mod test {
     fn blending_consistency() -> Result<()> {
         let (file_header, frame_header, _) =
             read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
-        let image_size = (
-            file_header.size.xsize() as usize,
-            file_header.size.ysize() as usize,
-        );
+        let image_size = file_header.codestream_image_size();
         let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
         let mut reference_frame =
             || ReferenceFrame::random(&mut rng, image_size.0, image_size.1, 4, false);
@@ -229,10 +224,7 @@ mod test {
         let (file_header, mut frame_header, _) =
             read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
         frame_header.blending_info.source = 3;
-        let image_size = (
-            file_header.size.xsize() as usize,
-            file_header.size.ysize() as usize,
-        );
+        let image_size = file_header.codestream_image_size();
         let reference_frames = Arc::new([
             None,
             None,
@@ -252,10 +244,7 @@ mod test {
         let mut ec_blending_info = frame_header.blending_info.clone();
         ec_blending_info.source = 2;
         frame_header.ec_blending_info.push(ec_blending_info);
-        let image_size = (
-            file_header.size.xsize() as usize,
-            file_header.size.ysize() as usize,
-        );
+        let image_size = file_header.codestream_image_size();
         let reference_frames = Arc::new([
             None,
             None,
