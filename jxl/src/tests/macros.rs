@@ -13,6 +13,32 @@ macro_rules! declare_test_file_common {
                 crate::tests::decode::decode::<f32>(&file, Default::default()).unwrap();
             }
 
+            fn [<compare_crop_downsampled_ $ident>](downsample_factor: u8) {
+                let path = std::path::Path::new("resources/test/").join($path);
+                let file = std::fs::read(&path).unwrap();
+                crate::tests::compare_crop::run(&file, downsample_factor);
+            }
+
+            #[test]
+            fn [<test_compare_crop_ $ident>]() {
+                [<compare_crop_downsampled_ $ident>](0)
+            }
+
+            #[test]
+            fn [<test_compare_crop_downsampled_1_ $ident>]() {
+                [<compare_crop_downsampled_ $ident>](1)
+            }
+
+            #[test]
+            fn [<test_compare_crop_downsampled_2_ $ident>]() {
+                [<compare_crop_downsampled_ $ident>](2)
+            }
+
+            #[test]
+            fn [<test_compare_crop_downsampled_3_ $ident>]() {
+                [<compare_crop_downsampled_ $ident>](3)
+            }
+
             #[test]
             fn [<test_decode_test_file_chunks_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);

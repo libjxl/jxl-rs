@@ -30,6 +30,7 @@ pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub adjust_orientation: bool,
     pub sample_limit: Option<usize>,
     pub downsample_factor: u8,
+    pub crop_region: Option<Rect>,
 }
 
 impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
@@ -48,6 +49,7 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
             adjust_orientation: true,
             sample_limit: None,
             downsample_factor: 0,
+            crop_region: None,
         }
     }
 }
@@ -155,6 +157,7 @@ pub fn decode<'a, T: ImageDataType>(
 
         match process_result? {
             Event::BasicInfo => {
+                decoder.set_crop_region(params.crop_region)?;
                 let basic_info = decoder.basic_info().unwrap();
                 assert!(basic_info.bit_depth.bits_per_sample() > 0);
                 let (buffer_width, buffer_height) = basic_info.size;

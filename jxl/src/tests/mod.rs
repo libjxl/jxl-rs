@@ -7,6 +7,7 @@
 mod macros;
 
 mod api;
+mod compare_crop;
 mod compare_incremental;
 mod compare_modular;
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
