@@ -17,6 +17,8 @@ use crate::image::DataTypeTag;
 pub enum Error {
     #[error("Unsupported output downsampling shift {0}; expected a value from 0 to 3")]
     InvalidOutputDownsamplingShift(u8),
+    #[error("Invalid crop region")]
+    InvalidCropRegion,
     #[error("Invalid raw quantization table")]
     InvalidRawQuantTable,
     #[error("Invalid distance band {0}: {1}")]

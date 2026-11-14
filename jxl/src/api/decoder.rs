@@ -10,7 +10,9 @@ use super::{
     JxlColorProfile, JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner,
     JxlParallelRunnerFun, JxlPixelFormat, JxlProgressiveStatus,
 };
+use crate::api::Orientation;
 use crate::error::{Error, Result};
+use crate::image::Rect;
 
 struct SequentialRunner;
 
@@ -79,6 +81,8 @@ impl JxlDecoder {
 
     /// Resets the decoder to its initial state so it can be reused to decode a new file with the
     /// same [`JxlDecoderOptions`].
+    ///
+    /// Downsample factor and crop region are also cleared.
     ///
     /// Internal buffers and scratch allocations are retained across resets to avoid repeated
     /// allocations when decoding multiple images.
@@ -181,6 +185,9 @@ impl JxlDecoder {
     /// The downsampling factor is an integer between 0 and 3 (both inclusive). If set above 0, the
     /// decoder will render the final image downsampled by `2^factor` times.
     ///
+    /// This method may fail if crop region becomes unaligned when downsample factor is changed
+    /// (see [`Self::set_crop_region`].)
+    ///
     /// # Errors
     ///
     /// - Returns API usage error when called after the first frame header is decoded.
@@ -194,8 +201,67 @@ impl JxlDecoder {
         if factor > 3 {
             return Err(Error::InvalidOutputDownsamplingShift(factor));
         }
+        let crop = self.codestream_parser.crop_region;
+        let mask = (1 << factor) - 1;
+        if (crop.origin.0 | crop.origin.1) & mask != 0 {
+            return Err(Error::InvalidCropRegion);
+        }
 
         self.codestream_parser.downsample_factor = factor;
+        self.codestream_parser.update_size(&self.options);
+        Ok(())
+    }
+
+    /// Restricts visible-frame output to a region.
+    ///
+    /// The region is expected to be in image coordinates before applying downsample factor. When
+    /// downsample factor is also set, this method returns an error if `origin` is
+    /// not aligned to downsampled image grid *before applying image orientation.*
+    ///
+    /// This method will fail if frame decoding has already started. In that case, reset the
+    /// decoder before updating the crop region using [`JxlDecoder::reset`].
+    pub fn set_crop_region(&mut self, region: Option<Rect>) -> Result<()> {
+        if !self.codestream_parser.image_info.is_complete() {
+            return Err(Error::ApiUsageError(
+                "crop region must be set after BasicInfo",
+            ));
+        }
+        if self.codestream_parser.frame_header_was_decoded() {
+            return Err(Error::ApiUsageError(
+                "cannot change crop region after first frame header",
+            ));
+        }
+
+        let file_header = self.codestream_parser.image_info.file_header();
+        let adjust_orientation = self.options.adjust_orientation;
+        let size = file_header.display_image_size(adjust_orientation);
+
+        let mut region = region.unwrap_or(Rect {
+            origin: (0, 0),
+            size,
+        });
+        let rect_end = region.end();
+        if rect_end.0 > size.0 || rect_end.1 > size.1 {
+            return Err(crate::error::Error::InvalidCropRegion);
+        }
+
+        // Unorient the crop region.
+        if adjust_orientation {
+            let orientation = file_header.image_metadata.orientation;
+            let inverse = match orientation {
+                Orientation::Rotate90Cw => Orientation::Rotate90Ccw,
+                Orientation::Rotate90Ccw => Orientation::Rotate90Cw,
+                _ => orientation,
+            };
+            region = inverse.display_rect(region, size);
+        }
+
+        let mask = (1 << self.codestream_parser.downsample_factor) - 1;
+        if (region.origin.0 | region.origin.1) & mask != 0 {
+            return Err(Error::InvalidCropRegion);
+        }
+
+        self.codestream_parser.crop_region = region;
         self.codestream_parser.update_size(&self.options);
         Ok(())
     }
