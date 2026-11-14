@@ -31,6 +31,7 @@ pub use signature::*;
 use crate::error::Result;
 use crate::headers::FileHeader;
 pub use crate::headers::image_metadata::Orientation;
+use crate::image::Rect;
 pub use crate::image::{JxlOutputBuffer, JxlOutputTransform};
 use crate::util::ShiftRightCeil;
 
@@ -60,7 +61,7 @@ pub struct ToneMapping {
 
 #[derive(Clone)]
 pub struct JxlBasicInfo {
-    /// Output dimensions, after the requested downsampling and orientation.
+    /// Output dimensions, after the requested downsampling, orientation and crop.
     pub size: (usize, usize),
     pub bit_depth: JxlBitDepth,
     pub orientation: Orientation,
@@ -72,22 +73,22 @@ pub struct JxlBasicInfo {
 }
 
 impl JxlBasicInfo {
+    /// Assumes that origin of `crop_region` is aligned to codestream orientation.
     fn update_size(
         &mut self,
         file_header: &FileHeader,
         adjust_orientation: bool,
         downsample_factor: u8,
+        crop_region: Rect,
     ) {
-        let xsize = file_header.size.xsize() as usize;
-        let ysize = file_header.size.ysize() as usize;
-        let data = &file_header.image_metadata;
-
-        let (xsize, ysize) = (xsize.shrc(downsample_factor), ysize.shrc(downsample_factor));
-        self.size = if adjust_orientation && data.orientation.is_transposing() {
-            (ysize, xsize)
-        } else {
-            (xsize, ysize)
-        };
+        let mut size = crop_region.size;
+        if adjust_orientation {
+            size = file_header.image_metadata.orientation.map_size(size);
+        }
+        self.size = (
+            size.0.shrc(downsample_factor),
+            size.1.shrc(downsample_factor),
+        );
     }
 }
 

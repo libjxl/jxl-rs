@@ -1125,7 +1125,7 @@ impl Frame {
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
-                    None,
+                    Some(decoder_state.output_viewport),
                 );
             }
             let mut save_idx = if pixel_format.color_data_format.is_some() {
@@ -1142,7 +1142,7 @@ impl Frame {
                         JxlColorType::Grayscale,
                         *df,
                         false,
-                        None,
+                        Some(decoder_state.output_viewport),
                     );
                     save_idx += 1;
                 }

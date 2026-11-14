@@ -131,6 +131,8 @@ pub struct DecoderState {
     pub alpha_mode: AlphaMode,
     pub adjust_orientation: bool,
     pub output_downsampling_shift: u32,
+    // This rect is already unoriented and downsampled.
+    pub output_viewport: Rect,
     pub level5_limits: bool,
     pub sample_limit: Option<usize>,
     // Whether the latest level 1 LF frame was fully rendered.
@@ -166,6 +168,7 @@ impl DecoderState {
         options: &JxlDecoderOptions,
         level5_limits: bool,
         downsample_factor: u8,
+        output_viewport: Rect,
     ) -> Self {
         Self {
             file_header,
@@ -180,6 +183,7 @@ impl DecoderState {
             alpha_mode: options.alpha_mode,
             adjust_orientation: options.adjust_orientation,
             output_downsampling_shift: downsample_factor as u32,
+            output_viewport,
             level5_limits,
             sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,

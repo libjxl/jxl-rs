@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::{FileHeader, JxlHeader};
 use crate::icc::IncrementalIccReader;
+use crate::image::Rect;
 
 pub struct ImageInfo {
     file_header: Option<FileHeader>,
@@ -84,11 +85,10 @@ impl ImageInfo {
             ));
         }
 
-        let xsize = file_header.size.xsize() as usize;
-        let ysize = file_header.size.ysize() as usize;
+        let size = file_header.codestream_image_size();
         check_size_limit(
             decode_options.sample_limit,
-            (xsize, ysize),
+            size,
             file_header.image_metadata.extra_channel_info.len(),
             0,
         )?;
@@ -103,7 +103,7 @@ impl ImageInfo {
         let data = &file_header.image_metadata;
         let mut basic_info = JxlBasicInfo {
             // Will be set by `update_size` below
-            size: (xsize, ysize),
+            size,
             bit_depth: if data.bit_depth.floating_point_sample() {
                 JxlBitDepth::Float {
                     bits_per_sample: data.bit_depth.bits_per_sample(),
@@ -148,6 +148,10 @@ impl ImageInfo {
             &file_header,
             decode_options.adjust_orientation,
             downsample_factor,
+            Rect {
+                origin: (0, 0),
+                size,
+            },
         );
         self.basic_info = Some(basic_info);
         self.file_header = Some(file_header);
@@ -204,6 +208,7 @@ impl CodestreamParser {
             file_header,
             options.adjust_orientation,
             self.downsample_factor,
+            self.crop_region,
         );
     }
 

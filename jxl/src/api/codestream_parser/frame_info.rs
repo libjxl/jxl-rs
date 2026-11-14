@@ -21,7 +21,7 @@ use crate::headers::FileHeader;
 use crate::headers::encodings::UnconditionalCoder;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::{IncrementalTocReader, Toc};
-use crate::image::BufferRecycler;
+use crate::image::{BufferRecycler, Rect};
 use crate::util::NewWithCapacity;
 use crate::util::sync::Arc;
 
@@ -248,6 +248,7 @@ impl FrameInfo {
         process_mode: ProcessMode,
         level5_limits: bool,
         downsample_factor: u8,
+        output_viewport: Rect,
     ) -> Result<()> {
         self.section_size = toc.entries.iter().map(|x| *x as u64).sum();
         self.ready_section_data = 0;
@@ -280,6 +281,7 @@ impl FrameInfo {
                         decode_options,
                         level5_limits,
                         downsample_factor,
+                        output_viewport,
                     )
                 });
             decoder_state.level5_limits = level5_limits;
