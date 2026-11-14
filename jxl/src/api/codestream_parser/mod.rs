@@ -15,6 +15,7 @@ use crate::api::{
 };
 use crate::error::{Error, Result};
 use crate::headers::frame_header::FrameHeader;
+use crate::image::Rect;
 
 mod frame_info;
 mod frame_scan_info;
@@ -137,6 +138,8 @@ pub(super) struct CodestreamParser {
     pub output_color_profile: Option<JxlColorProfile>,
     pub pixel_format: Option<JxlPixelFormat>,
     pub downsample_factor: u8,
+    // This rect is unoriented but not downsampled.
+    pub crop_region: Rect,
 
     /// While seeking: the number of visible frames still to skip before the target.
     visible_frames_to_skip: Option<usize>,
@@ -168,6 +171,10 @@ impl CodestreamParser {
             output_color_profile: None,
             pixel_format: None,
             downsample_factor: 0,
+            crop_region: Rect {
+                origin: (0, 0),
+                size: (0, 0),
+            },
             local_buffer: SmallBuffer::new(4096),
             header_needed_bytes: None,
             frame_info: FrameInfo::new(),
@@ -194,6 +201,10 @@ impl CodestreamParser {
         self.output_color_profile = None;
         self.pixel_format = None;
         self.downsample_factor = 0;
+        self.crop_region = Rect {
+            origin: (0, 0),
+            size: (0, 0),
+        };
         self.visible_frames_to_skip = None;
         self.next_frame_index = 0;
         self.slot_frames = [None; 8];
@@ -340,6 +351,11 @@ impl CodestreamParser {
                             )
                         })
                     })?;
+                    let size = self.image_info.file_header().codestream_image_size();
+                    self.crop_region = Rect {
+                        origin: (0, 0),
+                        size,
+                    };
                     self.state = ParserState::ColorEncoding;
                 }
 
@@ -438,10 +454,21 @@ impl CodestreamParser {
                     }
 
                     let level5_limits = level5_limits(input, decode_options);
+                    let file_header = self.image_info.file_header();
                     let downsample_factor = if is_preview {
                         0
                     } else {
                         self.downsample_factor
+                    };
+                    let crop_region = if is_preview {
+                        let preview = file_header.image_metadata.preview.as_ref().unwrap();
+                        Rect {
+                            origin: (0, 0),
+                            size: (preview.xsize() as usize, preview.ysize() as usize),
+                        }
+                    } else {
+                        self.crop_region
+                            .downsample_ceil((downsample_factor, downsample_factor))
                     };
                     self.frame_info.make_frame(
                         &mut self.local_buffer,
@@ -453,6 +480,7 @@ impl CodestreamParser {
                         process_mode,
                         level5_limits,
                         downsample_factor,
+                        crop_region,
                     )?;
 
                     if !matches!(process_mode, ProcessMode::Skip(..)) {
@@ -546,6 +574,15 @@ impl CodestreamParser {
             self.state,
             ParserState::Sections { process_mode, .. } if process_mode.notify_user()
         )
+    }
+
+    pub fn in_preview_frame(&self) -> bool {
+        match self.state {
+            ParserState::FrameHeader { is_preview }
+            | ParserState::Toc { is_preview }
+            | ParserState::Sections { is_preview, .. } => is_preview,
+            _ => false,
+        }
     }
 
     pub(super) fn frame_progressive_status(

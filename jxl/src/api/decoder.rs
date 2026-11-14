@@ -211,7 +211,13 @@ impl JxlDecoder {
         // The render pipeline always adds ExtendToImageDimensionsStage which extends
         // frames to the full image size. So the output size is always the image size,
         // not the frame's upsampled size.
-        let size = self.codestream_parser.image_info.basic_info().size;
+        // Also, downsample factor and crop region are already applied to the size.
+        let basic_info = self.codestream_parser.image_info.basic_info();
+        let size = if self.codestream_parser.in_preview_frame() {
+            basic_info.preview_size.unwrap()
+        } else {
+            basic_info.size
+        };
         Some(JxlFrameHeader {
             name: frame_header.name.clone(),
             duration: self
