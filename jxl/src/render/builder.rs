@@ -12,7 +12,7 @@ use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
 use crate::headers::bit_depth::BitDepth;
-use crate::image::{BufferRecycler, DataTypeTag};
+use crate::image::{BufferRecycler, DataTypeTag, Rect};
 use crate::render::internal::ChannelInfo;
 use crate::render::save::{SaveChannelType, SaveStage};
 use crate::render::stages::{ConvertModular16ToF32Stage, ConvertModularToF32Stage};
@@ -135,6 +135,8 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         )
     }
 
+    /// Adds a save stage for the output canvas associated with its buffer.
+    #[expect(clippy::too_many_arguments)]
     pub fn add_save_stage(
         self,
         channels: &[usize],
@@ -143,6 +145,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         color_type: JxlColorType,
         data_format: JxlDataFormat,
         fill_opaque_alpha: bool,
+        output_viewport: Option<Rect>,
     ) -> Self {
         let stage = SaveStage::new(
             channels,
@@ -151,6 +154,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             color_type,
             data_format,
             fill_opaque_alpha,
+            output_viewport,
         );
         self.add_stage_internal(Stage::Save(stage))
     }

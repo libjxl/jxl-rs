@@ -188,6 +188,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                     let info = SaveStageBufferInfo {
                         downsample: ci.downsample,
                         orientation: s.orientation,
+                        output_viewport: s.output_viewport,
                         byte_size: s.bytes_per_pixel(),
                         after_extend: shared.extend_stage_index.is_some_and(|e| i > e),
                     };
@@ -465,14 +466,15 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 Stage::Extend(e) => size = e.image_size,
                 Stage::Save(s) => {
                     let (dx, dy) = self.downsampling_for_stage[i];
-                    s.check_buffer_size(
-                        if self.shared.extend_stage_index.is_some_and(|e| i > e) {
-                            size
-                        } else {
-                            (size.0.shrc(dx), size.1.shrc(dy))
-                        },
-                        buffers[s.output_buffer_index].as_ref(),
-                    )?
+                    let channel_size = if self.shared.extend_stage_index.is_some_and(|e| i > e) {
+                        size
+                    } else {
+                        (size.0.shrc(dx), size.1.shrc(dy))
+                    };
+                    let output_size = s
+                        .output_viewport
+                        .map_or(channel_size, |viewport| viewport.size);
+                    s.check_buffer_size(output_size, buffers[s.output_buffer_index].as_ref())?
                 }
                 _ => {}
             }

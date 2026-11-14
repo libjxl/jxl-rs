@@ -7,7 +7,7 @@ use super::internal::{RenderPipelineShared, Stage};
 use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
-use crate::image::{Image, ImageDataType};
+use crate::image::{Image, ImageDataType, Rect};
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::internal::ChannelInfo;
 use crate::util::ShiftRightCeil;
@@ -125,7 +125,15 @@ impl SimpleRenderPipeline {
                     );
                 }
                 Stage::Save(stage) => {
-                    stage.save_simple(&output_buffers, &mut buffer_splitter.get_full_buffers())?;
+                    let canvas = stage.output_viewport.unwrap_or_else(|| Rect {
+                        origin: (0, 0),
+                        size: output_buffers[stage.channels[0]].size(),
+                    });
+                    stage.save_simple(
+                        &output_buffers,
+                        &mut buffer_splitter.get_full_buffers(),
+                        canvas,
+                    )?;
                 }
             }
             current_buffers = output_buffers;
