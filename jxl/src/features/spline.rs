@@ -316,10 +316,9 @@ impl QuantizedSpline {
         let mut color = [0u64; 3];
 
         for (c, color_val) in color.iter_mut().enumerate() {
-            for i in 0..32 {
-                *color_val = color_val.saturating_add(
-                    (inv_quant * self.color_dct[c][i].unsigned_abs() as f32).ceil() as u64,
-                );
+            for &dct_val in &self.color_dct[c] {
+                *color_val = color_val
+                    .saturating_add((inv_quant * dct_val.unsigned_abs() as f32).ceil() as u64);
             }
         }
 

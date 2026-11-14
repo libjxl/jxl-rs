@@ -811,8 +811,8 @@ impl PatchesDictionary {
             let ref_frame = reference_frames[ref_pos.reference].as_ref().unwrap();
             let mut fg = SmallVec::<&[f32], 8>::new();
             if shift == 0 {
-                for c in 0..(3 + num_ec) {
-                    fg.push(&ref_frame.frame[c].row(ref_y0)[ref_x0..ref_x1]);
+                for ch in ref_frame.frame.iter().take(3 + num_ec) {
+                    fg.push(&ch.row(ref_y0)[ref_x0..ref_x1]);
                 }
             } else {
                 // Downsample the patch before blending.
