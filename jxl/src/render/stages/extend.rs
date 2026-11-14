@@ -39,8 +39,9 @@ impl ExtendToImageDimensionsStage {
         shift: usize,
         num_channels: usize,
     ) -> Result<ExtendToImageDimensionsStage> {
-        let xsize = (file_header.size.xsize() as usize).shrc(shift);
-        let ysize = (file_header.size.ysize() as usize).shrc(shift);
+        let (xsize, ysize) = file_header.codestream_image_size();
+        let xsize = xsize.shrc(shift);
+        let ysize = ysize.shrc(shift);
         Ok(ExtendToImageDimensionsStage {
             num_channels,
             frame_origin: (
