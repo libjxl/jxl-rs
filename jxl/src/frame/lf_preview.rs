@@ -41,6 +41,7 @@ impl Frame {
             color_type,
             data_format,
             color_type.has_alpha(),
+            None,
         );
         let len = rect.size.0;
         let ulen = len * 8;
@@ -163,7 +164,10 @@ impl Frame {
                     upsampled_rect.size,
                     uy,
                     upsampled_rect.origin,
-                    full_size,
+                    Rect {
+                        origin: (0, 0),
+                        size: full_size,
+                    },
                     (0, 0),
                 )?;
             }
@@ -244,6 +248,7 @@ impl Frame {
             orientation,
             byte_size: data_format.bytes_per_pixel(color_type),
             after_extend: false,
+            output_viewport: None,
         };
         let info = [Some(info)];
         let mut bufs = [Some(JxlOutputBuffer::reborrow(&mut output_buffers[0]))];

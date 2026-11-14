@@ -5,7 +5,7 @@
 
 use crate::api::{Endianness, JxlDataFormat, JxlOutputBuffer};
 use crate::error::Result;
-use crate::image::Image;
+use crate::image::{Image, Rect};
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::render::save::{SaveChannelType, SaveStage};
 use crate::util::{DITHER_TABLE, f16};
@@ -15,6 +15,7 @@ impl SaveStage {
         &self,
         data: &[Image<f64>],
         buffers: &mut [Option<OutputChannelRef>],
+        canvas: Rect,
     ) -> Result<()> {
         for i in self.channels.iter().skip(1) {
             assert_eq!(data[self.channels[0]].size(), data[*i].size());
@@ -22,15 +23,17 @@ impl SaveStage {
         let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
             return Ok(());
         };
-        let size = data[self.channels[0]].size();
-
-        self.check_buffer_size(size, Some(buf))?;
+        self.check_buffer_size(canvas.size, Some(buf))?;
+        let output_pixel = |x, y| {
+            self.orientation
+                .display_pixel((x - canvas.origin.0, y - canvas.origin.1), canvas.size)
+        };
 
         let output_channels = self.output_channels();
         if let JxlDataFormat::Custom { bytes_per_pixel } = self.data_format {
-            for y in 0..size.1 {
-                for x in 0..size.0 {
-                    let (dx, dy) = self.orientation.display_pixel((x, y), size);
+            for y in canvas.origin.1..canvas.end().1 {
+                for x in canvas.origin.0..canvas.end().0 {
+                    let (dx, dy) = output_pixel(x, y);
                     let mut px = [1.0f32; 4];
                     for (c, &chan) in self.channels.iter().enumerate() {
                         px[c] = data[chan].row(y)[x] as f32;
@@ -54,11 +57,12 @@ impl SaveStage {
             .zip(self.channel_types.iter())
             .enumerate()
         {
-            for y in 0..size.1 {
+            for y in canvas.origin.1..canvas.end().1 {
                 let src_row = data[chan].row(y);
 
-                for (x, &px) in src_row.iter().enumerate() {
-                    let (dx, dy) = self.orientation.display_pixel((x, y), size);
+                for x in canvas.origin.0..canvas.end().0 {
+                    let px = src_row[x];
+                    let (dx, dy) = output_pixel(x, y);
                     let dx = dx * output_channels + c;
                     let bps = self.data_format.bytes_per_sample();
 
@@ -126,9 +130,9 @@ impl SaveStage {
         if self.fill_opaque_alpha {
             let alpha_channel = self.channels.len(); // alpha is after the source channels
             let opaque_bytes = self.data_format.opaque_alpha_bytes();
-            for y in 0..size.1 {
-                for x in 0..size.0 {
-                    let (dx, dy) = self.orientation.display_pixel((x, y), size);
+            for y in canvas.origin.1..canvas.end().1 {
+                for x in canvas.origin.0..canvas.end().0 {
+                    let (dx, dy) = output_pixel(x, y);
                     let dx = dx * output_channels + alpha_channel;
                     let bps = self.data_format.bytes_per_sample();
                     buf.row_mut(dy)[dx * bps..][..opaque_bytes.len()]
@@ -163,6 +167,7 @@ mod test {
             JxlColorType::Grayscale,
             JxlDataFormat::U8 { bit_depth: 8 },
             false,
+            None,
         );
         let mut rng = XorShiftRng::seed_from_u64(0);
         let src = [Image::<f64>::new_random((128, 128), &mut rng)?];
@@ -176,7 +181,7 @@ mod test {
             let splitter = OutputChannelSplitter::new(JxlOutputBuffer::from_image_rect_mut(
                 dst.get_rect_mut(r).into_raw(),
             ));
-            save_stage.save_simple(&src, &mut [Some(splitter.borrow_rect(r))])?;
+            save_stage.save_simple(&src, &mut [Some(splitter.borrow_rect(r))], r)?;
         }
 
         for y in 0..128 {
@@ -213,6 +218,7 @@ mod test {
             JxlColorType::Grayscale,
             JxlDataFormat::f32(),
             false,
+            None,
         );
 
         let mut rng = XorShiftRng::seed_from_u64(0);
@@ -227,7 +233,14 @@ mod test {
                 dst.get_rect_mut(r).into_raw(),
             ));
             let byte_rect = r.to_byte_rect_sz(std::mem::size_of::<f32>());
-            save_stage.save_simple(&src, &mut [Some(splitter.borrow_rect(byte_rect))])?;
+            save_stage.save_simple(
+                &src,
+                &mut [Some(splitter.borrow_rect(byte_rect))],
+                Rect {
+                    origin: (0, 0),
+                    size: (w, h),
+                },
+            )?;
         }
 
         // Iterate over the DESTINATION image pixels.

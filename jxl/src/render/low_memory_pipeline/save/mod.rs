@@ -7,6 +7,7 @@ use super::row_buffers::RowBuffer;
 use crate::api::{Endianness, JxlDataFormat};
 use crate::error::Result;
 use crate::headers::Orientation;
+use crate::image::Rect;
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::render::save::{SaveChannelType, SaveStage};
 use crate::util::ChannelVec;
@@ -25,7 +26,7 @@ impl SaveStage {
         group_size: (usize, usize),
         frame_y: usize,
         group_origin: (usize, usize),
-        full_image_size: (usize, usize),
+        canvas: Rect,
         frame_origin: (isize, isize),
     ) -> Result<()> {
         let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
@@ -35,13 +36,13 @@ impl SaveStage {
         let group_y = frame_y - group_origin.1;
 
         let relative_full_image_start = (
-            -frame_origin.0 - (group_origin.0 as isize),
-            -frame_origin.1 - (group_origin.1 as isize),
+            canvas.origin.0 as isize - frame_origin.0 - group_origin.0 as isize,
+            canvas.origin.1 as isize - frame_origin.1 - group_origin.1 as isize,
         );
 
         let relative_full_image_end = (
-            relative_full_image_start.0 + full_image_size.0 as isize,
-            relative_full_image_start.1 + full_image_size.1 as isize,
+            relative_full_image_start.0 + canvas.size.0 as isize,
+            relative_full_image_start.1 + canvas.size.1 as isize,
         );
 
         let save_start = (

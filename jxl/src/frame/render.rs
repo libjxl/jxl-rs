@@ -922,6 +922,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    None,
                 );
             }
 
@@ -938,6 +939,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    None,
                 );
             }
 
@@ -1013,6 +1015,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    None,
                 );
             }
         }
@@ -1122,6 +1125,7 @@ impl Frame {
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
+                    None,
                 );
             }
             let mut save_idx = if pixel_format.color_data_format.is_some() {
@@ -1138,6 +1142,7 @@ impl Frame {
                         JxlColorType::Grayscale,
                         *df,
                         false,
+                        None,
                     );
                     save_idx += 1;
                 }

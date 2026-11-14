@@ -429,6 +429,17 @@ impl LowMemoryRenderPipeline {
                             .iter()
                             .map(|(si, ci)| &data.row_buffers[*si][*ci])
                             .collect();
+                        let canvas = s.output_viewport.unwrap_or_else(|| {
+                            let size = if self.shared.extend_stage_index.is_some_and(|e| i > e) {
+                                current_size
+                            } else {
+                                (current_size.0.shrc(dx), current_size.1.shrc(dy))
+                            };
+                            Rect {
+                                origin: (0, 0),
+                                size,
+                            }
+                        });
                         s.save_lowmem(
                             &input_data,
                             data.save_scratch.as_mut().unwrap(),
@@ -436,11 +447,7 @@ impl LowMemoryRenderPipeline {
                             (xsize.shrc(dx), num_rows.shrc(dy)),
                             y,
                             (x0 >> dx, y0 >> dy),
-                            if self.shared.extend_stage_index.is_some_and(|e| i > e) {
-                                current_size
-                            } else {
-                                (current_size.0.shrc(dx), current_size.1.shrc(dy))
-                            },
+                            canvas,
                             current_origin,
                         )?;
                     }
@@ -604,6 +611,10 @@ impl LowMemoryRenderPipeline {
                             .iter()
                             .map(|(si, ci)| &data.row_buffers[*si][*ci])
                             .collect();
+                        let canvas = s.output_viewport.unwrap_or(Rect {
+                            origin: (0, 0),
+                            size: extend_stage.image_size,
+                        });
                         s.save_lowmem(
                             &input_data,
                             data.save_scratch.as_mut().unwrap(),
@@ -611,7 +622,7 @@ impl LowMemoryRenderPipeline {
                             (xsize, ysize),
                             y,
                             (x0, y0),
-                            extend_stage.image_size,
+                            canvas,
                             (0, 0),
                         )?;
                     }

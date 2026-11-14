@@ -146,6 +146,7 @@ pub struct SaveStageBufferInfo {
     pub orientation: Orientation,
     pub byte_size: usize,
     pub after_extend: bool,
+    pub output_viewport: Option<Rect>,
 }
 
 /// Data structure responsible for handing out access to portions of the output buffers.
@@ -245,11 +246,17 @@ impl<'a> BufferSplitter<'a> {
                         };
                     }
                 }
+                let canvas = bi.output_viewport.unwrap_or(Rect {
+                    origin: (0, 0),
+                    size: channel_size,
+                });
+                channel_rect = channel_rect.intersection(canvas);
                 if channel_rect.size.0 == 0 || channel_rect.size.1 == 0 {
-                    // Buffer would be empty anyway.
                     return None;
                 }
-                let channel_rect = bi.orientation.display_rect(channel_rect, channel_size);
+                channel_rect.origin.0 -= canvas.origin.0;
+                channel_rect.origin.1 -= canvas.origin.1;
+                let channel_rect = bi.orientation.display_rect(channel_rect, canvas.size);
                 let channel_rect = channel_rect.to_byte_rect_sz(bi.byte_size);
                 Some(buf.borrow_rect(channel_rect))
             })
@@ -324,6 +331,7 @@ mod tests {
             orientation: Orientation::Identity,
             byte_size: 1,
             after_extend: false,
+            output_viewport: None,
         })];
 
         let _local1 = splitter.get_local_buffers(
@@ -373,6 +381,7 @@ mod tests {
                             orientation,
                             byte_size,
                             after_extend: false,
+                            output_viewport: None,
                         })
                     } else {
                         None
