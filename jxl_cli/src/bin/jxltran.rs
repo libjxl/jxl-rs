@@ -8,7 +8,10 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, bail, ensure};
-use jxl::api::{JxlSignature, ProfileLevel, check_signature, extract_codestream, pack_codestream};
+use jxl::api::{
+    JxlSignature, ProfileLevel, check_signature, extract_codestream, pack_codestream,
+    set_modular_16bit_buffers,
+};
 
 #[derive(Parser)]
 #[command(version = jxl_cli::VERSION_STRING)]
@@ -19,7 +22,7 @@ struct Opt {
     /// Output JXL file
     output: PathBuf,
 
-    /// Pack a JPEG XL codestream into a file in the container file format.
+    /// Pack a JPEG XL codestream into a file in the container file format
     /// Automatically writes a jxll box if the codestream exceeds Level 5 limits
     #[clap(long, action, conflicts_with = "extract", verbatim_doc_comment)]
     pack: bool,
@@ -41,6 +44,19 @@ struct Opt {
     /// Extract the JXL codestream from a container file
     #[clap(long, action, conflicts_with_all = ["pack", "level10"])]
     extract: bool,
+
+    /// Override the `modular_16bit_buffers` flag in the JPEG XL header:
+    ///   0 = false (use 32-bit buffers for modular decoding, implies --level10=1
+    ///       for spec conformance)
+    ///   1 = true (use 16-bit buffers for modular decoding, may render
+    ///       incorrectly if the image requires 32-bit buffers)
+    #[clap(
+        long = "16-bit-buffers",
+        value_name = "0|1",
+        value_parser = clap::value_parser!(u8).range(0..=1),
+        verbatim_doc_comment
+    )]
+    modular_16bit_buffers: Option<u8>,
 }
 
 fn apply_file_format_options(
@@ -53,17 +69,37 @@ fn apply_file_format_options(
             signature == JxlSignature::Container,
             "Input file is not a container file."
         );
-        let (codestream, level) = extract_codestream(input_bytes)?;
+        let (mut codestream, level) = extract_codestream(input_bytes)?;
         if level == Some(ProfileLevel::Main10) {
             eprintln!("Warning: extracting raw codestream that is greater than level 5");
         }
+        if let Some(v) = opt.modular_16bit_buffers {
+            codestream = set_modular_16bit_buffers(&codestream, v != 0)?;
+        }
         Ok(codestream)
-    } else if opt.pack || opt.level10.is_some() {
+    } else if opt.pack
+        || opt.level10.is_some()
+        || (signature == JxlSignature::Codestream && opt.modular_16bit_buffers == Some(0))
+    {
         ensure!(
             signature == JxlSignature::Codestream,
             "Input file is not a codestream file"
         );
-        Ok(pack_codestream(input_bytes, opt.level10.unwrap_or(3))?)
+        let codestream = if let Some(v) = opt.modular_16bit_buffers {
+            set_modular_16bit_buffers(input_bytes, v != 0)?
+        } else {
+            input_bytes.to_vec()
+        };
+        let level10_mode = opt
+            .level10
+            .unwrap_or(if opt.modular_16bit_buffers == Some(0) {
+                1
+            } else {
+                3
+            });
+        Ok(pack_codestream(&codestream, level10_mode)?)
+    } else if let Some(v) = opt.modular_16bit_buffers {
+        Ok(set_modular_16bit_buffers(input_bytes, v != 0)?)
     } else {
         Ok(input_bytes.to_vec())
     }
