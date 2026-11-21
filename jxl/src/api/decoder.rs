@@ -65,6 +65,8 @@ pub struct VisibleFrameSeekTarget {
 pub struct JxlDecoder {
     options: JxlDecoderOptions,
     box_parser: BoxParser,
+    stream_view: Option<(u8, Rect)>,
+    configuring_seek: bool,
     codestream_parser: CodestreamParser,
 }
 
@@ -75,6 +77,8 @@ impl JxlDecoder {
         JxlDecoder {
             options,
             box_parser,
+            stream_view: None,
+            configuring_seek: false,
             codestream_parser: CodestreamParser::new(),
         }
     }
@@ -87,6 +91,8 @@ impl JxlDecoder {
     /// Internal buffers and scratch allocations are retained across resets to avoid repeated
     /// allocations when decoding multiple images.
     pub fn reset(&mut self) {
+        self.stream_view = None;
+        self.configuring_seek = false;
         self.box_parser.reset();
         self.codestream_parser.reset();
     }
@@ -186,16 +192,17 @@ impl JxlDecoder {
     /// decoder will render the final image downsampled by `2^factor` times.
     ///
     /// This method may fail if crop region becomes unaligned when downsample factor is changed
-    /// (see [`Self::set_crop_region`].)
+    /// (see [`Self::set_crop_region`]).
     ///
     /// # Errors
     ///
-    /// - After the first frame header, only allowed for a completed frame retained
-    ///   for [`Self::rerender_frame`].
+    /// - After the first frame header, only allowed for a retained frame or, in
+    ///   repeated decoding mode, between [`Self::start_new_frame`] and [`Self::process`].
     /// - Returns an error if the downsampling factor is out of supported range.
     pub fn set_downsample_factor(&mut self, factor: u8) -> Result<()> {
         if self.codestream_parser.frame_header_was_decoded()
             && !self.codestream_parser.frame_info.repeat_ready
+            && !self.configuring_seek
         {
             return Err(Error::ApiUsageError(
                 "cannot change downsample factor after first frame header",
@@ -210,6 +217,7 @@ impl JxlDecoder {
             return Err(Error::InvalidCropRegion);
         }
 
+        self.remember_stream_view();
         self.codestream_parser.downsample_factor = factor;
         self.codestream_parser.update_size(&self.options);
         Ok(())
@@ -221,8 +229,8 @@ impl JxlDecoder {
     /// downsample factor is also set, this method returns an error if `origin` is
     /// not aligned to downsampled image grid *before applying image orientation.*
     ///
-    /// After the first frame header, this is only allowed for a completed frame
-    /// retained for [`Self::rerender_frame`].
+    /// After the first frame header, this is only allowed for a retained frame or, in
+    /// repeated decoding mode, between [`Self::start_new_frame`] and [`Self::process`].
     pub fn set_crop_region(&mut self, region: Option<Rect>) -> Result<()> {
         if !self.codestream_parser.image_info.is_complete() {
             return Err(Error::ApiUsageError(
@@ -231,6 +239,7 @@ impl JxlDecoder {
         }
         if self.codestream_parser.frame_header_was_decoded()
             && !self.codestream_parser.frame_info.repeat_ready
+            && !self.configuring_seek
         {
             return Err(Error::ApiUsageError(
                 "cannot change crop region after first frame header",
@@ -266,6 +275,7 @@ impl JxlDecoder {
             return Err(Error::InvalidCropRegion);
         }
 
+        self.remember_stream_view();
         self.codestream_parser.crop_region = region;
         self.codestream_parser.update_size(&self.options);
         Ok(())
@@ -326,12 +336,18 @@ impl JxlDecoder {
     ///
     /// Stored frames that the decoder already has are kept; this seeks to the earliest frame
     /// needed to reconstruct any missing ones (or directly to the target frame if none are
-    /// missing), skipping intermediate frames that are not stored.
+    /// missing), skipping intermediate frames that are not stored. In repeated decoding
+    /// mode the caller can select a new view before processing the frame, so reference
+    /// slots are rebuilt instead of being reused at a potentially incompatible resolution.
     pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) -> Result<u64> {
         if !self.codestream_parser.image_info.is_complete() {
             return Err(Error::ApiUsageError("cannot seek before BasicInfo"));
         }
-        let checkpoint = self.codestream_parser.start_new_frame(&seek_target);
+        self.restore_stream_view();
+        self.configuring_seek = self.options.enable_repeated_decoding;
+        let checkpoint = self
+            .codestream_parser
+            .start_new_frame(&seek_target, !self.configuring_seek);
         self.box_parser.reset_to_checkpoint(checkpoint);
         Ok(checkpoint.file_position)
     }
@@ -381,6 +397,10 @@ impl JxlDecoder {
         buffers: Option<&mut [JxlOutputBuffer]>,
         parallel_runner: Option<&mut (dyn JxlParallelRunner + '_)>,
     ) -> Result<Event> {
+        if self.stream_view.is_some() && self.codestream_parser.has_more_frames() {
+            self.restore_stream_view();
+        }
+        self.configuring_seek = false;
         self.codestream_parser.process(
             &mut CodestreamInput::new(&mut self.box_parser, input),
             &self.options,
@@ -389,18 +409,40 @@ impl JxlDecoder {
         )
     }
 
-    /// Renders a retained complete frame using the current crop and downsample factor.
-    /// Currently supports independent final VarDCT frames without extra channels,
-    /// patches or splines. Requires `enable_repeated_decoding`.
+    fn remember_stream_view(&mut self) {
+        let p = &self.codestream_parser;
+        if p.frame_info.repeat_ready {
+            self.stream_view
+                .get_or_insert((p.downsample_factor, p.crop_region));
+        }
+    }
+
+    fn restore_stream_view(&mut self) {
+        if let Some((shift, crop)) = self.stream_view.take() {
+            self.codestream_parser.downsample_factor = shift;
+            self.codestream_parser.crop_region = crop;
+            self.codestream_parser.update_size(&self.options);
+        }
+    }
+
+    /// Renders the last completed visible (non-preview) frame using the current crop
+    /// and downsample factor. Requires `enable_repeated_decoding`. View changes
+    /// made after frame completion apply only to rerenders, not subsequent frames.
     pub fn rerender_frame(
         &mut self,
         buffers: &mut [JxlOutputBuffer],
         parallel_runner: Option<&mut (dyn JxlParallelRunner + '_)>,
     ) -> Result<()> {
         let parser = &mut self.codestream_parser;
-        let frame = parser.frame_info.retained_frame()?;
+        if !parser.frame_info.repeat_ready {
+            return Err(Error::ApiUsageError(
+                "no completed frame available for repeated decoding",
+            ));
+        }
         let shift = parser.downsample_factor;
-        frame.rerender_frame(
+        parser.frame_info.rerender_frame(
+            parser.image_info.file_header(),
+            &self.options,
             shift,
             parser.crop_region.downsample_ceil((shift, shift)),
             parser.pixel_format.as_ref().unwrap(),

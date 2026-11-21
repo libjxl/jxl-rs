@@ -25,6 +25,9 @@ use crate::image::{BufferRecycler, Rect};
 use crate::util::NewWithCapacity;
 use crate::util::sync::Arc;
 
+mod replay;
+use replay::{ReadySection, ReplayCache};
+
 struct SectionBuffer {
     len: usize,
     data: Vec<u8>,
@@ -56,7 +59,10 @@ pub struct FrameInfo {
     frame_header: Option<FrameHeader>,
     toc_parser: Option<IncrementalTocReader>,
     frame: Option<Box<Frame>>,
+    // Only the live slots survive a replay-backed visible frame.
+    next_state: Option<DecoderState>,
     pub(crate) repeat_ready: bool,
+    replay: ReplayCache,
     // Keeps track of whether pixels have been modified.
     pixels_dirty: bool,
     buffer_recycler: Arc<BufferRecycler>,
@@ -68,17 +74,17 @@ pub struct FrameInfo {
     section_state: SectionState,
 
     // Or only section if in single section special case.
-    lf_global_section: Option<SectionBuffer>,
-    lf_sections: Vec<SectionBuffer>,
-    hf_global_section: Option<SectionBuffer>,
+    lf_global_section: Option<ReadySection>,
+    lf_sections: Vec<ReadySection>,
+    hf_global_section: Option<ReadySection>,
     // indexed by group, then by pass.
-    hf_sections: Vec<Vec<Option<SectionBuffer>>>,
+    hf_sections: Vec<Vec<Option<ReadySection>>>,
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
     // The frame counters before the next frame (visible frames, and non-visible frames since the
     // last visible one), which seed its noise. They are counted here rather than in the decoder
     // state so that frames skipped by a seek count too.
-    frame_counters: (usize, usize),
+    pub(super) frame_counters: (usize, usize),
     // Which stored frames to keep in the next frame's decoder state (see `reset`).
     keep_slots: [bool; 8],
     // Cumulative samples across consecutive non-visible frames since the last visible frame.
@@ -91,7 +97,9 @@ impl FrameInfo {
             frame_header: None,
             toc_parser: None,
             frame: None,
+            next_state: None,
             repeat_ready: false,
+            replay: ReplayCache::default(),
             sections: VecDeque::new(),
             section_size: 0,
             ready_section_data: 0,
@@ -115,10 +123,12 @@ impl FrameInfo {
         self.clear();
         if keep_slots == [false; 8] {
             self.frame = None;
+            self.next_state = None;
             self.pixels_dirty = false;
         }
         self.frame_counters = frame_counters;
         self.keep_slots = keep_slots;
+        self.replay.reset(keep_slots);
         self.nonvisible_samples = 0;
     }
 
@@ -145,19 +155,21 @@ impl FrameInfo {
             .or(self.frame.as_ref().map(|x| x.header()))
     }
 
-    pub(super) fn retain_completed_frame(&mut self) {
+    pub(super) fn retain_completed_frame(&mut self, keep_state: bool) -> Result<()> {
         self.clear();
-        self.frame.as_mut().unwrap().discard_render_pipeline();
-        self.repeat_ready = true;
-    }
-
-    pub(crate) fn retained_frame(&mut self) -> Result<&mut Frame> {
-        if !self.repeat_ready {
-            return Err(Error::ApiUsageError(
-                "no completed frame available for repeated decoding",
-            ));
+        if !keep_state {
+            self.forget_replay_slots();
         }
-        Ok(self.frame.as_deref_mut().unwrap())
+        if self.frame.as_ref().unwrap().supports_repeated_render() {
+            self.frame.as_mut().unwrap().discard_render_pipeline();
+        } else {
+            let frame = self.frame.take().unwrap();
+            if keep_state {
+                self.next_state = Some(frame.finalize()?);
+            }
+        }
+        self.repeat_ready = true;
+        Ok(())
     }
 
     pub(super) fn frame(&self) -> Option<&Frame> {
@@ -293,6 +305,7 @@ impl FrameInfo {
                 .take()
                 .map(|x| x.finalize())
                 .transpose()?
+                .or_else(|| self.next_state.take())
                 .unwrap_or_else(|| {
                     DecoderState::new(
                         file_header.clone(),
@@ -402,20 +415,25 @@ impl FrameInfo {
             let s = self.sections.pop_front().unwrap();
             self.ready_section_data -= s.len;
 
-            match s.section {
-                Section::LfGlobal => {
-                    self.lf_global_section = Some(s);
-                }
-                Section::HfGlobal => {
-                    self.hf_global_section = Some(s);
-                }
-                Section::Lf { .. } => {
-                    self.lf_sections.push(s);
-                }
-                Section::Hf { group, pass } => {
-                    self.hf_sections[group][pass] = Some(s);
-                    self.candidate_hf_sections.insert(group);
-                }
+            let s = self.replay.collect(s);
+            self.queue_ready(s);
+        }
+    }
+
+    fn queue_ready(&mut self, s: ReadySection) {
+        match s.section {
+            Section::LfGlobal => {
+                self.lf_global_section = Some(s);
+            }
+            Section::HfGlobal => {
+                self.hf_global_section = Some(s);
+            }
+            Section::Lf { .. } => {
+                self.lf_sections.push(s);
+            }
+            Section::Hf { group, pass } => {
+                self.hf_sections[group][pass] = Some(s);
+                self.candidate_hf_sections.insert(group);
             }
         }
     }
