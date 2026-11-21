@@ -23,6 +23,9 @@ pub struct JxlDecoderOptions {
     pub coalescing: bool,
     pub desired_intensity_target: Option<f32>,
     pub skip_preview: bool,
+    /// Opt into retaining frame data for repeated decoding. Disables partial
+    /// output via [`JxlDecoder::flush_pixels`](crate::api::JxlDecoder::flush_pixels).
+    pub enable_repeated_decoding: bool,
     /// Fail decoding images with more than this number of samples, frames with more
     /// than this number of samples, or sequences of consecutive non-visible frames
     /// whose total number of samples exceeds this limit. The limit counts the product
@@ -98,6 +101,7 @@ impl Default for JxlDecoderOptions {
             render_spot_colors: true,
             coalescing: true,
             skip_preview: true,
+            enable_repeated_decoding: false,
             desired_intensity_target: None,
             sample_limit: None,
             high_precision: false,

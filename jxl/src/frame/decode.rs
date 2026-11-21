@@ -315,6 +315,7 @@ impl Frame {
             )),
             epf_sigma: Arc::new(SharedSnapshot::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
+            channel_cache: None,
             buffer_recycler,
             lf_preview_dirty_groups: BTreeSet::new(),
         }))
@@ -452,7 +453,7 @@ impl Frame {
                 None
             };
 
-            let modular_global = FullModularImage::read(
+            let mut modular_global = FullModularImage::read(
                 &self.header,
                 &self.decoder_state.file_header.image_metadata,
                 self.modular_color_channels(),
@@ -462,6 +463,8 @@ impl Frame {
                 self.decoder_state.modular_storage(),
                 self.decoder_state.level5_limits,
             )?;
+
+            modular_global.channel_cache = self.channel_cache.clone();
 
             // Ensure that, if we call this function again, we resume from just after
             // reading modular global data (excluding section 0 channels).
@@ -639,9 +642,10 @@ impl Frame {
                 .max()
                 .unwrap_or(0);
             let use_i16 = max_num_bits < 16;
-            // Since the render pipeline keeps finalized channels, we only need to store
-            // HF coefficients across calls if passes are decoded incrementally.
-            let hf_coefficients = if passes.len() <= 1 {
+            // Repeated decoding must not rely on the render pipeline keeping
+            // finalized channels, even when all passes arrive together.
+            let retain_coefficients = self.retains_vardct_coefficients();
+            let hf_coefficients = if passes.len() <= 1 && !retain_coefficients {
                 vec![]
             } else {
                 (0..self.header.num_groups())
@@ -654,6 +658,7 @@ impl Frame {
                 passes,
                 dequant_matrices,
                 hf_coefficients,
+                retain_coefficients,
                 use_i16,
             });
         }
@@ -666,7 +671,9 @@ impl Frame {
             self.decoder_state.extra_channel_info(),
         );
         let can_render_features = feature_rendering_shift == upsampling_shift;
-        if self.header.restoration_filter.epf_iters > 0 && can_render_features {
+        if self.header.restoration_filter.epf_iters > 0
+            && (can_render_features || self.retains_vardct_coefficients())
+        {
             self.epf_sigma.set(SigmaSource::new(
                 &self.header,
                 self.lf_global.as_ref().unwrap(),

@@ -217,11 +217,14 @@ impl CodestreamParser {
     pub(super) fn start_new_frame(
         &mut self,
         seek_target: &VisibleFrameSeekTarget,
+        reuse_slots: bool,
     ) -> BoxParserCheckpoint {
         // On the way to a seek target, frames that do not matter for it can be decoded wrong,
         // so stored frames are only usable when not in the middle of a frame or a seek.
         let mid_frame = matches!(self.state, ParserState::Sections { .. });
-        let usable = !mid_frame && self.visible_frames_to_skip.is_none();
+        // When the caller can change view after seeking, old slots may be at
+        // the wrong resolution. Replay them from the returned checkpoint.
+        let usable = reuse_slots && !mid_frame && self.visible_frames_to_skip.is_none();
         let have = if usable { self.slot_frames } else { [None; 8] };
         // Keep the stored frames that the decoder already has, unless a frame decoded from `start`
         // on would overwrite them, and start where the others can be reconstructed.
@@ -255,7 +258,7 @@ impl CodestreamParser {
         self.frame_header_decoded
     }
 
-    fn has_more_frames(&self) -> bool {
+    pub(super) fn has_more_frames(&self) -> bool {
         !matches!(self.state, ParserState::TrailingData | ParserState::Done)
     }
 
@@ -314,6 +317,9 @@ impl CodestreamParser {
         output_buffers: Option<&mut [JxlOutputBuffer]>,
         parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<Event> {
+        if matches!(self.state, ParserState::FrameHeader { .. }) && self.frame_info.repeat_ready {
+            self.frame_info.release_target();
+        }
         match self.process_inner(input, decode_options, output_buffers, parallel_runner) {
             Err(Error::OutOfBounds(_))
                 if self.state != ParserState::TrailingData
@@ -470,6 +476,7 @@ impl CodestreamParser {
                         self.crop_region
                             .downsample_ceil((downsample_factor, downsample_factor))
                     };
+                    let before = self.frame_info.frame_counters;
                     self.frame_info.make_frame(
                         &mut self.local_buffer,
                         toc,
@@ -484,6 +491,9 @@ impl CodestreamParser {
                     )?;
 
                     if !matches!(process_mode, ProcessMode::Skip(..)) {
+                        if decode_options.enable_repeated_decoding && !is_preview {
+                            self.frame_info.begin_record(before, level5_limits);
+                        }
                         self.frame_info.dequeue_ready_sections();
                     }
 
@@ -530,7 +540,17 @@ impl CodestreamParser {
                     // animation, which will likely be decoded again (seeking can reuse it).
                     let animation = &self.image_info.file_header().image_metadata.animation;
                     let looping = animation.as_ref().is_some_and(|a| a.num_loops != 1);
-                    if !is_last || (looping && !is_preview) {
+                    let retain = !is_preview
+                        && decode_options.enable_repeated_decoding
+                        && process_mode == ProcessMode::Process;
+                    self.frame_info.finish_record(retain);
+                    if retain {
+                        self.frame_info
+                            .retain_completed_frame(!is_last || looping)?;
+                        if is_last && (!looping || self.frame_info.frame().is_some()) {
+                            self.slot_frames = [None; 8];
+                        }
+                    } else if !is_last || (looping && !is_preview) {
                         self.frame_info.clear();
                     } else {
                         self.frame_info.reset((0, 0), [false; 8]);

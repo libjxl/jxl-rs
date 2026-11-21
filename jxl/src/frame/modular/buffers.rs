@@ -63,7 +63,7 @@ impl ModularChannel {
         })
     }
 
-    fn try_clone(&self, recycler: &BufferRecycler) -> Result<Self> {
+    pub(super) fn try_clone(&self, recycler: &BufferRecycler) -> Result<Self> {
         let sz = self.data.byte_size();
         let mut data = recycler.get_raw_buffer(sz, false)?;
         for y in 0..sz.1 {

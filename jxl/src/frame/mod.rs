@@ -74,6 +74,7 @@ pub struct HfGlobalState {
     passes: Vec<PassState>,
     dequant_matrices: DequantMatrices,
     hf_coefficients: Vec<Mutex<Vec<CacheLine>>>,
+    retain_coefficients: bool,
     use_i16: bool,
 }
 
@@ -123,6 +124,7 @@ pub struct DecoderState {
     pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
     pub(super) lf_frames: [Option<[Image<f32>; 3]>; Self::NUM_LF_FRAMES],
     pub render_spotcolors: bool,
+    enable_repeated_decoding: bool,
     #[cfg(test)]
     pub use_simple_pipeline: bool,
     #[cfg(test)]
@@ -175,6 +177,7 @@ impl DecoderState {
             reference_frames: Arc::new([None, None, None, None]),
             lf_frames: std::array::from_fn(|_| None),
             render_spotcolors: options.render_spot_colors,
+            enable_repeated_decoding: options.enable_repeated_decoding,
             #[cfg(test)]
             use_simple_pipeline: options.test_options.use_simple_pipeline,
             #[cfg(test)]
@@ -356,6 +359,7 @@ pub struct Frame {
     // LF groups that received data and thus should trigger a modular
     // re-render of the corresponding groups.
     dirty_lf_groups: BTreeSet<usize>,
+    pub(crate) channel_cache: Option<Arc<modular::ChannelCache>>,
     buffer_recycler: Arc<BufferRecycler>,
     // LF groups that received data or have modified neighbors and need to be previewed.
     lf_preview_dirty_groups: BTreeSet<usize>,

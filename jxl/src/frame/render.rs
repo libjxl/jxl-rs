@@ -1190,6 +1190,56 @@ impl Frame {
         ))
     }
 
+    pub(crate) fn discard_render_pipeline(&mut self) {
+        self.render_pipeline = None;
+    }
+
+    pub(crate) fn retains_vardct_coefficients(&self) -> bool {
+        self.decoder_state.enable_repeated_decoding
+            && self.header.is_last
+            && self.header.is_visible()
+            && self.header.encoding == Encoding::VarDCT
+            && self.header.num_extra_channels == 0
+            && !self.header.can_be_referenced
+            && !self.header.has_lf_frame()
+            && !self.header.needs_blending()
+            && !self.header.has_patches()
+            && !self.header.has_splines()
+    }
+
+    pub(crate) fn rerender_frame(
+        &mut self,
+        shift: u8,
+        viewport: Rect,
+        format: &JxlPixelFormat,
+        profile: &JxlColorProfile,
+        buffers: &mut [JxlOutputBuffer],
+        runner: &mut dyn JxlParallelRunner,
+    ) -> Result<()> {
+        if buffers.len() != usize::from(format.color_data_format.is_some()) {
+            return Err(Error::ApiUsageError(
+                "wrong buffer count for repeated render",
+            ));
+        }
+        self.render_pipeline = None;
+        self.decoder_state.output_downsampling_shift = shift.into();
+        self.decoder_state.output_viewport = viewport;
+        self.prepare_render_pipeline(format, profile)?;
+        let mut buffers: Vec<_> = buffers
+            .iter_mut()
+            .map(|b| Some(JxlOutputBuffer::reborrow(b)))
+            .collect();
+        pipeline_mut!(self, p, p.check_buffer_sizes(&mut buffers)?);
+        let splitter = BufferSplitter::new(&mut buffers);
+        pipeline_mut!(self, p, p.render_outside_frame(&splitter)?);
+        self.group_status.final_vardct_render_done.clear();
+        let result = runner.run_ordered(self.header.num_groups(), None, &|g| {
+            self.decode_hf_group(g, &mut [], &splitter, true)
+        });
+        self.discard_render_pipeline();
+        result
+    }
+
     pub fn prepare_render_pipeline(
         &mut self,
         pixel_format: &JxlPixelFormat,
