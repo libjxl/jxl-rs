@@ -1194,7 +1194,7 @@ impl Frame {
         self.render_pipeline = None;
     }
 
-    pub(crate) fn supports_repeated_render(&self) -> bool {
+    pub(crate) fn retains_vardct_coefficients(&self) -> bool {
         self.decoder_state.enable_repeated_decoding
             && self.header.is_last
             && self.header.is_visible()

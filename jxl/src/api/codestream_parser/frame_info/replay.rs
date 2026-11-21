@@ -57,9 +57,15 @@ impl ReplayCache {
         let live = self.reachable(self.slots.iter().flatten().copied().chain(self.target));
         self.records.retain(|id, _| live.contains(id));
     }
+    fn clear_target(&mut self) {
+        if let Some(id) = self.target.take() {
+            // Once only a reference, keep its compressed representation alone.
+            self.records.get_mut(&id).unwrap().channels = None;
+        }
+    }
     pub(super) fn reset(&mut self, keep: [bool; 8]) {
         self.pending = None;
-        self.target = None;
+        self.clear_target();
         for (slot, keep) in self.slots.iter_mut().zip(keep) {
             if !keep {
                 *slot = None;
@@ -85,7 +91,7 @@ impl FrameInfo {
         level5: bool,
     ) {
         let frame = self.frame.as_mut().unwrap();
-        if frame.supports_repeated_render() {
+        if frame.retains_vardct_coefficients() {
             return;
         }
         let dependencies = used_slots(frame.header())
@@ -130,9 +136,8 @@ impl FrameInfo {
 
     pub(in crate::api::codestream_parser) fn release_target(&mut self) {
         self.repeat_ready = false;
-        if let Some(target) = self.replay.target.take() {
-            // Once only a reference, keep its compressed representation alone.
-            self.replay.records.get_mut(&target).unwrap().channels = None;
+        if self.replay.target.is_some() {
+            self.replay.clear_target();
             self.replay.prune();
         }
     }
@@ -148,11 +153,7 @@ impl FrameInfo {
         buffers: &mut [JxlOutputBuffer],
         runner: &mut dyn JxlParallelRunner,
     ) -> Result<()> {
-        if !self.repeat_ready {
-            return Err(Error::ApiUsageError(
-                "no completed frame available for repeated decoding",
-            ));
-        }
+        debug_assert!(self.repeat_ready);
         validate_output_buffers(buffers, Some(format))?;
         let Some(target) = self.replay.target else {
             return self

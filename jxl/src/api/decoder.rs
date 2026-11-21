@@ -200,10 +200,7 @@ impl JxlDecoder {
     ///   repeated decoding mode, between [`Self::start_new_frame`] and [`Self::process`].
     /// - Returns an error if the downsampling factor is out of supported range.
     pub fn set_downsample_factor(&mut self, factor: u8) -> Result<()> {
-        if self.codestream_parser.frame_header_was_decoded()
-            && !self.codestream_parser.frame_info.repeat_ready
-            && !self.configuring_seek
-        {
+        if !self.can_change_view() {
             return Err(Error::ApiUsageError(
                 "cannot change downsample factor after first frame header",
             ));
@@ -237,10 +234,7 @@ impl JxlDecoder {
                 "crop region must be set after BasicInfo",
             ));
         }
-        if self.codestream_parser.frame_header_was_decoded()
-            && !self.codestream_parser.frame_info.repeat_ready
-            && !self.configuring_seek
-        {
+        if !self.can_change_view() {
             return Err(Error::ApiUsageError(
                 "cannot change crop region after first frame header",
             ));
@@ -407,6 +401,12 @@ impl JxlDecoder {
             buffers,
             parallel_runner.unwrap_or(&mut SequentialRunner),
         )
+    }
+
+    fn can_change_view(&self) -> bool {
+        !self.codestream_parser.frame_header_was_decoded()
+            || self.codestream_parser.frame_info.repeat_ready
+            || self.configuring_seek
     }
 
     fn remember_stream_view(&mut self) {

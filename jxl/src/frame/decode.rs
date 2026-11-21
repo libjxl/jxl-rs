@@ -644,7 +644,7 @@ impl Frame {
             let use_i16 = max_num_bits < 16;
             // Repeated decoding must not rely on the render pipeline keeping
             // finalized channels, even when all passes arrive together.
-            let retain_coefficients = self.supports_repeated_render();
+            let retain_coefficients = self.retains_vardct_coefficients();
             let hf_coefficients = if passes.len() <= 1 && !retain_coefficients {
                 vec![]
             } else {
@@ -672,7 +672,7 @@ impl Frame {
         );
         let can_render_features = feature_rendering_shift == upsampling_shift;
         if self.header.restoration_filter.epf_iters > 0
-            && (can_render_features || self.supports_repeated_render())
+            && (can_render_features || self.retains_vardct_coefficients())
         {
             self.epf_sigma.set(SigmaSource::new(
                 &self.header,

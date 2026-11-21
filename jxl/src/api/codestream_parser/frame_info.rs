@@ -160,8 +160,9 @@ impl FrameInfo {
         if !keep_state {
             self.forget_replay_slots();
         }
-        if self.frame.as_ref().unwrap().supports_repeated_render() {
-            self.frame.as_mut().unwrap().discard_render_pipeline();
+        let frame = self.frame.as_mut().unwrap();
+        if frame.retains_vardct_coefficients() {
+            frame.discard_render_pipeline();
         } else {
             let frame = self.frame.take().unwrap();
             if keep_state {
