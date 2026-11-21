@@ -639,9 +639,10 @@ impl Frame {
                 .max()
                 .unwrap_or(0);
             let use_i16 = max_num_bits < 16;
-            // Since the render pipeline keeps finalized channels, we only need to store
-            // HF coefficients across calls if passes are decoded incrementally.
-            let hf_coefficients = if passes.len() <= 1 {
+            // Repeated decoding must not rely on the render pipeline keeping
+            // finalized channels, even when all passes arrive together.
+            let retain_coefficients = self.supports_repeated_render();
+            let hf_coefficients = if passes.len() <= 1 && !retain_coefficients {
                 vec![]
             } else {
                 (0..self.header.num_groups())
@@ -654,6 +655,7 @@ impl Frame {
                 passes,
                 dequant_matrices,
                 hf_coefficients,
+                retain_coefficients,
                 use_i16,
             });
         }
@@ -666,7 +668,9 @@ impl Frame {
             self.decoder_state.extra_channel_info(),
         );
         let can_render_features = feature_rendering_shift == upsampling_shift;
-        if self.header.restoration_filter.epf_iters > 0 && can_render_features {
+        if self.header.restoration_filter.epf_iters > 0
+            && (can_render_features || self.supports_repeated_render())
+        {
             self.epf_sigma.set(SigmaSource::new(
                 &self.header,
                 self.lf_global.as_ref().unwrap(),

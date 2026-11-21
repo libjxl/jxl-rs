@@ -839,9 +839,9 @@ pub fn decode_vardct_group(
     let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let use_i16 = hf_global.use_i16;
-    let is_multi_pass =
-        !hf_global.hf_coefficients.is_empty() && pass_info.len() < hf_global.passes.len();
-    let mut locked_coeffs = if is_multi_pass {
+    let use_group_coefficients = hf_global.retain_coefficients
+        || (!hf_global.hf_coefficients.is_empty() && pass_info.len() < hf_global.passes.len());
+    let mut locked_coeffs = if use_group_coefficients {
         let mut guard = hf_global.hf_coefficients[group].try_lock().unwrap();
         if guard.is_empty() {
             let num_cache_lines = if use_i16 {
@@ -949,7 +949,11 @@ pub fn decode_vardct_group(
                 ),
             };
 
-            let mut block_nonzeros = if is_multi_pass { [1; 3] } else { [0; 3] };
+            let mut block_nonzeros = if use_group_coefficients {
+                [1; 3]
+            } else {
+                [0; 3]
+            };
 
             for PassInfo {
                 histogram_index,
@@ -995,7 +999,7 @@ pub fn decode_vardct_group(
                     if nonzeros == 0 {
                         continue;
                     }
-                    if !is_multi_pass && block_nonzeros[c] == 0 {
+                    if !use_group_coefficients && block_nonzeros[c] == 0 {
                         coeffs.zero_channel(c, num_coeffs);
                     }
                     block_nonzeros[c] += nonzeros;
@@ -1049,7 +1053,7 @@ pub fn decode_vardct_group(
                     block_nonzeros,
                 )?;
             }
-            if is_multi_pass {
+            if use_group_coefficients {
                 coeffs_offset += num_coeffs;
             }
         }

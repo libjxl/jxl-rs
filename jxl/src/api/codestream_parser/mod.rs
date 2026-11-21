@@ -530,7 +530,17 @@ impl CodestreamParser {
                     // animation, which will likely be decoded again (seeking can reuse it).
                     let animation = &self.image_info.file_header().image_metadata.animation;
                     let looping = animation.as_ref().is_some_and(|a| a.num_loops != 1);
-                    if !is_last || (looping && !is_preview) {
+                    if !is_preview
+                        && process_mode == ProcessMode::Process
+                        && self
+                            .frame_info
+                            .frame()
+                            .is_some_and(|f| f.supports_repeated_render())
+                    {
+                        self.frame_info.retain_completed_frame();
+                        // A seek after changing resolution must rebuild its references.
+                        self.slot_frames = [None; 8];
+                    } else if !is_last || (looping && !is_preview) {
                         self.frame_info.clear();
                     } else {
                         self.frame_info.reset((0, 0), [false; 8]);

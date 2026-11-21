@@ -56,6 +56,7 @@ pub struct FrameInfo {
     frame_header: Option<FrameHeader>,
     toc_parser: Option<IncrementalTocReader>,
     frame: Option<Box<Frame>>,
+    pub(crate) repeat_ready: bool,
     // Keeps track of whether pixels have been modified.
     pixels_dirty: bool,
     buffer_recycler: Arc<BufferRecycler>,
@@ -90,6 +91,7 @@ impl FrameInfo {
             frame_header: None,
             toc_parser: None,
             frame: None,
+            repeat_ready: false,
             sections: VecDeque::new(),
             section_size: 0,
             ready_section_data: 0,
@@ -121,6 +123,7 @@ impl FrameInfo {
     }
 
     pub fn clear(&mut self) {
+        self.repeat_ready = false;
         self.frame_header = None;
         self.toc_parser = None;
         self.section_size = 0;
@@ -140,6 +143,21 @@ impl FrameInfo {
         self.frame_header
             .as_ref()
             .or(self.frame.as_ref().map(|x| x.header()))
+    }
+
+    pub(super) fn retain_completed_frame(&mut self) {
+        self.clear();
+        self.frame.as_mut().unwrap().discard_render_pipeline();
+        self.repeat_ready = true;
+    }
+
+    pub(crate) fn retained_frame(&mut self) -> Result<&mut Frame> {
+        if !self.repeat_ready {
+            return Err(Error::ApiUsageError(
+                "no completed frame available for repeated decoding",
+            ));
+        }
+        Ok(self.frame.as_deref_mut().unwrap())
     }
 
     pub(super) fn frame(&self) -> Option<&Frame> {

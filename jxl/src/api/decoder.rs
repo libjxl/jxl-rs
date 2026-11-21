@@ -190,10 +190,13 @@ impl JxlDecoder {
     ///
     /// # Errors
     ///
-    /// - Returns API usage error when called after the first frame header is decoded.
+    /// - After the first frame header, only allowed for a completed frame retained
+    ///   for [`Self::rerender_frame`].
     /// - Returns an error if the downsampling factor is out of supported range.
     pub fn set_downsample_factor(&mut self, factor: u8) -> Result<()> {
-        if self.codestream_parser.frame_header_was_decoded() {
+        if self.codestream_parser.frame_header_was_decoded()
+            && !self.codestream_parser.frame_info.repeat_ready
+        {
             return Err(Error::ApiUsageError(
                 "cannot change downsample factor after first frame header",
             ));
@@ -218,15 +221,17 @@ impl JxlDecoder {
     /// downsample factor is also set, this method returns an error if `origin` is
     /// not aligned to downsampled image grid *before applying image orientation.*
     ///
-    /// This method will fail if frame decoding has already started. In that case, reset the
-    /// decoder before updating the crop region using [`JxlDecoder::reset`].
+    /// After the first frame header, this is only allowed for a completed frame
+    /// retained for [`Self::rerender_frame`].
     pub fn set_crop_region(&mut self, region: Option<Rect>) -> Result<()> {
         if !self.codestream_parser.image_info.is_complete() {
             return Err(Error::ApiUsageError(
                 "crop region must be set after BasicInfo",
             ));
         }
-        if self.codestream_parser.frame_header_was_decoded() {
+        if self.codestream_parser.frame_header_was_decoded()
+            && !self.codestream_parser.frame_info.repeat_ready
+        {
             return Err(Error::ApiUsageError(
                 "cannot change crop region after first frame header",
             ));
@@ -384,17 +389,44 @@ impl JxlDecoder {
         )
     }
 
+    /// Renders a retained complete frame using the current crop and downsample factor.
+    /// Currently supports independent final VarDCT frames without extra channels,
+    /// patches or splines. Requires `enable_repeated_decoding`.
+    pub fn rerender_frame(
+        &mut self,
+        buffers: &mut [JxlOutputBuffer],
+        parallel_runner: Option<&mut (dyn JxlParallelRunner + '_)>,
+    ) -> Result<()> {
+        let parser = &mut self.codestream_parser;
+        let frame = parser.frame_info.retained_frame()?;
+        let shift = parser.downsample_factor;
+        frame.rerender_frame(
+            shift,
+            parser.crop_region.downsample_ceil((shift, shift)),
+            parser.pixel_format.as_ref().unwrap(),
+            parser.output_color_profile.as_ref().unwrap(),
+            buffers,
+            parallel_runner.unwrap_or(&mut SequentialRunner),
+        )
+    }
+
     /// Draws all the pixels we have data for.
     ///
     /// Returns `true` if any new pixels were written to `buffers` since the previous call to
     /// `flush_pixels`; returns `false` if no new rendering has happened.
     ///
+    /// Not available when `enable_repeated_decoding` is enabled.
     /// See [`Self::process`] for alignment requirements on `buffers`.
     pub fn flush_pixels(
         &mut self,
         buffers: &mut [JxlOutputBuffer],
         parallel_runner: Option<&mut (dyn JxlParallelRunner + '_)>,
     ) -> Result<bool> {
+        if self.options.enable_repeated_decoding {
+            return Err(Error::ApiUsageError(
+                "cannot flush partial pixels in repeated decoding mode",
+            ));
+        }
         let Some(profile) = self.codestream_parser.output_color_profile.as_ref() else {
             return Ok(false);
         };
