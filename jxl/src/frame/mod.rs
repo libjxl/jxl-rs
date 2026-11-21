@@ -359,6 +359,7 @@ pub struct Frame {
     // LF groups that received data and thus should trigger a modular
     // re-render of the corresponding groups.
     dirty_lf_groups: BTreeSet<usize>,
+    pub(crate) channel_cache: Option<Arc<modular::ChannelCache>>,
     buffer_recycler: Arc<BufferRecycler>,
     // LF groups that received data or have modified neighbors and need to be previewed.
     lf_preview_dirty_groups: BTreeSet<usize>,

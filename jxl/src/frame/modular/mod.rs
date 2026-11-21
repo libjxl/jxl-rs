@@ -240,6 +240,59 @@ impl ScratchSpace {
     }
 }
 
+#[derive(Debug)]
+struct CachedStream {
+    consumed_bits: usize,
+    tiles: Vec<buffers::ModularChannel>,
+}
+
+/// View-independent, complete channel tiles keyed by modular substream. A missing
+/// entry is decoded from the retained section, not treated as an empty tile.
+#[derive(Debug, Default)]
+pub(crate) struct ChannelCache {
+    streams: Mutex<std::collections::HashMap<usize, Arc<CachedStream>>>,
+}
+
+fn decode_or_restore(
+    cache: Option<&ChannelCache>,
+    id: usize,
+    mut channels: Vec<&mut buffers::ModularChannel>,
+    br: &mut BitReader,
+    recycler: &BufferRecycler,
+    decode: impl FnOnce(Vec<&mut buffers::ModularChannel>, &mut BitReader) -> Result<()>,
+) -> Result<()> {
+    let Some(cache) = cache.filter(|_| !channels.is_empty()) else {
+        return decode(channels, br);
+    };
+    let cached = cache.streams.lock().unwrap().get(&id).cloned();
+    if let Some(cached) = cached {
+        br.skip_bits(cached.consumed_bits)?;
+        debug_assert_eq!(channels.len(), cached.tiles.len());
+        for (dst, src) in channels.into_iter().zip(&cached.tiles) {
+            dst.shift = src.shift;
+            dst.bit_depth = src.bit_depth;
+            for y in 0..src.data.byte_size().1 {
+                dst.data.row_mut(y).copy_from_slice(src.data.row(y));
+            }
+        }
+        return Ok(());
+    }
+    let start = br.total_bits_read();
+    decode(channels.iter_mut().map(|c| &mut **c).collect(), br)?;
+    let tiles = channels
+        .iter()
+        .map(|c| c.try_clone(recycler))
+        .collect::<Result<Vec<_>>>()?;
+    cache.streams.lock().unwrap().insert(
+        id,
+        Arc::new(CachedStream {
+            consumed_bits: br.total_bits_read() - start,
+            tiles,
+        }),
+    );
+    Ok(())
+}
+
 /// A modular image is a sequence of channels to which one or more transforms might have been
 /// applied. We represent a modular image as a list of buffers, some of which are coded in the
 /// bitstream; other buffers are obtained as the output of one of the transformation steps.
@@ -250,6 +303,7 @@ impl ScratchSpace {
 /// transforms to each of the groups in the input of the transforms.
 #[derive(Debug)]
 pub struct FullModularImage {
+    pub(super) channel_cache: Option<Arc<ChannelCache>>,
     buffer_info: Vec<ModularBufferInfo>,
     transform_steps: Vec<TransformStepChunk>,
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
@@ -359,6 +413,7 @@ impl FullModularImage {
 
         if channels.is_empty() {
             return Ok(Self {
+                channel_cache: None,
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
@@ -546,6 +601,7 @@ impl FullModularImage {
         let can_do_partial_render = !has_problematic_palette_transform && !has_small_group_tiles;
 
         Ok(FullModularImage {
+            channel_cache: None,
             buffer_info,
             transform_steps,
             section_buffer_indices,
@@ -584,17 +640,26 @@ impl FullModularImage {
             0,
             &self.recycler,
             |bufs| {
-                decode_modular_subbitstream(
+                decode_or_restore(
+                    self.channel_cache.as_deref(),
+                    0,
                     bufs,
-                    self.storage,
-                    ModularStreamId::GlobalData.get_id(frame_header),
-                    self.global_header.clone(),
-                    global_tree,
                     br,
-                    Some(&mut decoded_if_partial),
-                    &mut scratch,
                     &self.recycler,
-                    self.level5_limits,
+                    |bufs, br| {
+                        decode_modular_subbitstream(
+                            bufs,
+                            self.storage,
+                            ModularStreamId::GlobalData.get_id(frame_header),
+                            self.global_header.clone(),
+                            global_tree,
+                            br,
+                            Some(&mut decoded_if_partial),
+                            &mut scratch,
+                            &self.recycler,
+                            self.level5_limits,
+                        )
+                    },
                 )
             },
         );
@@ -680,19 +745,28 @@ impl FullModularImage {
             grid,
             &self.recycler,
             |bufs| {
-                decode_modular_subbitstream(
-                    bufs,
-                    self.storage,
+                decode_or_restore(
+                    self.channel_cache.as_deref(),
                     stream.get_id(frame_header),
-                    None,
-                    global_tree,
+                    bufs,
                     br,
-                    None,
-                    &mut scratch,
                     &self.recycler,
-                    self.level5_limits,
-                )?;
-                Ok(())
+                    |bufs, br| {
+                        decode_modular_subbitstream(
+                            bufs,
+                            self.storage,
+                            stream.get_id(frame_header),
+                            None,
+                            global_tree,
+                            br,
+                            None,
+                            &mut scratch,
+                            &self.recycler,
+                            self.level5_limits,
+                        )?;
+                        Ok(())
+                    },
+                )
             },
         )?;
         drop(scratch);

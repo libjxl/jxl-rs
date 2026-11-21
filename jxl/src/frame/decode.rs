@@ -315,6 +315,7 @@ impl Frame {
             )),
             epf_sigma: Arc::new(SharedSnapshot::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
+            channel_cache: None,
             buffer_recycler,
             lf_preview_dirty_groups: BTreeSet::new(),
         }))
@@ -452,7 +453,7 @@ impl Frame {
                 None
             };
 
-            let modular_global = FullModularImage::read(
+            let mut modular_global = FullModularImage::read(
                 &self.header,
                 &self.decoder_state.file_header.image_metadata,
                 self.modular_color_channels(),
@@ -462,6 +463,8 @@ impl Frame {
                 self.decoder_state.modular_storage(),
                 self.decoder_state.level5_limits,
             )?;
+
+            modular_global.channel_cache = self.channel_cache.clone();
 
             // Ensure that, if we call this function again, we resume from just after
             // reading modular global data (excluding section 0 channels).

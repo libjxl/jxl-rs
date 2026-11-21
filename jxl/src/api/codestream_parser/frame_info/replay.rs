@@ -25,6 +25,7 @@ impl Deref for ReadySection {
 }
 
 struct Record {
+    channels: Option<Arc<crate::frame::modular::ChannelCache>>,
     header: FrameHeader,
     toc: Toc,
     before: (usize, usize),
@@ -83,7 +84,7 @@ impl FrameInfo {
         before: (usize, usize),
         level5: bool,
     ) {
-        let frame = self.frame.as_ref().unwrap();
+        let frame = self.frame.as_mut().unwrap();
         if frame.supports_repeated_render() {
             return;
         }
@@ -92,7 +93,13 @@ impl FrameInfo {
             .zip(self.replay.slots)
             .filter_map(|(used, id)| if used { id } else { None })
             .collect();
+        if frame.header().is_visible()
+            && frame.header().encoding == crate::headers::frame_header::Encoding::Modular
+        {
+            frame.channel_cache = Some(Arc::default());
+        }
         self.replay.pending = Some(Record {
+            channels: frame.channel_cache.clone(),
             header: frame.header().clone(),
             toc: frame.toc().clone(),
             before,
@@ -123,7 +130,9 @@ impl FrameInfo {
 
     pub(in crate::api::codestream_parser) fn release_target(&mut self) {
         self.repeat_ready = false;
-        if self.replay.target.take().is_some() {
+        if let Some(target) = self.replay.target.take() {
+            // Once only a reference, keep its compressed representation alone.
+            self.replay.records.get_mut(&target).unwrap().channels = None;
             self.replay.prune();
         }
     }
@@ -183,6 +192,7 @@ impl FrameInfo {
                 shift,
                 viewport,
             )?;
+            replay.frame.as_mut().unwrap().channel_cache = r.channels.clone();
             if let Some(slot) = stored_slot(&r.header) {
                 slots[slot] = Some(id);
             }
