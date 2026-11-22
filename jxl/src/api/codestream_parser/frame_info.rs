@@ -18,6 +18,7 @@ use crate::api::{
 };
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
+use crate::frame::modular::ModularChannelCache;
 use crate::frame::{DecoderState, Frame, HfMetaSplitter, LfImageSplitter, Section};
 use crate::headers::FileHeader;
 use crate::headers::encodings::UnconditionalCoder;
@@ -71,6 +72,7 @@ impl SectionState {
 }
 
 struct Record {
+    channels: Option<Arc<ModularChannelCache>>,
     header: FrameHeader,
     toc: Toc,
     before: (usize, usize),
@@ -103,9 +105,17 @@ impl ReplayCache {
         self.records.retain(|id, _| live.contains(id));
     }
 
+    fn clear_target(&mut self) {
+        if let Some(id) = self.target.take() {
+            // Once only a reference, keep its compressed representation alone.
+            let record = self.records.get_mut(&id).unwrap();
+            record.channels = None;
+        }
+    }
+
     fn reset(&mut self, keep: [bool; 8]) {
         self.pending = None;
-        self.target = None;
+        self.clear_target();
         for (slot, keep) in self.slots.iter_mut().zip(keep) {
             if !keep {
                 *slot = None;
@@ -223,13 +233,17 @@ impl FrameInfo {
     }
 
     pub(super) fn begin_record(&mut self, before: (usize, usize)) {
-        let frame = self.frame.as_ref().unwrap();
+        let frame = self.frame.as_mut().unwrap();
         let dependencies = used_slots(frame.header())
             .into_iter()
             .zip(self.replay.slots)
             .filter_map(|(used, id)| if used { id } else { None })
             .collect();
+        if frame.header().is_visible() && frame.header().encoding == Encoding::Modular {
+            frame.channel_cache = Some(Arc::default());
+        }
         self.replay.pending = Some(Record {
+            channels: frame.channel_cache.clone(),
             header: frame.header().clone(),
             toc: frame.toc().clone(),
             before,
@@ -277,7 +291,7 @@ impl FrameInfo {
 
     pub(super) fn release_target(&mut self) {
         if self.replay.target.is_some() {
-            self.replay.target = None;
+            self.replay.clear_target();
             self.replay.prune();
         }
     }
@@ -943,6 +957,8 @@ impl CodestreamParser {
                 self.downsample_factor,
                 viewport,
             )?;
+            let frame = replay.frame.as_mut().unwrap();
+            frame.channel_cache = r.channels.clone();
             if let Some(slot) = stored_slot(&r.header) {
                 slots[slot] = Some(id);
             }
