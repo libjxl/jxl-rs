@@ -33,6 +33,26 @@ pub(super) struct FrameScanInfo {
     current_frame_box_parser_checkpoint: Option<BoxParserCheckpoint>,
 }
 
+pub(super) fn used_slots(header: &FrameHeader) -> [bool; 8] {
+    let mut slots = [false; 8];
+    if header.needs_blending() {
+        for info in header
+            .ec_blending_info
+            .iter()
+            .chain(std::iter::once(&header.blending_info))
+        {
+            slots[info.source as usize] = true;
+        }
+    }
+    if header.has_patches() {
+        slots[..DecoderState::MAX_STORED_FRAMES].fill(true);
+    }
+    if header.has_lf_frame() {
+        slots[DecoderState::MAX_STORED_FRAMES + header.lf_level as usize] = true;
+    }
+    slots
+}
+
 impl FrameScanInfo {
     pub fn new() -> Self {
         Self {
@@ -73,22 +93,7 @@ impl FrameScanInfo {
         // Track frame dependencies through reference and LF slots. For blending we know
         // exactly which slots are used. For patches we conservatively assume any
         // reference slot may be used.
-        let mut used_slots = [false; 8];
-        if header.needs_blending() {
-            for blending_info in header
-                .ec_blending_info
-                .iter()
-                .chain(std::iter::once(&header.blending_info))
-            {
-                used_slots[blending_info.source as usize] = true;
-            }
-        }
-        if header.has_patches() {
-            used_slots[..DecoderState::MAX_STORED_FRAMES].fill(true);
-        }
-        if header.has_lf_frame() {
-            used_slots[DecoderState::MAX_STORED_FRAMES + header.lf_level as usize] = true;
-        }
+        let used_slots = used_slots(header);
 
         let decode_start = (0..8)
             .filter(|&s| used_slots[s])
