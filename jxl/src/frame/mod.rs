@@ -69,11 +69,20 @@ pub struct PassState {
 
 use crate::util::{CacheLine, SharedSnapshot};
 
+#[derive(Default)]
+pub(crate) struct GroupCoefficients {
+    values: Vec<CacheLine>,
+    pass_bits: Vec<usize>,
+}
+
+/// Only complete groups are published. Incomplete groups remain local to a decode.
+pub(crate) type VarDctCoeffCache = Vec<Mutex<Option<GroupCoefficients>>>;
+
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
     dequant_matrices: DequantMatrices,
-    hf_coefficients: Vec<Mutex<Vec<CacheLine>>>,
+    hf_coefficients: Vec<Mutex<GroupCoefficients>>,
     use_i16: bool,
 }
 
@@ -356,6 +365,7 @@ pub struct Frame {
     // LF groups that received data and thus should trigger a modular
     // re-render of the corresponding groups.
     dirty_lf_groups: BTreeSet<usize>,
+    pub(crate) coeff_cache: Option<Arc<VarDctCoeffCache>>,
     pub(crate) channel_cache: Option<Arc<modular::ModularChannelCache>>,
     buffer_recycler: Arc<BufferRecycler>,
     // LF groups that received data or have modified neighbors and need to be previewed.

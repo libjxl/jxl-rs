@@ -72,6 +72,7 @@ impl SectionState {
 }
 
 struct Record {
+    coeffs: Option<Arc<crate::frame::VarDctCoeffCache>>,
     channels: Option<Arc<ModularChannelCache>>,
     header: FrameHeader,
     toc: Toc,
@@ -110,6 +111,7 @@ impl ReplayCache {
             // Once only a reference, keep its compressed representation alone.
             let record = self.records.get_mut(&id).unwrap();
             record.channels = None;
+            record.coeffs = None;
         }
     }
 
@@ -242,7 +244,15 @@ impl FrameInfo {
         if frame.header().is_visible() && frame.header().encoding == Encoding::Modular {
             frame.channel_cache = Some(Arc::default());
         }
+        if frame.header().is_visible() && frame.header().encoding == Encoding::VarDCT {
+            frame.coeff_cache = Some(Arc::new(
+                (0..frame.header().num_groups())
+                    .map(|_| Default::default())
+                    .collect(),
+            ));
+        }
         self.replay.pending = Some(Record {
+            coeffs: frame.coeff_cache.clone(),
             channels: frame.channel_cache.clone(),
             header: frame.header().clone(),
             toc: frame.toc().clone(),
@@ -958,6 +968,7 @@ impl CodestreamParser {
                 viewport,
             )?;
             let frame = replay.frame.as_mut().unwrap();
+            frame.coeff_cache = r.coeffs.clone();
             frame.channel_cache = r.channels.clone();
             if let Some(slot) = stored_slot(&r.header) {
                 slots[slot] = Some(id);

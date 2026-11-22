@@ -794,6 +794,7 @@ pub fn decode_vardct_group(
     frame_header: &FrameHeader,
     lf_global: &LfGlobalState,
     hf_global: &HfGlobalState,
+    cache: Option<&super::VarDctCoeffCache>,
     hf_meta: &HfMetadata,
     lf_image: &[Image<f32>; 3],
     quant_biases: &[f32; 4],
@@ -806,6 +807,20 @@ pub fn decode_vardct_group(
     let block_group_rect = frame_header.block_group_rect(group);
     debug!(?block_group_rect);
     let log_group_dim = frame_header.log_group_dim();
+    let mut entry = cache.map(|cache| cache[group].try_lock().unwrap());
+    let hit = entry.as_ref().is_some_and(|e| e.is_some());
+    let starts: SmallVec<_, 4> = if let Some(cached) = entry.as_deref().and_then(Option::as_ref) {
+        // Each reader continues into Modular data after the VarDCT payload.
+        for (pass, br) in passes.iter_mut() {
+            br.skip_bits(cached.pass_bits[*pass])?;
+        }
+        SmallVec::new()
+    } else if entry.is_some() {
+        passes.iter().map(|(_, br)| br.total_bits_read()).collect()
+    } else {
+        SmallVec::new()
+    };
+    let passes = if hit { &mut passes[..0] } else { passes };
     buffers.ensure_num_nzeros(passes.len());
     let (pass_chunks, _) = buffers.num_nzeros_storage[..passes.len() * 3].as_chunks_mut::<3>();
 
@@ -839,10 +854,16 @@ pub fn decode_vardct_group(
     let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let use_i16 = hf_global.use_i16;
-    let is_multi_pass =
-        !hf_global.hf_coefficients.is_empty() && pass_info.len() < hf_global.passes.len();
-    let mut locked_coeffs = if is_multi_pass {
-        let mut guard = hf_global.hf_coefficients[group].try_lock().unwrap();
+    let use_group_coefficients = entry.is_some()
+        || (!hf_global.hf_coefficients.is_empty() && pass_info.len() < hf_global.passes.len());
+    let mut local = (use_group_coefficients && !hit)
+        .then(|| hf_global.hf_coefficients[group].try_lock().unwrap());
+    let mut locked_coeffs = entry
+        .as_deref_mut()
+        .and_then(Option::as_mut)
+        .or(local.as_deref_mut());
+    if let Some(group) = &mut locked_coeffs {
+        let guard = &mut group.values;
         if guard.is_empty() {
             let num_cache_lines = if use_i16 {
                 num_cache_lines_for::<i16>(GROUP_DIM * GROUP_DIM * 3)
@@ -852,10 +873,7 @@ pub fn decode_vardct_group(
             guard.try_reserve_exact(num_cache_lines)?;
             guard.resize(num_cache_lines, CacheLine::default());
         }
-        Some(guard)
-    } else {
-        None
-    };
+    }
     let mut coeffs_offset = 0;
     let transform_buffer = &mut buffers.transform_buffer;
 
@@ -940,7 +958,11 @@ pub fn decode_vardct_group(
 
             let (mut coeffs, offset) = match &mut locked_coeffs {
                 Some(locked) => (
-                    CoeffsMut::from_cachelines(&mut locked[..], use_i16, GROUP_DIM * GROUP_DIM),
+                    CoeffsMut::from_cachelines(
+                        &mut locked.values[..],
+                        use_i16,
+                        GROUP_DIM * GROUP_DIM,
+                    ),
                     coeffs_offset,
                 ),
                 None => (
@@ -949,7 +971,11 @@ pub fn decode_vardct_group(
                 ),
             };
 
-            let mut block_nonzeros = if is_multi_pass { [1; 3] } else { [0; 3] };
+            let mut block_nonzeros = if use_group_coefficients {
+                [1; 3]
+            } else {
+                [0; 3]
+            };
 
             for PassInfo {
                 histogram_index,
@@ -995,7 +1021,7 @@ pub fn decode_vardct_group(
                     if nonzeros == 0 {
                         continue;
                     }
-                    if !is_multi_pass && block_nonzeros[c] == 0 {
+                    if !use_group_coefficients && block_nonzeros[c] == 0 {
                         coeffs.zero_channel(c, num_coeffs);
                     }
                     block_nonzeros[c] += nonzeros;
@@ -1049,7 +1075,7 @@ pub fn decode_vardct_group(
                     block_nonzeros,
                 )?;
             }
-            if is_multi_pass {
+            if use_group_coefficients {
                 coeffs_offset += num_coeffs;
             }
         }
@@ -1064,6 +1090,16 @@ pub fn decode_vardct_group(
         let mut reader = std::mem::take(reader).unwrap();
         reader.reclaim_lz77_scratch(lz77_window);
         reader.check_final_state(&hf_global.passes[*pass].histograms, br)?;
+    }
+    drop(pass_info);
+    if let (Some(entry), Some(local)) = (entry.as_deref_mut(), local.as_deref_mut()) {
+        for ((pass, br), start) in passes.iter().zip(starts.iter()) {
+            debug_assert_eq!(*pass, local.pass_bits.len());
+            local.pass_bits.push(br.total_bits_read() - start);
+        }
+        if local.pass_bits.len() == hf_global.passes.len() {
+            *entry = Some(std::mem::take(local));
+        }
     }
     Ok(())
 }
