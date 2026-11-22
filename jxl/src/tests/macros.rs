@@ -13,6 +13,13 @@ macro_rules! declare_test_file_common {
                 crate::tests::decode::decode::<f32>(&file, Default::default()).unwrap();
             }
 
+            #[test]
+            fn [<test_compare_repeated_decoding_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                let file = std::fs::read(&path).unwrap();
+                crate::tests::compare_repeated_decoding::run(&path, &file);
+            }
+
             fn [<compare_crop_downsampled_ $ident>](downsample_factor: u8) {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
