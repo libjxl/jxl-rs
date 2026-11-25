@@ -490,6 +490,10 @@ impl Frame {
             self.section0_render_up_to_date = false;
         }
 
+        if !allow_partial {
+            self.mark_lf_global_done();
+        }
+
         Ok(())
     }
 

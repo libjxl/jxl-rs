@@ -346,9 +346,13 @@ pub struct JxlFrameHeader {
     pub size: (usize, usize),
 }
 
-/// Progressive decoding status for a frame, ordered from coarsest (`Pass8x`) to finest (`Pass1x`).
+/// Progressive decoding status for a frame, ordered from coarsest (`LfGlobal`) to finest (`Pass1x`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum JxlProgressiveStatus {
+    /// The frame's global LF section is complete. For Modular frames with a
+    /// Squeeze transform this section carries the coarsest levels of the
+    /// image, so it is the first point at which a full-frame preview exists.
+    LfGlobal,
     /// 8x downsampled (DC / LF) data is complete.
     Pass8x,
     /// Salient pass for 4x downsampled data is complete.

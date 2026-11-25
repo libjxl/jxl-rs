@@ -1983,7 +1983,8 @@ fn test_sample_limit_consecutive_nonvisible_frames() {
     ));
 }
 
-const ALL_PROGRESSIVE_STATUSES: [JxlProgressiveStatus; 7] = [
+const ALL_PROGRESSIVE_STATUSES: [JxlProgressiveStatus; 8] = [
+    JxlProgressiveStatus::LfGlobal,
     JxlProgressiveStatus::Pass8x,
     JxlProgressiveStatus::Pass4xSalient,
     JxlProgressiveStatus::Pass4x,

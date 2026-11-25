@@ -636,6 +636,11 @@ impl CodestreamParser {
             self.frame_info.remaining_sections(),
             self.frame_info.ready_section_data(),
         );
+        if needed == 0 && is_lower_bound {
+            // The whole LfGlobal section is buffered but not yet read, so whether
+            // it holds a preview is decided by the next `process` call.
+            return JxlBytesNeeded::Unknown;
+        }
         if process_mode == ProcessMode::SkipOutput && frame.header().is_visible() {
             is_lower_bound = true;
         }

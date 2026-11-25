@@ -381,6 +381,26 @@ impl Frame {
                 .any(|p| self.header.passes.pass_status(p) == Some(JxlProgressiveStatus::Pass8x))
     }
 
+    /// Whether a complete LfGlobal section alone yields a full-frame preview:
+    /// a Modular frame whose Squeeze transform puts its coarsest levels there.
+    /// `None` until the section's modular header has been read.
+    fn lf_global_paints(&self) -> Option<bool> {
+        self.lf_global.as_ref().map(|g| {
+            self.header.encoding == Encoding::Modular
+                && self.header.num_toc_entries() > 1
+                && g.modular_global.can_do_early_partial_render()
+        })
+    }
+
+    pub(super) fn mark_lf_global_done(&mut self) {
+        if self.header.is_visible() && self.lf_global_paints() == Some(true) {
+            self.group_status.progressive_status = self
+                .group_status
+                .progressive_status
+                .max(Some(JxlProgressiveStatus::LfGlobal));
+        }
+    }
+
     pub(super) fn mark_lf_done(&mut self) {
         if self.header.is_visible() && self.has_separate_8x_lf() {
             self.group_status.progressive_status = self
@@ -401,6 +421,18 @@ impl Frame {
             return (0, false);
         }
 
+        // Without a preview in LfGlobal (and in any frame that is not shown) the
+        // first milestone is the 8x one. Until the section's header is read we
+        // cannot tell, so its end is a lower bound.
+        let lf_global_paints = self.lf_global_paints();
+        let target = if target == JxlProgressiveStatus::LfGlobal
+            && (lf_global_paints == Some(false) || !self.header.is_visible())
+        {
+            JxlProgressiveStatus::Pass8x
+        } else {
+            target
+        };
+        let undecided = target == JxlProgressiveStatus::LfGlobal && lf_global_paints.is_none();
         let is_lower_bound = !self.header.is_visible()
             && !(self.header.frame_type == FrameType::LFFrame
                 && self.header.lf_level == 1
@@ -409,25 +441,26 @@ impl Frame {
         let max_toc_idx = if !self.header.is_visible() {
             self.toc.entries.len() - 1
         } else {
-            let last_section =
-                if target == JxlProgressiveStatus::Pass8x && self.has_separate_8x_lf() {
-                    if self.header.encoding == Encoding::VarDCT {
-                        Section::HfGlobal
-                    } else {
-                        Section::Lf {
-                            group: self.header.num_lf_groups() - 1,
-                        }
-                    }
+            let last_section = if target == JxlProgressiveStatus::LfGlobal {
+                Section::LfGlobal
+            } else if target == JxlProgressiveStatus::Pass8x && self.has_separate_8x_lf() {
+                if self.header.encoding == Encoding::VarDCT {
+                    Section::HfGlobal
                 } else {
-                    let num_passes = self.header.passes.num_passes as usize;
-                    let pass = (0..num_passes)
-                        .find(|&p| self.header.passes.pass_status(p) >= Some(target))
-                        .unwrap_or(num_passes - 1);
-                    Section::Hf {
-                        group: self.header.num_groups() - 1,
-                        pass,
+                    Section::Lf {
+                        group: self.header.num_lf_groups() - 1,
                     }
-                };
+                }
+            } else {
+                let num_passes = self.header.passes.num_passes as usize;
+                let pass = (0..num_passes)
+                    .find(|&p| self.header.passes.pass_status(p) >= Some(target))
+                    .unwrap_or(num_passes - 1);
+                Section::Hf {
+                    group: self.header.num_groups() - 1,
+                    pass,
+                }
+            };
             let max_logical_idx = self.get_section_idx(last_section);
             if self.toc.permuted {
                 *self.toc.permutation.0[..=max_logical_idx]
@@ -446,7 +479,10 @@ impl Frame {
                 .sum::<usize>()
                 .saturating_sub(ready_section_data)
         });
-        (needed + usize::from(is_lower_bound), is_lower_bound)
+        (
+            needed + usize::from(is_lower_bound),
+            is_lower_bound || undecided,
+        )
     }
 
     #[instrument(level = "debug", skip(self), ret)]
