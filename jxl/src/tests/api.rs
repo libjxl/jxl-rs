@@ -2135,3 +2135,32 @@ fn test_progressive_status_and_bytes_needed() {
     let chunked = wrap_with_jxlp_chunks(&prog, &[0, 50, 200, 600, 1500]);
     assert!(check_progressive_stepping(&chunked, false).len() >= 3);
 }
+
+#[test]
+fn test_lf_global_has_preview() {
+    // (file, whether LfGlobal holds a Squeeze preview)
+    for (path, expected) in [
+        ("resources/test/efb.jxl", true),
+        ("resources/test/green_queen_modular_e3.jxl", false),
+        ("resources/test/green_queen_vardct_e3.jxl", false),
+    ] {
+        let data = std::fs::read(path).unwrap();
+        let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+        assert_eq!(decoder.lf_global_has_preview(), None);
+        let mut pos = 0;
+        while decoder.lf_global_has_preview().is_none() {
+            let mut slice = &data[pos..pos + 64];
+            decoder.process(&mut slice, None, None).unwrap();
+            pos += 64 - slice.len();
+        }
+        assert_eq!(decoder.lf_global_has_preview(), Some(expected), "{path}");
+        // Known from the section's header, long before the section is complete.
+        assert_eq!(decoder.frame_progressive_status(), None, "{path}");
+        let JxlBytesNeeded::Exact(needed) =
+            decoder.bytes_needed_for_status(JxlProgressiveStatus::LfGlobal)
+        else {
+            panic!("{path}: expected an exact answer once the preview is known");
+        };
+        assert!(needed > 0, "{path}");
+    }
+}
