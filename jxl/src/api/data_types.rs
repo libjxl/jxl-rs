@@ -349,9 +349,13 @@ pub struct JxlFrameHeader {
 /// Progressive decoding status for a frame, ordered from coarsest (`LfGlobal`) to finest (`Pass1x`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum JxlProgressiveStatus {
-    /// The frame's global LF section is complete. For Modular frames with a
-    /// Squeeze transform this section carries the coarsest levels of the
-    /// image, so it is the first point at which a full-frame preview exists.
+    /// The frame's LfGlobal section is complete and holds a full-frame preview.
+    ///
+    /// Only reached by Modular frames with a Squeeze transform, whose LfGlobal
+    /// carries the coarsest levels of the image (see
+    /// [`JxlDecoder::lf_global_has_preview`](crate::api::JxlDecoder::lf_global_has_preview)).
+    /// Other frames go straight to `Pass8x` or later, and asking how many
+    /// bytes they need for `LfGlobal` gives the answer for `Pass8x`.
     LfGlobal,
     /// 8x downsampled (DC / LF) data is complete.
     Pass8x,
@@ -375,8 +379,10 @@ pub enum JxlBytesNeeded {
     /// Exact number of additional input bytes required (`0` if already reached).
     Exact(usize),
     /// Lower bound on the number of additional input bytes required (`> 0`).
-    /// Returned when future container boxes, an in-progress TOC, or an upcoming frame
-    /// header/TOC prevent knowing the exact byte count.
+    /// Returned when future container boxes, an in-progress TOC, an upcoming frame
+    /// header/TOC, or a frame that is not shown prevent knowing the exact byte count;
+    /// also for `LfGlobal` and `Pass8x` in a Modular frame until the start of its
+    /// LfGlobal section has been read, since that decides where the first milestone is.
     LowerBound(usize),
     /// Not enough information is available to estimate the required bytes.
     Unknown,
