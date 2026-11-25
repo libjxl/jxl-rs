@@ -38,6 +38,7 @@ struct SectionState {
     hf_global_done: bool,
     completed_passes: Vec<u8>,
     lf_global_flush_len: usize,
+    lf_global_header_try_len: usize,
 }
 
 impl SectionState {
@@ -48,6 +49,7 @@ impl SectionState {
             hf_global_done: false,
             completed_passes: vec![0; num_groups],
             lf_global_flush_len: 0,
+            lf_global_header_try_len: 0,
         }
     }
 }
@@ -570,6 +572,20 @@ impl FrameInfo {
         }
 
         if !self.section_state.lf_global_done {
+            // Read the LfGlobal header from the prefix we have, so that whether
+            // the section holds a preview is known long before it is complete.
+            // Retried only as the prefix doubles.
+            if frame.lf_global_paints().is_none()
+                && self
+                    .sections
+                    .front()
+                    .is_some_and(|s| s.section == Section::LfGlobal)
+                && self.ready_section_data > 2 * self.section_state.lf_global_header_try_len
+            {
+                self.section_state.lf_global_header_try_len = self.ready_section_data;
+                let prefix = &self.sections[0].data[..self.ready_section_data];
+                let _ = frame.read_lf_global_header(&mut BitReader::new(prefix));
+            }
             return Ok(data_for_next_section);
         }
 

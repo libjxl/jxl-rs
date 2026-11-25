@@ -606,6 +606,17 @@ impl CodestreamParser {
         self.frame_info.frame()?.progressive_status()
     }
 
+    pub(super) fn lf_global_has_preview(&self) -> Option<bool> {
+        let ParserState::Sections {
+            is_preview: false,
+            process_mode: ProcessMode::Process,
+        } = self.state
+        else {
+            return None;
+        };
+        self.frame_info.frame()?.lf_global_paints()
+    }
+
     pub(super) fn bytes_needed_for_status(
         &self,
         target: JxlProgressiveStatus,

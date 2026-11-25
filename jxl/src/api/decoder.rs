@@ -421,6 +421,14 @@ impl JxlDecoder {
             .frame_progressive_status(&self.options)
     }
 
+    /// Whether the current frame has a full-frame preview in its LfGlobal
+    /// section (a Modular frame with a Squeeze transform), so that a prefix of
+    /// that section already renders. `None` until enough of the section has
+    /// been seen to tell, or when no visible frame is being decoded.
+    pub fn lf_global_has_preview(&self) -> Option<bool> {
+        self.codestream_parser.lf_global_has_preview()
+    }
+
     /// Returns the number of additional input bytes needed to reach `target` progressive
     /// decoding status for the current frame.
     pub fn bytes_needed_for_status(&self, target: JxlProgressiveStatus) -> JxlBytesNeeded {

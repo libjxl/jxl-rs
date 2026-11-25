@@ -384,12 +384,13 @@ impl Frame {
     /// Whether a complete LfGlobal section alone yields a full-frame preview:
     /// a Modular frame whose Squeeze transform puts its coarsest levels there.
     /// `None` until the section's modular header has been read.
-    fn lf_global_paints(&self) -> Option<bool> {
-        self.lf_global.as_ref().map(|g| {
-            self.header.encoding == Encoding::Modular
-                && self.header.num_toc_entries() > 1
-                && g.modular_global.can_do_early_partial_render()
-        })
+    pub fn lf_global_paints(&self) -> Option<bool> {
+        if self.header.encoding != Encoding::Modular || self.header.num_toc_entries() == 1 {
+            return Some(false);
+        }
+        self.lf_global
+            .as_ref()
+            .map(|g| g.modular_global.can_do_early_partial_render())
     }
 
     pub(super) fn mark_lf_global_done(&mut self) {

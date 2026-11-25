@@ -338,6 +338,25 @@ impl Frame {
 
     #[instrument(level = "debug", skip_all)]
     pub fn decode_lf_global(&mut self, br: &mut BitReader, allow_partial: bool) -> Result<()> {
+        self.decode_lf_global_inner(br, allow_partial, false)
+    }
+
+    /// Reads everything in LfGlobal up to the modular header (trees, transform
+    /// list) and none of the channel data. Fails harmlessly on a prefix that
+    /// is too short; a later `decode_lf_global` resumes after the header.
+    pub fn read_lf_global_header(&mut self, br: &mut BitReader) -> Result<()> {
+        if self.lf_global.is_some() {
+            return Ok(());
+        }
+        self.decode_lf_global_inner(br, true, true)
+    }
+
+    fn decode_lf_global_inner(
+        &mut self,
+        br: &mut BitReader,
+        allow_partial: bool,
+        header_only: bool,
+    ) -> Result<()> {
         debug!(section_size = br.total_bits_available());
 
         if let Some(lfg) = &self.lf_global {
@@ -476,6 +495,10 @@ impl Frame {
                 modular_global,
                 total_bits_read,
             });
+        }
+
+        if header_only {
+            return Ok(());
         }
 
         let lf_global = self.lf_global.as_mut().unwrap();
