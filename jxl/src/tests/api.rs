@@ -2118,6 +2118,10 @@ fn test_progressive_status_and_bytes_needed() {
         ),
         ("resources/test/ooo_jxlp_empty_dc_group_boxes.jxl", false, 1),
         ("resources/test/conformance_test_images/bike.jxl", true, 2),
+        // Modular without Squeeze: nothing to show before the last pass.
+        ("resources/test/green_queen_modular_e3.jxl", true, 1),
+        // The 8x image is a separate LF frame, shown by the frame after it.
+        ("resources/test/progressive_dc_lf_frame.jxl", false, 2),
     ] {
         let data = std::fs::read(path).unwrap();
         let seen = check_progressive_stepping(&data, expect_exact);

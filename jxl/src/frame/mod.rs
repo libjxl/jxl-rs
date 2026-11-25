@@ -294,10 +294,6 @@ impl GroupStatus {
     fn new(frame_header: &FrameHeader) -> Self {
         let count = frame_header.num_groups();
         let ecs = frame_header.num_extra_channels as usize;
-        let progressive_status = (frame_header.is_visible()
-            && frame_header.has_lf_frame()
-            && frame_header.lf_level == 0)
-            .then_some(JxlProgressiveStatus::Pass8x);
         // We don't track noise channels because we pretend they always
         // have the same status as VarDCT channels.
         GroupStatus {
@@ -308,7 +304,7 @@ impl GroupStatus {
             incomplete_groups: count,
             remaining_lf_groups: frame_header.num_lf_groups(),
             remaining_groups_per_pass: vec![count; frame_header.passes.num_passes as usize],
-            progressive_status,
+            progressive_status: None,
         }
     }
 
@@ -393,17 +389,29 @@ impl Frame {
             .map(|g| g.modular_global.can_do_early_partial_render())
     }
 
+    /// Whether the 8x image of this frame is a separate LF frame, which is
+    /// shown once this frame's LfGlobal section is complete.
+    fn shows_lf_frame(&self) -> bool {
+        self.header.is_visible() && self.header.has_lf_frame() && self.header.lf_level == 0
+    }
+
     pub(super) fn mark_lf_global_done(&mut self) {
-        if self.header.is_visible() && self.lf_global_paints() == Some(true) {
-            self.group_status.progressive_status = self
-                .group_status
-                .progressive_status
-                .max(Some(JxlProgressiveStatus::LfGlobal));
-        }
+        let reached = if self.shows_lf_frame() {
+            JxlProgressiveStatus::Pass8x
+        } else if self.header.is_visible() && self.lf_global_paints() == Some(true) {
+            JxlProgressiveStatus::LfGlobal
+        } else {
+            return;
+        };
+        self.group_status.progressive_status =
+            self.group_status.progressive_status.max(Some(reached));
     }
 
     pub(super) fn mark_lf_done(&mut self) {
-        if self.header.is_visible() && self.has_separate_8x_lf() {
+        // The LF groups of a Modular frame hold 8x data only under Squeeze.
+        let has_8x = self.has_separate_8x_lf()
+            && (self.header.encoding == Encoding::VarDCT || self.lf_global_paints() == Some(true));
+        if self.header.is_visible() && has_8x {
             self.group_status.progressive_status = self
                 .group_status
                 .progressive_status
@@ -433,18 +441,23 @@ impl Frame {
         } else {
             target
         };
-        let undecided = target == JxlProgressiveStatus::LfGlobal && lf_global_paints.is_none();
-        let is_lower_bound = !self.header.is_visible()
-            && !(self.header.frame_type == FrameType::LFFrame
-                && self.header.lf_level == 1
-                && target == JxlProgressiveStatus::Pass8x);
+        // Likewise the LF groups of a Modular frame only make an 8x milestone
+        // under Squeeze; without it the first one is the end of a pass.
+        let separate_8x_lf = self.has_separate_8x_lf()
+            && (self.header.encoding == Encoding::VarDCT || lf_global_paints != Some(false));
+        let undecided = lf_global_paints.is_none()
+            && (target == JxlProgressiveStatus::LfGlobal
+                || (target == JxlProgressiveStatus::Pass8x && separate_8x_lf));
+        let is_lower_bound = !self.header.is_visible();
 
         let max_toc_idx = if !self.header.is_visible() {
             self.toc.entries.len() - 1
         } else {
-            let last_section = if target == JxlProgressiveStatus::LfGlobal {
+            let last_section = if target == JxlProgressiveStatus::LfGlobal
+                || (target == JxlProgressiveStatus::Pass8x && self.shows_lf_frame())
+            {
                 Section::LfGlobal
-            } else if target == JxlProgressiveStatus::Pass8x && self.has_separate_8x_lf() {
+            } else if target == JxlProgressiveStatus::Pass8x && separate_8x_lf {
                 if self.header.encoding == Encoding::VarDCT {
                     Section::HfGlobal
                 } else {
