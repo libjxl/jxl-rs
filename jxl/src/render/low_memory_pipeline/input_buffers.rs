@@ -24,15 +24,21 @@ pub(super) struct InputBuffer {
 }
 
 impl InputBuffer {
-    // Returns the number of ready channels.
-    pub(super) fn set_buffer(&self, chan: usize, buf: OwnedRawImage) -> usize {
+    // Returns the number of ready channels, or `None` if `buf` replaced a buffer that was still
+    // pending (the old one is passed to `recycle`). This happens when a group is rendered again
+    // before it got all of its channels, e.g. for noise, which is sent on every render.
+    pub(super) fn set_buffer(
+        &self,
+        chan: usize,
+        buf: OwnedRawImage,
+        recycle: impl FnOnce(OwnedRawImage),
+    ) -> Option<usize> {
         assert!(!self.is_ready.load(Ordering::Relaxed));
-        assert!(
-            self.data[chan].try_write().unwrap().is_none(),
-            "chan: {chan}"
-        );
-        *self.data[chan].try_write().unwrap() = Some(buf);
-        self.ready_channels.fetch_add(1, Ordering::AcqRel) + 1
+        if let Some(old) = self.data[chan].try_write().unwrap().replace(buf) {
+            recycle(old);
+            return None;
+        }
+        Some(self.ready_channels.fetch_add(1, Ordering::AcqRel) + 1)
     }
 
     pub(super) fn new(num_channels: usize) -> Self {

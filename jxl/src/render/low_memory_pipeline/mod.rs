@@ -440,12 +440,18 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 channel,
                 T::DATA_TYPE_ID,
             );
-            let num_ready = self
-                .input_buffers
-                .get(group_id)
-                .set_buffer(channel, buf.into_raw());
+            let num_ready =
+                self.input_buffers
+                    .get(group_id)
+                    .set_buffer(channel, buf.into_raw(), |old| {
+                        self.shared.buffer_recycler.recycle_raw_buffer(old)
+                    });
             self.shared.group_chan_complete[group_id][channel].store(complete, Ordering::Relaxed);
 
+            // Replacing a pending buffer does not make the group ready.
+            let Some(num_ready) = num_ready else {
+                return Ok(());
+            };
             assert!(num_ready <= self.shared.num_used_channels());
             if num_ready != self.shared.num_used_channels() {
                 return Ok(());
