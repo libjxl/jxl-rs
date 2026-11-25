@@ -2130,3 +2130,20 @@ fn test_progressive_status_and_bytes_needed() {
     let chunked = wrap_with_jxlp_chunks(&prog, &[0, 50, 200, 600, 1500]);
     assert!(check_progressive_stepping(&chunked, false).len() >= 3);
 }
+
+/// Noise is sent on every render of a group, but a flush does not send Modular channels that
+/// have not been decoded yet. Here channel 2 is missing at the flush, so the group stays pending
+/// and the next render sends its noise again, which used to trip an assertion in
+/// `InputBuffer::set_buffer`.
+#[test]
+fn test_fuzzer_partial_render_resends_noise() {
+    let data = include_bytes!("../../tests/testdata/partial_render_resend_noise.jxl");
+    let _ = decode::<f32>(
+        data,
+        DecodeParams {
+            chunk_size: 1,
+            do_flush: true,
+            ..Default::default()
+        },
+    );
+}
