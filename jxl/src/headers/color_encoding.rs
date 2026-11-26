@@ -197,8 +197,9 @@ pub struct ColorEncoding {
 
 impl ColorEncoding {
     pub fn check(&self, _: &Empty) -> Result<(), Error> {
-        if self.color_space == ColorSpace::Unknown
-            || self.tf.transfer_function == TransferFunction::Unknown
+        if !self.want_icc
+            && (self.color_space == ColorSpace::Unknown
+                || self.tf.transfer_function == TransferFunction::Unknown)
             || self.color_space == ColorSpace::XYB
         {
             return Err(Error::InvalidColorEncoding);
@@ -255,5 +256,14 @@ mod test {
             gamma: 0,
         };
         assert!(encoding.check(&Empty {}).is_err());
+    }
+
+    #[test]
+    fn test_icc_with_unknown_color_space() {
+        // all_default = 0, want_icc = 1, color_space = Unknown (selector 2, then 4 bits = 1).
+        let mut br = BitReader::new(&[0b0001_1010]);
+        let encoding = ColorEncoding::read_unconditional(&(), &mut br, &Empty {}).unwrap();
+        assert!(encoding.want_icc);
+        assert_eq!(encoding.color_space, ColorSpace::Unknown);
     }
 }
