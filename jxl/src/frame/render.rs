@@ -435,8 +435,9 @@ impl Frame {
             }
         }
 
-        let largest_group_area = self.header.group_dim().min(self.header.size().0)
-            * self.header.group_dim().min(self.header.size().1);
+        let largest_group_area = (self.header.group_dim().min(self.header.size().0)
+            * self.header.group_dim().min(self.header.size().1))
+        .max(1);
 
         const THREAD_COUNT_DENOMINATOR: usize = 16;
 
@@ -446,9 +447,7 @@ impl Frame {
             for (group, _) in groups.iter() {
                 let sz = self.header.group_rect(*group).size;
                 let area = sz.0 * sz.1;
-                if area >= largest_group_area {
-                    groups_of_work += THREAD_COUNT_DENOMINATOR;
-                }
+                groups_of_work += (area * THREAD_COUNT_DENOMINATOR).div_ceil(largest_group_area);
                 if self.group_status.channel_status[*group][0] == DataStatus::Final {
                     pipeline_mut!(self, p, p.mark_group_to_rerender(*group));
                 }
@@ -460,11 +459,7 @@ impl Frame {
         modular_global.prepare_render(&self.header, |g, c, is_final| {
             let sz = self.header.group_rect(g).size;
             let area = sz.0 * sz.1;
-            if area >= largest_group_area {
-                groups_of_work += THREAD_COUNT_DENOMINATOR / 2;
-            } else if area * 2 >= largest_group_area {
-                groups_of_work += THREAD_COUNT_DENOMINATOR / 4;
-            }
+            groups_of_work += (area * (THREAD_COUNT_DENOMINATOR / 2)).div_ceil(largest_group_area);
             self.group_status.update_status(
                 g,
                 c,
@@ -494,9 +489,7 @@ impl Frame {
         for g in extra_groups_to_vardct_render.iter() {
             let sz = self.header.group_rect(*g).size;
             let area = sz.0 * sz.1;
-            if area >= largest_group_area {
-                groups_of_work += THREAD_COUNT_DENOMINATOR / 2;
-            }
+            groups_of_work += (area * (THREAD_COUNT_DENOMINATOR / 2)).div_ceil(largest_group_area);
         }
 
         const TRANSFORM_STEPS_PER_TASK: usize = 3;
