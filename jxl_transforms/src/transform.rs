@@ -379,6 +379,7 @@ pub fn transform_to_pixels_impl<D: SimdDescriptor>(
     transform_type: HfTransformType,
     lf: &mut [f32],
     transform_buffer: &mut [f32],
+    idct_scratch: &mut IdctLargeScratch,
 ) {
     match transform_type {
         HfTransformType::DCT => d.call(
@@ -469,42 +470,42 @@ pub fn transform_to_pixels_impl<D: SimdDescriptor>(
             #[inline(always)]
             |_| {
                 reinterpreting_dct2d_16_16(d, &mut lf[..256], transform_buffer);
-                idct2d_128_128(d, &mut transform_buffer[0..16384]);
+                idct2d_128_128(d, &mut transform_buffer[0..16384], idct_scratch);
             },
         ),
         HfTransformType::DCT128X64 => d.call(
             #[inline(always)]
             |_| {
                 reinterpreting_dct2d_16_8(d, &mut lf[..128], transform_buffer);
-                idct2d_128_64(d, &mut transform_buffer[0..8192]);
+                idct2d_128_64(d, &mut transform_buffer[0..8192], idct_scratch);
             },
         ),
         HfTransformType::DCT64X128 => d.call(
             #[inline(always)]
             |_| {
                 reinterpreting_dct2d_8_16(d, &mut lf[..128], transform_buffer);
-                idct2d_64_128(d, &mut transform_buffer[0..8192]);
+                idct2d_64_128(d, &mut transform_buffer[0..8192], idct_scratch);
             },
         ),
         HfTransformType::DCT256X256 => d.call(
             #[inline(always)]
             |_| {
                 reinterpreting_dct2d_32_32(d, &mut lf[..1024], transform_buffer);
-                idct2d_256_256(d, &mut transform_buffer[0..65536]);
+                idct2d_256_256(d, &mut transform_buffer[0..65536], idct_scratch);
             },
         ),
         HfTransformType::DCT256X128 => d.call(
             #[inline(always)]
             |_| {
                 reinterpreting_dct2d_32_16(d, &mut lf[..512], transform_buffer);
-                idct2d_256_128(d, &mut transform_buffer[0..32768]);
+                idct2d_256_128(d, &mut transform_buffer[0..32768], idct_scratch);
             },
         ),
         HfTransformType::DCT128X256 => d.call(
             #[inline(always)]
             |_| {
                 reinterpreting_dct2d_16_32(d, &mut lf[..512], transform_buffer);
-                idct2d_128_256(d, &mut transform_buffer[0..32768]);
+                idct2d_128_256(d, &mut transform_buffer[0..32768], idct_scratch);
             },
         ),
         HfTransformType::AFV0 => {
@@ -671,7 +672,8 @@ simd_function!(
         transform_type: HfTransformType,
         lf: &mut [f32],
         transform_buffer: &mut [f32],
+        idct_scratch: &mut IdctLargeScratch,
     ) {
-        transform_to_pixels_impl(d, transform_type, lf, transform_buffer);
+        transform_to_pixels_impl(d, transform_type, lf, transform_buffer, idct_scratch);
     }
 );

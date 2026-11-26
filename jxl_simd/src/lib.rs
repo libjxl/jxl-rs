@@ -36,7 +36,7 @@ pub use x86_64::avx512::Avx512Descriptor;
 #[cfg(all(target_arch = "x86_64", feature = "sse42"))]
 pub use x86_64::sse42::Sse42Descriptor;
 
-pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
+pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync + 'static {
     type F32Vec: F32SimdVec<Descriptor = Self>;
 
     type I32Vec: I32SimdVec<Descriptor = Self>;
@@ -85,6 +85,7 @@ pub trait F32SimdVec:
     + Debug
     + Send
     + Sync
+    + 'static
     + Add<Self, Output = Self>
     + Mul<Self, Output = Self>
     + Sub<Self, Output = Self>
