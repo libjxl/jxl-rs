@@ -294,10 +294,6 @@ impl GroupStatus {
     fn new(frame_header: &FrameHeader) -> Self {
         let count = frame_header.num_groups();
         let ecs = frame_header.num_extra_channels as usize;
-        let progressive_status = (frame_header.is_visible()
-            && frame_header.has_lf_frame()
-            && frame_header.lf_level == 0)
-            .then_some(JxlProgressiveStatus::Pass8x);
         // We don't track noise channels because we pretend they always
         // have the same status as VarDCT channels.
         GroupStatus {
@@ -308,7 +304,7 @@ impl GroupStatus {
             incomplete_groups: count,
             remaining_lf_groups: frame_header.num_lf_groups(),
             remaining_groups_per_pass: vec![count; frame_header.passes.num_passes as usize],
-            progressive_status,
+            progressive_status: None,
         }
     }
 
@@ -381,8 +377,41 @@ impl Frame {
                 .any(|p| self.header.passes.pass_status(p) == Some(JxlProgressiveStatus::Pass8x))
     }
 
+    /// Whether a complete LfGlobal section alone yields a full-frame preview:
+    /// a Modular frame whose Squeeze transform puts its coarsest levels there.
+    /// `None` until the section's modular header has been read.
+    pub fn lf_global_paints(&self) -> Option<bool> {
+        if self.header.encoding != Encoding::Modular || self.header.num_toc_entries() == 1 {
+            return Some(false);
+        }
+        self.lf_global
+            .as_ref()
+            .map(|g| g.modular_global.can_do_early_partial_render())
+    }
+
+    /// Whether the 8x image of this frame is a separate LF frame, which is
+    /// shown once this frame's LfGlobal section is complete.
+    fn shows_lf_frame(&self) -> bool {
+        self.header.is_visible() && self.header.has_lf_frame() && self.header.lf_level == 0
+    }
+
+    pub(super) fn mark_lf_global_done(&mut self) {
+        let reached = if self.shows_lf_frame() {
+            JxlProgressiveStatus::Pass8x
+        } else if self.header.is_visible() && self.lf_global_paints() == Some(true) {
+            JxlProgressiveStatus::LfGlobal
+        } else {
+            return;
+        };
+        self.group_status.progressive_status =
+            self.group_status.progressive_status.max(Some(reached));
+    }
+
     pub(super) fn mark_lf_done(&mut self) {
-        if self.header.is_visible() && self.has_separate_8x_lf() {
+        // The LF groups of a Modular frame hold 8x data only under Squeeze.
+        let has_8x = self.has_separate_8x_lf()
+            && (self.header.encoding == Encoding::VarDCT || self.lf_global_paints() == Some(true));
+        if self.header.is_visible() && has_8x {
             self.group_status.progressive_status = self
                 .group_status
                 .progressive_status
@@ -401,33 +430,51 @@ impl Frame {
             return (0, false);
         }
 
-        let is_lower_bound = !self.header.is_visible()
-            && !(self.header.frame_type == FrameType::LFFrame
-                && self.header.lf_level == 1
-                && target == JxlProgressiveStatus::Pass8x);
+        // Without a preview in LfGlobal (and in any frame that is not shown) the
+        // first milestone is the 8x one. Until the section's header is read we
+        // cannot tell, so its end is a lower bound.
+        let lf_global_paints = self.lf_global_paints();
+        let target = if target == JxlProgressiveStatus::LfGlobal
+            && (lf_global_paints == Some(false) || !self.header.is_visible())
+        {
+            JxlProgressiveStatus::Pass8x
+        } else {
+            target
+        };
+        // Likewise the LF groups of a Modular frame only make an 8x milestone
+        // under Squeeze; without it the first one is the end of a pass.
+        let separate_8x_lf = self.has_separate_8x_lf()
+            && (self.header.encoding == Encoding::VarDCT || lf_global_paints != Some(false));
+        let undecided = lf_global_paints.is_none()
+            && (target == JxlProgressiveStatus::LfGlobal
+                || (target == JxlProgressiveStatus::Pass8x && separate_8x_lf));
+        let is_lower_bound = !self.header.is_visible();
 
         let max_toc_idx = if !self.header.is_visible() {
             self.toc.entries.len() - 1
         } else {
-            let last_section =
-                if target == JxlProgressiveStatus::Pass8x && self.has_separate_8x_lf() {
-                    if self.header.encoding == Encoding::VarDCT {
-                        Section::HfGlobal
-                    } else {
-                        Section::Lf {
-                            group: self.header.num_lf_groups() - 1,
-                        }
-                    }
+            let last_section = if target == JxlProgressiveStatus::LfGlobal
+                || (target == JxlProgressiveStatus::Pass8x && self.shows_lf_frame())
+            {
+                Section::LfGlobal
+            } else if target == JxlProgressiveStatus::Pass8x && separate_8x_lf {
+                if self.header.encoding == Encoding::VarDCT {
+                    Section::HfGlobal
                 } else {
-                    let num_passes = self.header.passes.num_passes as usize;
-                    let pass = (0..num_passes)
-                        .find(|&p| self.header.passes.pass_status(p) >= Some(target))
-                        .unwrap_or(num_passes - 1);
-                    Section::Hf {
-                        group: self.header.num_groups() - 1,
-                        pass,
+                    Section::Lf {
+                        group: self.header.num_lf_groups() - 1,
                     }
-                };
+                }
+            } else {
+                let num_passes = self.header.passes.num_passes as usize;
+                let pass = (0..num_passes)
+                    .find(|&p| self.header.passes.pass_status(p) >= Some(target))
+                    .unwrap_or(num_passes - 1);
+                Section::Hf {
+                    group: self.header.num_groups() - 1,
+                    pass,
+                }
+            };
             let max_logical_idx = self.get_section_idx(last_section);
             if self.toc.permuted {
                 *self.toc.permutation.0[..=max_logical_idx]
@@ -446,7 +493,10 @@ impl Frame {
                 .sum::<usize>()
                 .saturating_sub(ready_section_data)
         });
-        (needed + usize::from(is_lower_bound), is_lower_bound)
+        (
+            needed + usize::from(is_lower_bound),
+            is_lower_bound || undecided,
+        )
     }
 
     #[instrument(level = "debug", skip(self), ret)]

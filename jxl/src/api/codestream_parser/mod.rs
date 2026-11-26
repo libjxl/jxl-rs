@@ -606,6 +606,17 @@ impl CodestreamParser {
         self.frame_info.frame()?.progressive_status()
     }
 
+    pub(super) fn lf_global_has_preview(&self) -> Option<bool> {
+        let ParserState::Sections {
+            is_preview: false,
+            process_mode: ProcessMode::Process,
+        } = self.state
+        else {
+            return None;
+        };
+        self.frame_info.frame()?.lf_global_paints()
+    }
+
     pub(super) fn bytes_needed_for_status(
         &self,
         target: JxlProgressiveStatus,
@@ -636,6 +647,11 @@ impl CodestreamParser {
             self.frame_info.remaining_sections(),
             self.frame_info.ready_section_data(),
         );
+        if needed == 0 && is_lower_bound {
+            // The whole LfGlobal section is buffered but not yet read, so whether
+            // it holds a preview is decided by the next `process` call.
+            return JxlBytesNeeded::Unknown;
+        }
         if process_mode == ProcessMode::SkipOutput && frame.header().is_visible() {
             is_lower_bound = true;
         }
