@@ -128,6 +128,32 @@ pub struct LowMemoryRenderPipeline {
     sorted_buffer_indices: Vec<Vec<(usize, usize, usize)>>,
 }
 
+impl LowMemoryRenderPipeline {
+    // A resent channel must carry the same pixels within the group's valid region; padding may
+    // differ.
+    #[cfg(debug_assertions)]
+    fn check_resent_buffer<T: ImageDataType>(
+        &self,
+        channel: usize,
+        group_id: usize,
+        buf: &crate::image::OwnedRawImage,
+    ) {
+        let data = self.input_buffers.get(group_id).data[channel]
+            .try_read()
+            .unwrap();
+        let Some(old) = data.as_ref() else {
+            return;
+        };
+        let (dx, dy) = self.input_downsample(channel);
+        let (gw, gh) = self.shared.group_size(group_id);
+        let w = gw.shrc(dx) * std::mem::size_of::<T>();
+        assert_eq!(old.byte_size(), buf.byte_size());
+        for y in 0..gh.shrc(dy) {
+            assert!(old.row(y)[..w] == buf.row(y)[..w]);
+        }
+    }
+}
+
 impl RenderPipeline for LowMemoryRenderPipeline {
     type Buffer = RowBuffer;
 
@@ -440,12 +466,15 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 channel,
                 T::DATA_TYPE_ID,
             );
-            let num_ready =
-                self.input_buffers
-                    .get(group_id)
-                    .set_buffer(channel, buf.into_raw(), |old| {
-                        self.shared.buffer_recycler.recycle_raw_buffer(old)
-                    });
+            let buf = buf.into_raw();
+            #[cfg(debug_assertions)]
+            self.check_resent_buffer::<T>(channel, group_id, &buf);
+            let num_ready = self
+                .input_buffers
+                .get(group_id)
+                .set_buffer(channel, buf, |old| {
+                    self.shared.buffer_recycler.recycle_raw_buffer(old)
+                });
             self.shared.group_chan_complete[group_id][channel].store(complete, Ordering::Relaxed);
 
             // Replacing a pending buffer does not make the group ready.
