@@ -51,6 +51,7 @@ pub struct BitsetTreeInner<'a> {
     properties: [u8; MAX_NUM_PROPERTIES],
     num_properties: u8,
     num_leaf_buckets: u8,
+    used_properties: u64,
     references: References<'a>,
     property_buffer: &'a mut [i32; 256],
     storage: ModularStorage,
@@ -65,6 +66,7 @@ impl<'a> BitsetTreeInner<'a> {
         property_buffer: &'a mut [i32; 256],
         storage: ModularStorage,
     ) -> Self {
+        let used_properties = property_mask;
         let mut properties = [0; MAX_NUM_PROPERTIES];
         let mut prop_to_idx = [0u8; 64];
         let mut num_properties = 0;
@@ -193,6 +195,7 @@ impl<'a> BitsetTreeInner<'a> {
             properties,
             num_properties,
             num_leaf_buckets,
+            used_properties,
             references,
             property_buffer,
             storage,
@@ -309,6 +312,7 @@ impl<WP: MaybeWeightedPredictor> ModularChannelDecoder for BitsetTree<'_, WP> {
             pos,
             &self.inner.references,
             self.inner.property_buffer,
+            self.inner.used_properties,
         );
         let prediction_result: PredictionResult = self.inner.predict(prediction_data, wp_pred);
         let dec = self

@@ -20,7 +20,7 @@ use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
 use crate::frame::modular::predict::{
     PredictionData, WeightedPredictorScratch, WeightedPredictorState, clamped_gradient,
 };
-use crate::frame::modular::tree::{TreeNode, compute_properties};
+use crate::frame::modular::tree::{TreeNode, compute_properties_masked};
 use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, Tree};
 use crate::headers::modular::GroupHeader;
 use crate::image::ImageRectMut;
@@ -34,6 +34,7 @@ trait MaybeWeightedPredictor: Sized {
         pos: (usize, usize),
         references: &References,
         prop_buffer: &mut [i32; 256],
+        used_properties: u64,
     ) -> i64;
     fn update_errors(&mut self, _val: i32, _pos: (usize, usize)) {}
 }
@@ -46,8 +47,17 @@ impl MaybeWeightedPredictor for () {
         pos: (usize, usize),
         references: &References,
         prop_buffer: &mut [i32; 256],
+        used_properties: u64,
     ) -> i64 {
-        compute_properties(prediction_data, None, pos.0, pos.1, references, prop_buffer)
+        compute_properties_masked(
+            prediction_data,
+            None,
+            pos.0,
+            pos.1,
+            references,
+            prop_buffer,
+            used_properties,
+        )
     }
 }
 
@@ -59,14 +69,16 @@ impl MaybeWeightedPredictor for WeightedPredictorState<'_> {
         pos: (usize, usize),
         references: &References,
         prop_buffer: &mut [i32; 256],
+        used_properties: u64,
     ) -> i64 {
-        compute_properties(
+        compute_properties_masked(
             prediction_data,
             Some(self),
             pos.0,
             pos.1,
             references,
             prop_buffer,
+            used_properties,
         )
     }
     #[inline(always)]
@@ -125,6 +137,7 @@ struct FlatTreeInner<'a> {
     references: References<'a>,
     property_buffer: &'a mut [i32; 256],
     storage: ModularStorage,
+    used_properties: u64,
 }
 
 enum DynamicReader {
@@ -192,6 +205,7 @@ impl<WP: MaybeWeightedPredictor> ModularChannelDecoder for FlatTree<'_, WP> {
             pos,
             &self.inner.references,
             self.inner.property_buffer,
+            self.inner.used_properties,
         );
         let prediction_result = predict_flat(
             self.inner.nodes,
@@ -741,6 +755,7 @@ pub(super) fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) 
         references,
         property_buffer,
         storage,
+        used_properties,
     };
 
     if no_wp {

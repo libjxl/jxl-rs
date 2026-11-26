@@ -188,16 +188,18 @@ const NUM_TREE_CONTEXTS: usize = 6;
 // Also, the first two properties (the static properties) should be already set by the caller.
 // All other properties should be 0 on the first call in a row.
 
-/// Computes properties for tree traversal. Shared between flat and non-flat prediction.
-/// Returns the weighted predictor prediction value.
+/// Computes properties for tree traversal, skipping property groups not present in
+/// `used_properties`. Note that bit 8 (`left - prev_grad`) also requires maintaining
+/// `property_buffer[9]` (`prev_grad`). Returns the weighted predictor prediction value.
 #[inline(always)]
-pub(super) fn compute_properties(
+pub(super) fn compute_properties_masked(
     prediction_data: PredictionData,
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
     references: &References,
     property_buffer: &mut [i32],
+    used_properties: u64,
 ) -> i64 {
     assert!(property_buffer.len() >= NUM_NONREF_PROPERTIES);
 
@@ -212,25 +214,41 @@ pub(super) fn compute_properties(
     } = prediction_data;
 
     // Position
-    property_buffer[2] = y as i32;
-    property_buffer[3] = x as i32;
+    if (used_properties & ((1 << 2) | (1 << 3))) != 0 {
+        property_buffer[2] = y as i32;
+        property_buffer[3] = x as i32;
+    }
 
-    // Neighbours
-    property_buffer[4] = top.wrapping_abs();
-    property_buffer[5] = left.wrapping_abs();
-    property_buffer[6] = top;
-    property_buffer[7] = left;
+    // Neighbours abs
+    if (used_properties & ((1 << 4) | (1 << 5))) != 0 {
+        property_buffer[4] = top.wrapping_abs();
+        property_buffer[5] = left.wrapping_abs();
+    }
 
-    // Local gradient
-    property_buffer[8] = left.wrapping_sub(property_buffer[9]);
-    property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
+    // Neighbours raw
+    if (used_properties & ((1 << 6) | (1 << 7))) != 0 {
+        property_buffer[6] = top;
+        property_buffer[7] = left;
+    }
 
-    // FFV1 context properties
-    property_buffer[10] = left.wrapping_sub(topleft);
-    property_buffer[11] = topleft.wrapping_sub(top);
-    property_buffer[12] = top.wrapping_sub(topright);
-    property_buffer[13] = top.wrapping_sub(toptop);
-    property_buffer[14] = left.wrapping_sub(leftleft);
+    // Local gradient (prop 8 reads previous pixel's prop 9)
+    if (used_properties & ((1 << 8) | (1 << 9))) != 0 {
+        property_buffer[8] = left.wrapping_sub(property_buffer[9]);
+        property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
+    }
+
+    // FFV1 primary gradient context properties
+    if (used_properties & ((1 << 10) | (1 << 11) | (1 << 12))) != 0 {
+        property_buffer[10] = left.wrapping_sub(topleft);
+        property_buffer[11] = topleft.wrapping_sub(top);
+        property_buffer[12] = top.wrapping_sub(topright);
+    }
+
+    // FFV1 extended differences
+    if (used_properties & ((1 << 13) | (1 << 14))) != 0 {
+        property_buffer[13] = top.wrapping_sub(toptop);
+        property_buffer[14] = left.wrapping_sub(leftleft);
+    }
 
     // Weighted predictor property.
     let (wp_pred, wp_prop) = wp_state
@@ -240,7 +258,7 @@ pub(super) fn compute_properties(
 
     // Reference properties.
     let num_refs = references.num_ref_props;
-    if num_refs != 0 {
+    if num_refs != 0 && (used_properties >> NUM_NONREF_PROPERTIES) != 0 {
         let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
         let src = &references.data[x * num_refs..];
         match num_refs {
@@ -263,6 +281,28 @@ pub(super) fn compute_properties(
     }
 
     wp_pred
+}
+
+/// Computes properties for tree traversal. Shared between flat and non-flat prediction.
+/// Returns the weighted predictor prediction value.
+#[inline(always)]
+pub(super) fn compute_properties(
+    prediction_data: PredictionData,
+    wp_state: Option<&mut WeightedPredictorState>,
+    x: usize,
+    y: usize,
+    references: &References,
+    property_buffer: &mut [i32],
+) -> i64 {
+    compute_properties_masked(
+        prediction_data,
+        wp_state,
+        x,
+        y,
+        references,
+        property_buffer,
+        !0,
+    )
 }
 
 /// Prediction using standard tree traversal.
