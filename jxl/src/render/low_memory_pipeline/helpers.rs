@@ -5,6 +5,40 @@
 
 use crate::util::ChannelVec;
 
+fn collect_distinct_indices<'a, T: 'a>(
+    mut vals: &'a mut [impl AsMut<[T]>],
+    idx: &[(usize, usize, usize)],
+    mut emit: impl FnMut(usize, &'a mut T),
+) {
+    let mut base_a = 0usize;
+    let mut i = 0usize;
+    while i < idx.len() {
+        let a = idx[i].0;
+        let rel_a = a
+            .checked_sub(base_a)
+            .expect("Indices are not sorted lexicographically");
+        let (_, tail_vals) = vals.split_at_mut(rel_a);
+        let (head, rest_vals) = tail_vals.split_first_mut().expect("Index out of bounds");
+        vals = rest_vals;
+        base_a = a + 1;
+
+        let mut row: &'a mut [T] = head.as_mut();
+        let mut base_b = 0usize;
+        while i < idx.len() && idx[i].0 == a {
+            let (_, b, pos) = idx[i];
+            let rel_b = b
+                .checked_sub(base_b)
+                .expect("Indices are not sorted or contain duplicate");
+            let (_, tail_row) = row.split_at_mut(rel_b);
+            let (elem, rest_row) = tail_row.split_first_mut().expect("Index out of bounds");
+            emit(pos, elem);
+            row = rest_row;
+            base_b = b + 1;
+            i += 1;
+        }
+    }
+}
+
 /// Returns a vector of &mut vals[idx[i].0][idx[i].1], in order of idx[i].2.
 /// Panics if any of the indices are out of bounds or
 /// (idx[i].0, idx[i].1) == (idx[j].0, idx[j].1) for i != j or indices are not
@@ -13,31 +47,20 @@ pub(super) fn get_distinct_indices<'a, T>(
     vals: &'a mut [impl AsMut<[T]>],
     idx: &[(usize, usize, usize)],
 ) -> ChannelVec<&'a mut T> {
-    let mut answer_buffer = ChannelVec::new();
-    for _ in 0..idx.len() {
-        answer_buffer.push(None);
+    if idx.is_empty() {
+        return ChannelVec::new();
+    }
+    if idx.iter().enumerate().all(|(i, &(_, _, pos))| pos == i) {
+        let mut out = ChannelVec::new();
+        collect_distinct_indices(vals, idx, |_, item| out.push(item));
+        return out;
     }
 
-    // TODO(veluca): in theory, we don't really need to first create a vector of
-    // `Option`s that then get `unwrap`-ed separately. Currently, this function
-    // uses somewhere between 0.5 and 1.5% of the total runtime; if that number
-    // increases, it might be worth investigating how to speed this up.
-    let mut targets = idx.iter();
-    let mut target = targets.next().unwrap();
-    'outer: for (aa, bufs) in vals.iter_mut().enumerate() {
-        for (bb, buf) in bufs.as_mut().iter_mut().enumerate() {
-            let (a, b, pos) = target;
-            if aa == *a && bb == *b {
-                answer_buffer[*pos] = Some(buf);
-                if let Some(t) = targets.next() {
-                    target = t;
-                } else {
-                    break 'outer;
-                }
-            }
-        }
-    }
-
+    let mut answer_buffer: ChannelVec<Option<&'a mut T>> = (0..idx.len()).map(|_| None).collect();
+    collect_distinct_indices(vals, idx, |pos, item| {
+        assert!(answer_buffer[pos].is_none(), "Duplicate output position");
+        answer_buffer[pos] = Some(item);
+    });
     answer_buffer
         .iter_mut()
         .map(|x| std::mem::take(x).expect("Not all elements were found"))
