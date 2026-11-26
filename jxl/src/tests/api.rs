@@ -1555,6 +1555,41 @@ fn test_adjust_orientation_disabled() {
     }
 }
 
+/// With `adjust_orientation` (the default) the output is already oriented, so the
+/// basic info must report `Identity`; without it, the codestream orientation.
+#[test]
+fn test_basic_info_orientation() {
+    use crate::headers::Orientation;
+
+    for (name, orientation) in [
+        ("orientation3_rotate_180.jxl", Orientation::Rotate180),
+        ("orientation6_rotate_90_cw.jxl", Orientation::Rotate90Cw),
+    ] {
+        let file = std::fs::read(format!("resources/test/{name}")).unwrap();
+        for adjust_orientation in [true, false] {
+            let mut decoder = JxlDecoder::new(JxlDecoderOptions {
+                adjust_orientation,
+                ..Default::default()
+            });
+            let mut input = file.as_slice();
+            assert_eq!(
+                decoder.process(&mut input, None, None).unwrap(),
+                Event::BasicInfo
+            );
+            let expected = if adjust_orientation {
+                Orientation::Identity
+            } else {
+                orientation
+            };
+            assert_eq!(
+                decoder.basic_info().unwrap().orientation,
+                expected,
+                "{name}"
+            );
+        }
+    }
+}
+
 #[test]
 fn basic_info_not_visible_before_embedded_profile() {
     let data = std::fs::read("resources/test/conformance_test_images/cmyk_layers.jxl").unwrap();

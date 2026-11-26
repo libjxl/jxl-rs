@@ -11,7 +11,7 @@ use crate::api::{
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::headers::color_encoding::ColorSpace;
-use crate::headers::{FileHeader, JxlHeader};
+use crate::headers::{FileHeader, JxlHeader, Orientation};
 use crate::icc::IncrementalIccReader;
 use crate::image::Rect;
 
@@ -114,7 +114,11 @@ impl ImageInfo {
                     bits_per_sample: data.bit_depth.bits_per_sample(),
                 }
             },
-            orientation: data.orientation,
+            orientation: if decode_options.adjust_orientation {
+                Orientation::Identity
+            } else {
+                data.orientation
+            },
             extra_channels: data
                 .extra_channel_info
                 .iter()

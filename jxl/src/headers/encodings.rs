@@ -153,11 +153,10 @@ impl UnconditionalCoder<()> for String {
             br,
             nonserialized,
         )?;
-        let mut ret = String::new();
-        ret.reserve(len as usize);
+        let mut ret = Vec::with_capacity(len as usize);
         for _ in 0..len {
             match br.read_noinline(8) {
-                Ok(c) => ret.push(c as u8 as char),
+                Ok(c) => ret.push(c as u8),
                 Err(Error::OutOfBounds(n)) => {
                     // Use saturating arithmetic to prevent underflow on malformed input
                     // ret.len()+1 cannot overflow since ret.len() <= isize::MAX
@@ -169,7 +168,7 @@ impl UnconditionalCoder<()> for String {
                 Err(e) => return Err(e),
             }
         }
-        Ok(ret)
+        Ok(String::from_utf8_lossy(&ret).into_owned())
     }
 }
 
@@ -423,5 +422,18 @@ impl UnconditionalCoder<()> for Extensions {
             return Err(Error::SizeOverflow);
         }
         Ok(Extensions {})
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_string_is_utf8() {
+        // Length 2 (selector 1, then 4 bits), then the UTF-8 bytes of "é": 0xc3 0xa9.
+        let mut br = BitReader::new(&[0xc9, 0x70, 0x2a]);
+        let name = String::read_unconditional(&(), &mut br, &Empty {}).unwrap();
+        assert_eq!(name, "é");
     }
 }
