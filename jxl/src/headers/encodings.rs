@@ -193,7 +193,10 @@ impl UnconditionalCoder<()> for Permutation {
                 &mut lz77_scratch,
             )?;
             let mut reader = SymbolReader::new(&histograms, br, None, &mut lz77_scratch)?;
-            Permutation::decode(size, 0, &histograms, br, &mut reader)
+            Permutation::decode(size, 0, &histograms, br, &mut reader).and_then(|permutation| {
+                reader.check_final_state(&histograms, br)?;
+                Ok(permutation)
+            })
         } else {
             Ok(Permutation::default())
         };

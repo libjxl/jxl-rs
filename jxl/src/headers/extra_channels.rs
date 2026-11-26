@@ -95,8 +95,33 @@ impl ExtraChannelInfo {
     fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.dim_shift > 3 {
             Err(Error::DimShiftTooLarge(self.dim_shift))
+        } else if (ExtraChannel::Reserved0 as u32..=ExtraChannel::Reserved7 as u32)
+            .contains(&(self.ec_type as u32))
+        {
+            Err(Error::InvalidEnum(
+                self.ec_type as u32,
+                "ExtraChannel".to_string(),
+            ))
         } else {
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use test_log::test;
+
+    use super::*;
+
+    #[test]
+    fn reserved_types_rejected() {
+        for ec_type in 6..17u8 {
+            // Not all_default, type as BitsOffset(4, 2), then default bit depth, dim_shift, name.
+            let bytes = [0b100 | ((ec_type - 2) << 3), 0];
+            let info =
+                ExtraChannelInfo::read_unconditional(&(), &mut BitReader::new(&bytes), &Empty {});
+            assert_eq!(info.is_err(), (7..15).contains(&ec_type), "type {ec_type}");
         }
     }
 }
