@@ -464,12 +464,35 @@ impl SymbolReader {
                             row[x..x + count].fill(T::from_i32(unpack_signed(sym)));
                             lz77_state.push_decoded_symbol_run(sym, count);
                         } else {
-                            for dst in &mut row[x..x + count] {
-                                let sym = lz77_state.window
-                                    [(lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize];
-                                lz77_state.copy_pos += 1;
-                                lz77_state.push_decoded_symbol(sym);
-                                *dst = T::from_i32(unpack_signed(sym));
+                            const WINDOW_SIZE: usize = 1 << Lz77State::LOG_WINDOW_SIZE;
+                            let dist =
+                                lz77_state.num_decoded.wrapping_sub(lz77_state.copy_pos) as usize;
+                            let mut rem = &mut row[x..x + count];
+                            while !rem.is_empty() {
+                                let src = (lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize;
+                                let dst =
+                                    (lz77_state.num_decoded & Lz77State::WINDOW_MASK) as usize;
+                                let chunk = rem
+                                    .len()
+                                    .min(dist)
+                                    .min(WINDOW_SIZE - src)
+                                    .min(WINDOW_SIZE - dst);
+                                if lz77_state.window.len() < WINDOW_SIZE {
+                                    lz77_state.window.extend_from_within(src..src + chunk);
+                                } else if src != dst {
+                                    lz77_state.window.copy_within(src..src + chunk, dst);
+                                }
+                                for (d, &s) in rem[..chunk]
+                                    .iter_mut()
+                                    .zip(&lz77_state.window[dst..dst + chunk])
+                                {
+                                    *d = T::from_i32(unpack_signed(s));
+                                }
+                                lz77_state.copy_pos =
+                                    lz77_state.copy_pos.wrapping_add(chunk as u32);
+                                lz77_state.num_decoded =
+                                    lz77_state.num_decoded.wrapping_add(chunk as u32);
+                                rem = &mut rem[chunk..];
                             }
                             lz77_state.num_to_copy -= count as u32;
                         }
