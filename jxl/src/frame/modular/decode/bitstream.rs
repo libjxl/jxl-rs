@@ -13,11 +13,118 @@ use crate::frame::modular::tree::TreeNode;
 use crate::frame::modular::{ModularChannel, ModularStorage, Predictor, ScratchSpace, Tree};
 use crate::headers::JxlHeader;
 use crate::headers::modular::GroupHeader;
-use crate::image::{BufferRecycler, ImageRectMut};
+use crate::image::{BufferRecycler, ImageRectMut, SignedSample};
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.
 const DECODE_SAFETY_MARGIN: usize = 32;
+
+#[inline]
+fn apply_row_run<T: SignedSample>(
+    row: &mut [T],
+    row_top: &[T],
+    rle_sym: i32,
+    mut left: i32,
+    mut topleft: i32,
+) -> (i32, i32) {
+    debug_assert!(!row_top.is_empty());
+    if rle_sym == 0 && left == topleft {
+        row.copy_from_slice(row_top);
+        let last = row_top[row_top.len() - 1].to_i32();
+        return (last, last);
+    }
+    let sym64 = rle_sym as i64;
+    for (&top_sample, p) in row_top.iter().zip(row.iter_mut()) {
+        let top = top_sample.to_i32();
+        let val = (clamped_gradient(left as i64, top as i64, topleft as i64) + sym64) as i32;
+        *p = T::from_i32(val);
+        left = val;
+        topleft = top;
+    }
+    (left, topleft)
+}
+
+fn decode_fast_lossless_channel<T: SignedSample>(
+    channel: &mut ModularChannel,
+    tree: &Tree,
+    cluster: usize,
+    br: &mut BitReader,
+    rle_len: &mut usize,
+    rle_sym: &mut i32,
+) {
+    let Codes::Huffman(codes) = tree.histograms.codes() else {
+        unreachable!();
+    };
+    let table = codes.table(cluster);
+    let min_sym = tree.histograms.lz77_params().min_symbol.unwrap();
+    let min_len = tree.histograms.lz77_params().min_length.unwrap() as usize;
+    let sym_conf = tree.histograms.uint(cluster);
+    let lz_conf = tree.histograms.lz77_length_uint();
+
+    let mut buf = ImageRectMut::<T>::from_raw(channel.data.as_rect_mut());
+    let (w, h) = buf.size();
+    let (mut cur_rle_len, mut cur_rle_sym) = (*rle_len, *rle_sym);
+
+    let mut last = 0i32;
+    for p in &mut buf.row(0)[..w] {
+        if cur_rle_len > 0 {
+            cur_rle_len -= 1;
+        } else {
+            let sym = table.read(br);
+            if let Some(token) = sym.checked_sub(min_sym) {
+                cur_rle_len = (lz_conf.read(token, br) as usize).wrapping_add(min_len - 1);
+            } else {
+                cur_rle_sym = unpack_signed(sym_conf.read(sym, br));
+            }
+        }
+        last = last.wrapping_add(cur_rle_sym);
+        *p = T::from_i32(last);
+    }
+
+    for y in 1..h {
+        let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+        let (row, row_top) = (&mut row[..w], &row_top[..w]);
+        let mut left = row_top[0].to_i32();
+        let mut topleft = left;
+        let mut x = 0;
+
+        while x < w {
+            if cur_rle_len > 0 {
+                cur_rle_len -= 1;
+            } else {
+                let sym = table.read(br);
+                if let Some(token) = sym.checked_sub(min_sym) {
+                    let count = lz_conf.read(token, br) as usize;
+                    cur_rle_len = count.wrapping_add(min_len - 1);
+                } else {
+                    cur_rle_sym = unpack_signed(sym_conf.read(sym, br));
+                }
+            }
+            let extra = cur_rle_len.min(w - 1 - x);
+            cur_rle_len -= extra;
+            let run = 1 + extra;
+            if run == 1 {
+                let top = row_top[x].to_i32();
+                let val = (clamped_gradient(left as i64, top as i64, topleft as i64)
+                    + cur_rle_sym as i64) as i32;
+                row[x] = T::from_i32(val);
+                left = val;
+                topleft = top;
+            } else {
+                (left, topleft) = apply_row_run(
+                    &mut row[x..x + run],
+                    &row_top[x..x + run],
+                    cur_rle_sym,
+                    left,
+                    topleft,
+                );
+            }
+            x += run;
+        }
+    }
+
+    (*rle_len, *rle_sym) = (cur_rle_len, cur_rle_sym);
+}
 
 fn can_decode_fast_lossless(tree: &Tree) -> bool {
     if !tree.nodes.iter().all(|n| {
@@ -62,125 +169,16 @@ fn decode_fast_lossless(
         let TreeNode::Leaf { id, .. } = tree.walk(&[c as i32]) else {
             unreachable!();
         };
-        let Codes::Huffman(codes) = tree.histograms.codes() else {
-            unreachable!();
-        };
-
         if br.total_bits_available() >= DECODE_SAFETY_MARGIN {
             last_safe_buf = c;
         }
 
-        let table = codes.table(tree.histograms.map_context_to_cluster(id as usize));
-        let min_sym = tree.histograms.lz77_params().min_symbol.unwrap();
-        let min_len = tree.histograms.lz77_params().min_length.unwrap() as usize;
-        let sym_conf = tree
-            .histograms
-            .uint(tree.histograms.map_context_to_cluster(id as usize));
-        let lz_conf = tree.histograms.lz77_length_uint();
-
-        macro_rules! handle_rle {
-            ($x: ident, $run: ident) => {
-                if rle_len > 0 {
-                    rle_len -= 1;
-                } else {
-                    let sym = table.read(br);
-                    if let Some(token) = sym.checked_sub(min_sym) {
-                        let count = lz_conf.read(token, br) as usize;
-                        // If this calculation overflows, the bitstream is invalid (it would be rejected
-                        // on the LZ77 path), but we don't report an error.
-                        rle_len = count.wrapping_add(min_len - 1);
-                    } else {
-                        rle_sym = unpack_signed(sym_conf.read(sym, br));
-                    }
-                }
-                let extra = rle_len.min(w - 1 - $x);
-                rle_len -= extra;
-                let $run = 1 + extra;
-            }
-        }
-
-        macro_rules! decode_channel_rows {
-            ($pixel_ty:ty) => {{
-                let mut buf = ImageRectMut::<$pixel_ty>::from_raw(buf.data.as_rect_mut());
-                {
-                    let row = buf.row(0);
-                    let mut last = 0i32;
-                    let mut x = 0;
-                    while x < w {
-                        handle_rle!(x, run);
-                        if run == 1 {
-                            last = last.wrapping_add(rle_sym);
-                            row[x] = last as $pixel_ty;
-                        } else if rle_sym == 0 {
-                            row[x..x + run].fill(last as $pixel_ty);
-                        } else {
-                            for p in &mut row[x..x + run] {
-                                last = last.wrapping_add(rle_sym);
-                                *p = last as $pixel_ty;
-                            }
-                        }
-                        x += run;
-                    }
-                }
-
-                for y in 1..h {
-                    let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
-
-                    let mut left = row_top[0] as i32;
-                    let mut topleft = left;
-                    let mut x = 0;
-                    while x < w {
-                        handle_rle!(x, run);
-                        if run == 1 {
-                            let top = row_top[x] as i32;
-                            let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
-                            let val = (pred + rle_sym as i64) as i32;
-                            row[x] = val as $pixel_ty;
-                            left = val;
-                            topleft = top;
-                        } else if rle_sym == 0 {
-                            if left == topleft {
-                                row[x..x + run].copy_from_slice(&row_top[x..x + run]);
-                                left = row_top[x + run - 1] as i32;
-                                topleft = left;
-                            } else {
-                                for (&top_sample, p) in
-                                    row_top[x..x + run].iter().zip(&mut row[x..x + run])
-                                {
-                                    let top = top_sample as i32;
-                                    let val =
-                                        clamped_gradient(left as i64, top as i64, topleft as i64)
-                                            as i32;
-                                    *p = val as $pixel_ty;
-                                    left = val;
-                                    topleft = top;
-                                }
-                            }
-                        } else {
-                            let sym64 = rle_sym as i64;
-                            for (&top_sample, p) in
-                                row_top[x..x + run].iter().zip(&mut row[x..x + run])
-                            {
-                                let top = top_sample as i32;
-                                let pred =
-                                    clamped_gradient(left as i64, top as i64, topleft as i64);
-                                let val = (pred + sym64) as i32;
-                                *p = val as $pixel_ty;
-                                left = val;
-                                topleft = top;
-                            }
-                        }
-                        x += run;
-                    }
-                }
-            }};
-        }
-
-        if storage == ModularStorage::I16 {
-            decode_channel_rows!(i16);
-        } else {
-            decode_channel_rows!(i32);
-        }
+        let cluster = tree.histograms.map_context_to_cluster(id as usize);
+        let decode_fn = match storage {
+            ModularStorage::I16 => decode_fast_lossless_channel::<i16>,
+            ModularStorage::I32 => decode_fast_lossless_channel::<i32>,
+        };
+        decode_fn(buf, tree, cluster, br, &mut rle_len, &mut rle_sym);
 
         if let Err(e) = br.check_for_error() {
             if let Some(p) = partial_decoded_buffers {

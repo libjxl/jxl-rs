@@ -12,6 +12,7 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
+use crate::image::SignedSample;
 use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
@@ -29,24 +30,6 @@ pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
 
 pub fn unpack_signed(unsigned: u32) -> i32 {
     ((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32
-}
-
-pub trait ClusteredRowSample: Copy {
-    fn from_i32(v: i32) -> Self;
-}
-
-impl ClusteredRowSample for i32 {
-    #[inline(always)]
-    fn from_i32(v: i32) -> Self {
-        v
-    }
-}
-
-impl ClusteredRowSample for i16 {
-    #[inline(always)]
-    fn from_i32(v: i32) -> Self {
-        v as i16
-    }
 }
 
 #[derive(UnconditionalCoder, Debug, Clone, Copy)]
@@ -430,7 +413,7 @@ impl SymbolReader {
         unpack_signed(unsigned)
     }
 
-    pub fn read_signed_clustered_row<T: ClusteredRowSample>(
+    pub fn read_signed_clustered_row<T: SignedSample>(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
