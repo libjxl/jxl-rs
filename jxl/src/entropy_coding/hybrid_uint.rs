@@ -83,6 +83,29 @@ impl HybridUint {
         (hi << nbits) | bits
     }
 
+    /// Returns true if this config matches `(split_exponent, 0, 0)`:
+    /// `msb_in_token == 0` and `lsb_in_token == 0`.
+    #[inline(always)]
+    pub fn is_config_n00(&self, split_exponent: u32) -> bool {
+        self.split_exponent == split_exponent
+            && self.split_token == (1u32 << split_exponent)
+            && self.msb_in_token == 0
+            && self.lsb_in_token == 0
+    }
+
+    /// Specialized fast path for `(SPLIT_EXPONENT, 0, 0)` config:
+    /// `msb_in_token == 0`, `lsb_in_token == 0`.
+    #[inline(always)]
+    pub fn read_config_n00<const SPLIT_EXPONENT: u32>(symbol: u32, br: &mut BitReader) -> u32 {
+        let split_token = 1u32 << SPLIT_EXPONENT;
+        if symbol < split_token {
+            return symbol;
+        }
+        let nbits = (symbol - split_token).wrapping_add(SPLIT_EXPONENT) & 31;
+        let bits = br.read_optimistic(nbits as usize) as u32;
+        (1u32 << nbits) | bits
+    }
+
     #[inline(always)]
     pub fn read(&self, symbol: u32, br: &mut BitReader) -> u32 {
         if symbol < self.split_token {
@@ -152,5 +175,28 @@ mod test {
         assert_eq!(config420.max_bits_for_symbol(16), 5);
         assert_eq!(config420.max_bits_for_symbol(19), 5);
         assert_eq!(config420.max_bits_for_symbol(20), 6);
+    }
+
+    #[test]
+    fn test_read_config_n00_matches_generic() {
+        let data = [
+            0x5a, 0xa5, 0x3c, 0xc3, 0xf0, 0x0f, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf1,
+            0x23, 0x45,
+        ];
+        for (exp, read_fast) in [
+            (
+                0u32,
+                HybridUint::read_config_n00::<0> as fn(u32, &mut BitReader) -> u32,
+            ),
+            (4u32, HybridUint::read_config_n00::<4>),
+        ] {
+            let cfg = HybridUint::new(exp, 0, 0);
+            assert!(cfg.is_config_n00(exp) && !cfg.is_config_n00(exp ^ 4));
+            for sym in 0..64u32 {
+                let (mut br_ref, mut br_fast) = (BitReader::new(&data), BitReader::new(&data));
+                assert_eq!(read_fast(sym, &mut br_fast), cfg.read(sym, &mut br_ref));
+                assert_eq!(br_fast.total_bits_read(), br_ref.total_bits_read());
+            }
+        }
     }
 }
