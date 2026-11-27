@@ -5,6 +5,8 @@
 
 use std::fmt::Debug;
 
+use jxl_simd::{I32SimdVec, SimdDescriptor};
+
 mod private {
     pub trait Sealed {}
 }
@@ -162,5 +164,54 @@ unsafe impl ImageDataType for crate::util::f16 {
     fn random<R: rand::Rng>(rng: &mut R) -> Self {
         use rand::distr::{Distribution, Uniform};
         Self::from_f64(Uniform::new(0.0f32, 1.0f32).unwrap().sample(rng) as f64)
+    }
+}
+
+/// Signed integer sample/coefficient storage type (`i16` or `i32`), shared across
+/// modular channels, clustered entropy decoding, and VarDCT coefficient buffers.
+pub(crate) trait SignedSample: ImageDataType + Into<i32> {
+    fn from_i32(v: i32) -> Self;
+
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        self.into()
+    }
+
+    fn wrapping_add_assign(&mut self, val: i32);
+
+    fn load_simd<D: SimdDescriptor>(slice: &[Self], d: D, offset: usize) -> D::I32Vec;
+}
+
+impl SignedSample for i32 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v
+    }
+
+    #[inline(always)]
+    fn wrapping_add_assign(&mut self, val: i32) {
+        *self = self.wrapping_add(val);
+    }
+
+    #[inline(always)]
+    fn load_simd<D: SimdDescriptor>(slice: &[i32], d: D, offset: usize) -> D::I32Vec {
+        D::I32Vec::load(d, &slice[offset..])
+    }
+}
+
+impl SignedSample for i16 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v as i16
+    }
+
+    #[inline(always)]
+    fn wrapping_add_assign(&mut self, val: i32) {
+        *self = self.wrapping_add(val as i16);
+    }
+
+    #[inline(always)]
+    fn load_simd<D: SimdDescriptor>(slice: &[i16], d: D, offset: usize) -> D::I32Vec {
+        D::I32Vec::load_from_i16(d, &slice[offset..])
     }
 }

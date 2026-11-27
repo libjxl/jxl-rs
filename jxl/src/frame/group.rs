@@ -16,7 +16,7 @@ use crate::frame::color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS;
 use crate::frame::quant_weights::DequantMatrices;
 use crate::frame::{HfGlobalState, HfMetadata, LfGlobalState, coeff_order};
 use crate::headers::frame_header::FrameHeader;
-use crate::image::{Image, ImageRect, Rect};
+use crate::image::{Image, ImageRect, Rect, SignedSample};
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::util::tracing_wrappers::*;
 use crate::util::{
@@ -113,40 +113,13 @@ fn adjust_quant_bias<D: SimdDescriptor>(
         .if_then_else_f32(quant_i.as_f32() * D::F32Vec::splat(d, bias_c), adjusted)
 }
 
-pub trait CoeffStorage: Sized {
-    fn load_simd<D: SimdDescriptor>(slice: &[Self], d: D, offset: usize) -> D::I32Vec;
-    fn add_coeff(&mut self, val: i32);
-}
-
-impl CoeffStorage for i32 {
-    #[inline(always)]
-    fn load_simd<D: SimdDescriptor>(slice: &[i32], d: D, offset: usize) -> D::I32Vec {
-        D::I32Vec::load(d, &slice[offset..])
-    }
-    #[inline(always)]
-    fn add_coeff(&mut self, val: i32) {
-        *self = self.wrapping_add(val);
-    }
-}
-
-impl CoeffStorage for i16 {
-    #[inline(always)]
-    fn load_simd<D: SimdDescriptor>(slice: &[i16], d: D, offset: usize) -> D::I32Vec {
-        D::I32Vec::load_from_i16(d, &slice[offset..])
-    }
-    #[inline(always)]
-    fn add_coeff(&mut self, val: i32) {
-        *self = self.wrapping_add(val as i16);
-    }
-}
-
 enum CoeffsMut<'a> {
     I32([&'a mut [i32]; 3]),
     I16([&'a mut [i16]; 3]),
 }
 
 #[allow(clippy::too_many_arguments)]
-fn decode_channel_coeffs_ans_no_lz77<T: CoeffStorage, const LOG_NUM_BLOCKS: usize>(
+fn decode_channel_coeffs_ans_no_lz77<T: SignedSample, const LOG_NUM_BLOCKS: usize>(
     current_coeffs: &mut [T],
     permutation: &[u32],
     histo_offset: usize,
@@ -174,7 +147,7 @@ fn decode_channel_coeffs_ans_no_lz77<T: CoeffStorage, const LOG_NUM_BLOCKS: usiz
         }
         let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
         let coeff_index = permutation[k] as usize;
-        current_coeffs[coeff_index].add_coeff(coeff);
+        current_coeffs[coeff_index].wrapping_add_assign(coeff);
         nz -= 1;
         if nz == 0 {
             break;
@@ -187,7 +160,7 @@ fn decode_channel_coeffs_ans_no_lz77<T: CoeffStorage, const LOG_NUM_BLOCKS: usiz
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn decode_channel_coeffs<T: CoeffStorage>(
+fn decode_channel_coeffs<T: SignedSample>(
     current_coeffs: &mut [T],
     permutation: &[u32],
     num_blocks: usize,
@@ -246,7 +219,7 @@ fn decode_channel_coeffs<T: CoeffStorage>(
                     }
                     let coeff = unpack_signed(histograms.uint(cluster).read(token, br)) << shift;
                     let coeff_index = permutation[k] as usize;
-                    current_coeffs[coeff_index].add_coeff(coeff);
+                    current_coeffs[coeff_index].wrapping_add_assign(coeff);
                     nonzeros -= 1;
                     if nonzeros == 0 {
                         break;
@@ -268,7 +241,7 @@ fn decode_channel_coeffs<T: CoeffStorage>(
                 continue;
             }
             let coeff_index = permutation[k] as usize;
-            current_coeffs[coeff_index].add_coeff(coeff);
+            current_coeffs[coeff_index].wrapping_add_assign(coeff);
             nonzeros -= 1;
             if nonzeros == 0 {
                 break;
@@ -354,7 +327,7 @@ impl<'a> CoeffsMut<'a> {
 }
 
 #[inline(always)]
-fn dequant_channel<D: SimdDescriptor, S: CoeffStorage>(
+fn dequant_channel<D: SimdDescriptor, S: SignedSample>(
     d: D,
     scaled_dequant: f32,
     dequant_matrix: &[f32],
@@ -387,7 +360,7 @@ fn dequant_channel<D: SimdDescriptor, S: CoeffStorage>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn dequant_block_impl<D: SimdDescriptor, S: CoeffStorage>(
+fn dequant_block_impl<D: SimdDescriptor, S: SignedSample>(
     d: D,
     scaled_dequant_y: f32,
     x_dm_multiplier: f32,
