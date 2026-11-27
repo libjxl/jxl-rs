@@ -6,6 +6,7 @@
 use super::channel::decode_modular_channel;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Codes, SymbolReader, unpack_signed};
+use crate::entropy_coding::hybrid_uint::HybridUint;
 use crate::error::{Error, Result};
 use crate::frame::modular::predict::clamped_gradient;
 use crate::frame::modular::transforms::apply_local::meta_apply_local_transforms;
@@ -44,7 +45,7 @@ fn apply_row_run<T: SignedSample>(
     (left, topleft)
 }
 
-fn decode_fast_lossless_channel<T: SignedSample>(
+fn decode_fast_lossless_channel<T: SignedSample, const FAST_CONF: bool>(
     channel: &mut ModularChannel,
     tree: &Tree,
     cluster: usize,
@@ -88,29 +89,26 @@ fn decode_fast_lossless_channel<T: SignedSample>(
         let mut topleft = left;
         let mut x = 0;
 
+        if cur_rle_len > 0 {
+            let run = cur_rle_len.min(w);
+            cur_rle_len -= run;
+            (left, topleft) =
+                apply_row_run(&mut row[..run], &row_top[..run], cur_rle_sym, left, topleft);
+            x = run;
+        }
+
         while x < w {
-            if cur_rle_len > 0 {
-                cur_rle_len -= 1;
-            } else {
-                let sym = table.read(br);
-                if let Some(token) = sym.checked_sub(min_sym) {
-                    let count = lz_conf.read(token, br) as usize;
-                    cur_rle_len = count.wrapping_add(min_len - 1);
+            let sym = table.read(br);
+            if let Some(token) = sym.checked_sub(min_sym) {
+                let count = if FAST_CONF {
+                    HybridUint::read_config_n00::<4>(token, br)
                 } else {
-                    cur_rle_sym = unpack_signed(sym_conf.read(sym, br));
-                }
-            }
-            let extra = cur_rle_len.min(w - 1 - x);
-            cur_rle_len -= extra;
-            let run = 1 + extra;
-            if run == 1 {
-                let top = row_top[x].to_i32();
-                let val = (clamped_gradient(left as i64, top as i64, topleft as i64)
-                    + cur_rle_sym as i64) as i32;
-                row[x] = T::from_i32(val);
-                left = val;
-                topleft = top;
-            } else {
+                    lz_conf.read(token, br)
+                } as usize;
+                let total = count.wrapping_add(min_len - 1);
+                let extra = total.min(w - 1 - x);
+                cur_rle_len = total - extra;
+                let run = 1 + extra;
                 (left, topleft) = apply_row_run(
                     &mut row[x..x + run],
                     &row_top[x..x + run],
@@ -118,8 +116,22 @@ fn decode_fast_lossless_channel<T: SignedSample>(
                     left,
                     topleft,
                 );
+                x += run;
+            } else {
+                let raw = if FAST_CONF {
+                    HybridUint::read_config_n00::<0>(sym, br)
+                } else {
+                    sym_conf.read(sym, br)
+                };
+                cur_rle_sym = unpack_signed(raw);
+                let top = row_top[x].to_i32();
+                let val = (clamped_gradient(left as i64, top as i64, topleft as i64)
+                    + cur_rle_sym as i64) as i32;
+                row[x] = T::from_i32(val);
+                left = val;
+                topleft = top;
+                x += 1;
             }
-            x += run;
         }
     }
 
@@ -174,9 +186,12 @@ fn decode_fast_lossless(
         }
 
         let cluster = tree.histograms.map_context_to_cluster(id as usize);
-        let decode_fn = match storage {
-            ModularStorage::I16 => decode_fast_lossless_channel::<i16>,
-            ModularStorage::I32 => decode_fast_lossless_channel::<i32>,
+        let fast_conf = tree.histograms.uint(cluster).is_config_n00(0)
+            && tree.histograms.lz77_length_uint().is_config_n00(4);
+        let decode_fn = match (storage, fast_conf) {
+            (ModularStorage::I16, true) => decode_fast_lossless_channel::<i16, true>,
+            (ModularStorage::I16, false) => decode_fast_lossless_channel::<i16, false>,
+            (ModularStorage::I32, _) => decode_fast_lossless_channel::<i32, false>,
         };
         decode_fn(buf, tree, cluster, br, &mut rle_len, &mut rle_sym);
 
