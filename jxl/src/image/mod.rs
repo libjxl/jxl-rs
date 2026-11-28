@@ -16,6 +16,7 @@ mod recycler;
 mod test;
 mod typed;
 
+pub(crate) use data_type::SignedSample;
 pub use data_type::{DataTypeTag, ImageDataType};
 pub(crate) use downsample::{align_origin, box_average};
 pub use output_buffer::{JxlOutputBuffer, JxlOutputTransform};

@@ -12,6 +12,7 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
+use crate::image::SignedSample;
 use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
@@ -29,24 +30,6 @@ pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
 
 pub fn unpack_signed(unsigned: u32) -> i32 {
     ((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32
-}
-
-pub trait ClusteredRowSample: Copy {
-    fn from_i32(v: i32) -> Self;
-}
-
-impl ClusteredRowSample for i32 {
-    #[inline(always)]
-    fn from_i32(v: i32) -> Self {
-        v
-    }
-}
-
-impl ClusteredRowSample for i16 {
-    #[inline(always)]
-    fn from_i32(v: i32) -> Self {
-        v as i16
-    }
 }
 
 #[derive(UnconditionalCoder, Debug, Clone, Copy)]
@@ -430,7 +413,7 @@ impl SymbolReader {
         unpack_signed(unsigned)
     }
 
-    pub fn read_signed_clustered_row<T: ClusteredRowSample>(
+    pub fn read_signed_clustered_row<T: SignedSample>(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
@@ -481,12 +464,35 @@ impl SymbolReader {
                             row[x..x + count].fill(T::from_i32(unpack_signed(sym)));
                             lz77_state.push_decoded_symbol_run(sym, count);
                         } else {
-                            for dst in &mut row[x..x + count] {
-                                let sym = lz77_state.window
-                                    [(lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize];
-                                lz77_state.copy_pos += 1;
-                                lz77_state.push_decoded_symbol(sym);
-                                *dst = T::from_i32(unpack_signed(sym));
+                            const WINDOW_SIZE: usize = 1 << Lz77State::LOG_WINDOW_SIZE;
+                            let dist =
+                                lz77_state.num_decoded.wrapping_sub(lz77_state.copy_pos) as usize;
+                            let mut rem = &mut row[x..x + count];
+                            while !rem.is_empty() {
+                                let src = (lz77_state.copy_pos & Lz77State::WINDOW_MASK) as usize;
+                                let dst =
+                                    (lz77_state.num_decoded & Lz77State::WINDOW_MASK) as usize;
+                                let chunk = rem
+                                    .len()
+                                    .min(dist)
+                                    .min(WINDOW_SIZE - src)
+                                    .min(WINDOW_SIZE - dst);
+                                if lz77_state.window.len() < WINDOW_SIZE {
+                                    lz77_state.window.extend_from_within(src..src + chunk);
+                                } else if src != dst {
+                                    lz77_state.window.copy_within(src..src + chunk, dst);
+                                }
+                                for (d, &s) in rem[..chunk]
+                                    .iter_mut()
+                                    .zip(&lz77_state.window[dst..dst + chunk])
+                                {
+                                    *d = T::from_i32(unpack_signed(s));
+                                }
+                                lz77_state.copy_pos =
+                                    lz77_state.copy_pos.wrapping_add(chunk as u32);
+                                lz77_state.num_decoded =
+                                    lz77_state.num_decoded.wrapping_add(chunk as u32);
+                                rem = &mut rem[chunk..];
                             }
                             lz77_state.num_to_copy -= count as u32;
                         }

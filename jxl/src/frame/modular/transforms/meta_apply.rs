@@ -406,7 +406,15 @@ pub fn make_grids(
                         .info
                         .is_meta_or_small(frame_header.group_dim())
                 {
-                    grid_kind = ModularGridKind::Hf;
+                    // The inputs are read through the grid of the output, with half as large
+                    // tiles in the squeezed direction, so 1px tiles cannot be used. Keep the
+                    // output in a single buffer, like its inputs, in that case.
+                    let shift = buffer_info[*buf_out].info.shift.unwrap();
+                    let dim = ModularGridKind::Hf.grid_dim(frame_header, shift);
+                    let vertical = matches!(step, TransformStep::VSqueeze { .. });
+                    if (if vertical { dim.1 } else { dim.0 }) > 1 {
+                        grid_kind = ModularGridKind::Hf;
+                    }
                 }
                 buffer_info[*buf_out].grid_kind = grid_kind;
             }

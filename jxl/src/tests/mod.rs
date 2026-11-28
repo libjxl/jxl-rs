@@ -554,6 +554,9 @@ declare_test_file!(
 );
 declare_test_file!(spline_on_first_frame, "spline_on_first_frame.jxl");
 declare_test_file!(splines, "splines.jxl");
+// Lossless gradients encoded by libjxl with 128px groups, exercising 1px squeeze tiles.
+declare_test_file!(squeeze_1px_tiles_wide, "squeeze_1px_tiles_wide.jxl");
+declare_test_file!(squeeze_1px_tiles_tall, "squeeze_1px_tiles_tall.jxl");
 declare_test_file!(squeeze_alpha, "squeeze_alpha.jxl");
 declare_test_file!(squeeze_edge, "squeeze_edge.jxl");
 declare_test_file!(squeeze_empty_residual, "squeeze_empty_residual.jxl");
