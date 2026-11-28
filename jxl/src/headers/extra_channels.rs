@@ -95,6 +95,13 @@ impl ExtraChannelInfo {
     fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.dim_shift > 3 {
             Err(Error::DimShiftTooLarge(self.dim_shift))
+        } else if (ExtraChannel::Reserved0 as u32..=ExtraChannel::Reserved7 as u32)
+            .contains(&(self.ec_type as u32))
+        {
+            Err(Error::InvalidEnum(
+                self.ec_type as u32,
+                "ExtraChannel".to_string(),
+            ))
         } else {
             Ok(())
         }
