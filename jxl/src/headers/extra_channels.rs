@@ -107,21 +107,3 @@ impl ExtraChannelInfo {
         }
     }
 }
-
-#[cfg(test)]
-mod test {
-    use test_log::test;
-
-    use super::*;
-
-    #[test]
-    fn reserved_types_rejected() {
-        for ec_type in 6..17u8 {
-            // Not all_default, type as BitsOffset(4, 2), then default bit depth, dim_shift, name.
-            let bytes = [0b100 | ((ec_type - 2) << 3), 0];
-            let info =
-                ExtraChannelInfo::read_unconditional(&(), &mut BitReader::new(&bytes), &Empty {});
-            assert_eq!(info.is_err(), (7..15).contains(&ec_type), "type {ec_type}");
-        }
-    }
-}

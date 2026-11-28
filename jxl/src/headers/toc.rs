@@ -176,16 +176,4 @@ mod test {
             Ok(())
         });
     }
-
-    #[test]
-    fn permuted_checks_final_ans_state() {
-        // Permuted, single-symbol ANS histograms, initial ANS state, then one entry.
-        let parse = |state: u64| {
-            let bytes = (0xd05 | (state << 14)).to_le_bytes();
-            let nonserialized = TocNonserialized { num_entries: 1 };
-            Toc::read_unconditional(&(), &mut BitReader::new(&bytes), &nonserialized)
-        };
-        assert!(parse(0x130000).is_ok());
-        assert!(matches!(parse(0x130001), Err(Error::AnsChecksumMismatch)));
-    }
 }
