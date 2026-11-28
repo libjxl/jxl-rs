@@ -10,8 +10,8 @@ pub(crate) use crate::api::codestream_parser::frame_scan_info::FrameStartInfo;
 use crate::api::codestream_parser::image_info::ImageInfo;
 use crate::api::{
     BoxParserCheckpoint, Event, JxlBytesNeeded, JxlColorProfile, JxlDecoderOptions,
-    JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat, JxlProgressiveStatus, ProfileLevel,
-    SmallBuffer, VisibleFrameSeekTarget,
+    JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat, JxlProgressiveStatus, SmallBuffer,
+    VisibleFrameSeekTarget,
 };
 use crate::error::{Error, Result};
 use crate::headers::frame_header::FrameHeader;
@@ -54,11 +54,6 @@ enum ParserState {
     },
     TrailingData,
     Done,
-}
-
-fn level5_limits(input: &CodestreamInput, decode_options: &JxlDecoderOptions) -> bool {
-    decode_options.max_profile_level == ProfileLevel::Main5
-        || input.box_parser().container_level() != Some(ProfileLevel::Main10)
 }
 
 fn check_size_limit(
@@ -214,14 +209,22 @@ impl CodestreamParser {
         }
     }
 
+    fn output_viewport(&self) -> Rect {
+        let shift = self.downsample_factor;
+        self.crop_region.downsample_ceil((shift, shift))
+    }
+
     pub(super) fn start_new_frame(
         &mut self,
         seek_target: &VisibleFrameSeekTarget,
+        reuse_slots: bool,
     ) -> BoxParserCheckpoint {
         // On the way to a seek target, frames that do not matter for it can be decoded wrong,
         // so stored frames are only usable when not in the middle of a frame or a seek.
         let mid_frame = matches!(self.state, ParserState::Sections { .. });
-        let usable = !mid_frame && self.visible_frames_to_skip.is_none();
+        // When the caller can change view after seeking, old slots may be at
+        // the wrong resolution. Replay them from the returned checkpoint.
+        let usable = reuse_slots && !mid_frame && self.visible_frames_to_skip.is_none();
         let have = if usable { self.slot_frames } else { [None; 8] };
         // Keep the stored frames that the decoder already has, unless a frame decoded from `start`
         // on would overwrite them, and start where the others can be reconstructed.
@@ -255,7 +258,7 @@ impl CodestreamParser {
         self.frame_header_decoded
     }
 
-    fn has_more_frames(&self) -> bool {
+    pub(super) fn has_more_frames(&self) -> bool {
         !matches!(self.state, ParserState::TrailingData | ParserState::Done)
     }
 
@@ -314,6 +317,11 @@ impl CodestreamParser {
         output_buffers: Option<&mut [JxlOutputBuffer]>,
         parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<Event> {
+        if matches!(self.state, ParserState::FrameHeader { .. })
+            && self.frame_info.has_retained_frame()
+        {
+            self.frame_info.release_target();
+        }
         match self.process_inner(input, decode_options, output_buffers, parallel_runner) {
             Err(Error::OutOfBounds(_))
                 if self.state != ParserState::TrailingData
@@ -341,7 +349,7 @@ impl CodestreamParser {
                 ParserState::FileHeader => {
                     self.refill_and_parse(input, |c, input| {
                         c.local_buffer.with_br(|br, bits| {
-                            let level5_limits = level5_limits(input, decode_options);
+                            let level5_limits = input.is_level5_limits_enforced(decode_options);
                             c.image_info.parse_file_header(
                                 decode_options,
                                 c.downsample_factor,
@@ -361,7 +369,7 @@ impl CodestreamParser {
 
                 ParserState::ColorEncoding => {
                     self.refill_and_parse(input, |c, input| {
-                        let level5_limits = level5_limits(input, decode_options);
+                        let level5_limits = input.is_level5_limits_enforced(decode_options);
                         c.local_buffer.with_br(|br, bits| {
                             c.image_info.parse_color_encoding(br, bits, level5_limits)
                         })
@@ -381,7 +389,7 @@ impl CodestreamParser {
                                 .state_checkpoint(c.local_buffer.consumed())?,
                         );
 
-                        let level5_limits = level5_limits(input, decode_options);
+                        let level5_limits = input.is_level5_limits_enforced(decode_options);
                         c.local_buffer.with_br(|br, bits| {
                             c.frame_info.parse_frame_header(
                                 is_preview,
@@ -453,23 +461,23 @@ impl CodestreamParser {
                         );
                     }
 
-                    let level5_limits = level5_limits(input, decode_options);
+                    let level5_limits = input.is_level5_limits_enforced(decode_options);
                     let file_header = self.image_info.file_header();
                     let downsample_factor = if is_preview {
                         0
                     } else {
                         self.downsample_factor
                     };
-                    let crop_region = if is_preview {
+                    let output_viewport = if is_preview {
                         let preview = file_header.image_metadata.preview.as_ref().unwrap();
                         Rect {
                             origin: (0, 0),
                             size: (preview.xsize() as usize, preview.ysize() as usize),
                         }
                     } else {
-                        self.crop_region
-                            .downsample_ceil((downsample_factor, downsample_factor))
+                        self.output_viewport()
                     };
+                    let before = self.frame_info.frame_counters;
                     self.frame_info.make_frame(
                         &mut self.local_buffer,
                         toc,
@@ -480,10 +488,13 @@ impl CodestreamParser {
                         process_mode,
                         level5_limits,
                         downsample_factor,
-                        crop_region,
+                        output_viewport,
                     )?;
 
                     if !matches!(process_mode, ProcessMode::Skip(..)) {
+                        if decode_options.enable_repeated_decoding && !is_preview {
+                            self.frame_info.begin_record(before);
+                        }
                         self.frame_info.dequeue_ready_sections();
                     }
 
@@ -530,7 +541,17 @@ impl CodestreamParser {
                     // animation, which will likely be decoded again (seeking can reuse it).
                     let animation = &self.image_info.file_header().image_metadata.animation;
                     let looping = animation.as_ref().is_some_and(|a| a.num_loops != 1);
-                    if !is_last || (looping && !is_preview) {
+                    let retain = !is_preview
+                        && decode_options.enable_repeated_decoding
+                        && process_mode == ProcessMode::Process;
+                    self.frame_info.finish_record(retain);
+                    if retain {
+                        self.frame_info
+                            .retain_completed_frame(!is_last || looping)?;
+                        if is_last && !looping {
+                            self.slot_frames = [None; 8];
+                        }
+                    } else if !is_last || (looping && !is_preview) {
                         self.frame_info.clear();
                     } else {
                         self.frame_info.reset((0, 0), [false; 8]);

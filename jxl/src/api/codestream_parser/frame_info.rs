@@ -3,12 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::io::IoSliceMut;
+use std::ops::Deref;
 
 use crate::api::box_parser::CodestreamInput;
+use crate::api::codestream_parser::frame_scan_info::used_slots;
 use crate::api::codestream_parser::{
-    CodestreamParser, ProcessMode, check_size_limit, validate_output_buffers,
+    CodestreamParser, ProcessMode, check_size_limit, stored_slot, validate_output_buffers,
 };
 use crate::api::{
     JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
@@ -16,6 +18,7 @@ use crate::api::{
 };
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
+use crate::frame::modular::ModularChannelCache;
 use crate::frame::{DecoderState, Frame, HfMetaSplitter, LfImageSplitter, Section};
 use crate::headers::FileHeader;
 use crate::headers::encodings::UnconditionalCoder;
@@ -29,6 +32,22 @@ struct SectionBuffer {
     len: usize,
     data: Vec<u8>,
     section: Section,
+}
+
+// No allocation or reference counting on the ordinary streaming path.
+enum ReadySection {
+    Owned(SectionBuffer),
+    Shared(Arc<SectionBuffer>),
+}
+
+impl Deref for ReadySection {
+    type Target = SectionBuffer;
+    fn deref(&self) -> &SectionBuffer {
+        match self {
+            Self::Owned(s) => s,
+            Self::Shared(s) => s,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -52,10 +71,79 @@ impl SectionState {
     }
 }
 
+struct Record {
+    coeffs: Option<Arc<crate::frame::VarDctCoeffCache>>,
+    channels: Option<Arc<ModularChannelCache>>,
+    header: FrameHeader,
+    toc: Toc,
+    before: (usize, usize),
+    dependencies: Vec<usize>,
+    sections: Vec<Arc<SectionBuffer>>,
+}
+
+#[derive(Default)]
+struct ReplayCache {
+    records: BTreeMap<usize, Record>,
+    slots: [Option<usize>; 8],
+    pending: Option<Record>,
+    target: Option<usize>,
+}
+
+impl ReplayCache {
+    fn reachable(&self, roots: impl Iterator<Item = usize>) -> BTreeSet<usize> {
+        let mut stack: Vec<_> = roots.collect();
+        let mut live = BTreeSet::new();
+        while let Some(id) = stack.pop() {
+            if live.insert(id) {
+                stack.extend(&self.records[&id].dependencies);
+            }
+        }
+        live
+    }
+
+    fn prune(&mut self) {
+        let live = self.reachable(self.slots.iter().flatten().copied().chain(self.target));
+        self.records.retain(|id, _| live.contains(id));
+    }
+
+    fn clear_target(&mut self) {
+        if let Some(id) = self.target.take() {
+            // Once only a reference, keep its compressed representation alone.
+            let record = self.records.get_mut(&id).unwrap();
+            record.channels = None;
+            record.coeffs = None;
+        }
+    }
+
+    fn reset(&mut self, keep: [bool; 8]) {
+        self.pending = None;
+        self.clear_target();
+        for (slot, keep) in self.slots.iter_mut().zip(keep) {
+            if !keep {
+                *slot = None;
+            }
+        }
+        self.prune();
+    }
+
+    fn collect(&mut self, section: SectionBuffer) -> ReadySection {
+        if let Some(record) = &mut self.pending {
+            let section = Arc::new(section);
+            record.sections.push(section.clone());
+            ReadySection::Shared(section)
+        } else {
+            ReadySection::Owned(section)
+        }
+    }
+}
+
 pub struct FrameInfo {
     frame_header: Option<FrameHeader>,
     toc_parser: Option<IncrementalTocReader>,
     frame: Option<Box<Frame>>,
+    // Only the live slots survive a replay-backed visible frame.
+    next_state: Option<DecoderState>,
+    replay: ReplayCache,
     // Keeps track of whether pixels have been modified.
     pixels_dirty: bool,
     buffer_recycler: Arc<BufferRecycler>,
@@ -67,17 +155,17 @@ pub struct FrameInfo {
     section_state: SectionState,
 
     // Or only section if in single section special case.
-    lf_global_section: Option<SectionBuffer>,
-    lf_sections: Vec<SectionBuffer>,
-    hf_global_section: Option<SectionBuffer>,
+    lf_global_section: Option<ReadySection>,
+    lf_sections: Vec<ReadySection>,
+    hf_global_section: Option<ReadySection>,
     // indexed by group, then by pass.
-    hf_sections: Vec<Vec<Option<SectionBuffer>>>,
+    hf_sections: Vec<Vec<Option<ReadySection>>>,
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
     // The frame counters before the next frame (visible frames, and non-visible frames since the
     // last visible one), which seed its noise. They are counted here rather than in the decoder
     // state so that frames skipped by a seek count too.
-    frame_counters: (usize, usize),
+    pub(super) frame_counters: (usize, usize),
     // Which stored frames to keep in the next frame's decoder state (see `reset`).
     keep_slots: [bool; 8],
     // Cumulative samples across consecutive non-visible frames since the last visible frame.
@@ -90,6 +178,8 @@ impl FrameInfo {
             frame_header: None,
             toc_parser: None,
             frame: None,
+            next_state: None,
+            replay: ReplayCache::default(),
             sections: VecDeque::new(),
             section_size: 0,
             ready_section_data: 0,
@@ -113,10 +203,12 @@ impl FrameInfo {
         self.clear();
         if keep_slots == [false; 8] {
             self.frame = None;
+            self.next_state = None;
             self.pixels_dirty = false;
         }
         self.frame_counters = frame_counters;
         self.keep_slots = keep_slots;
+        self.replay.reset(keep_slots);
         self.nonvisible_samples = 0;
     }
 
@@ -140,6 +232,78 @@ impl FrameInfo {
         self.frame_header
             .as_ref()
             .or(self.frame.as_ref().map(|x| x.header()))
+    }
+
+    pub(super) fn begin_record(&mut self, before: (usize, usize)) {
+        let frame = self.frame.as_mut().unwrap();
+        let dependencies = used_slots(frame.header())
+            .into_iter()
+            .zip(self.replay.slots)
+            .filter_map(|(used, id)| if used { id } else { None })
+            .collect();
+        if frame.header().is_visible() && frame.header().encoding == Encoding::Modular {
+            frame.channel_cache = Some(Arc::default());
+        }
+        if frame.header().is_visible() && frame.header().encoding == Encoding::VarDCT {
+            frame.coeff_cache = Some(Arc::new(
+                (0..frame.header().num_groups())
+                    .map(|_| Default::default())
+                    .collect(),
+            ));
+        }
+        self.replay.pending = Some(Record {
+            coeffs: frame.coeff_cache.clone(),
+            channels: frame.channel_cache.clone(),
+            header: frame.header().clone(),
+            toc: frame.toc().clone(),
+            before,
+            dependencies,
+            sections: vec![],
+        });
+    }
+
+    pub(super) fn finish_record(&mut self, visible: bool) {
+        if let Some(record) = self.replay.pending.take() {
+            let id = self
+                .replay
+                .records
+                .last_key_value()
+                .map_or(0, |(k, _)| k + 1);
+            if let Some(slot) = stored_slot(&record.header) {
+                self.replay.slots[slot] = Some(id);
+            }
+            self.replay.target = visible.then_some(id);
+            self.replay.records.insert(id, record);
+            self.replay.prune();
+        }
+    }
+
+    pub(super) fn retain_completed_frame(&mut self, keep_state: bool) -> Result<()> {
+        self.clear();
+        if !keep_state {
+            self.forget_replay_slots();
+        }
+        let frame = self.frame.take().unwrap();
+        if keep_state {
+            self.next_state = Some(frame.finalize()?);
+        }
+        Ok(())
+    }
+
+    pub(in crate::api) fn has_retained_frame(&self) -> bool {
+        self.replay.target.is_some()
+    }
+
+    fn forget_replay_slots(&mut self) {
+        self.replay.slots = [None; 8];
+        self.replay.prune();
+    }
+
+    pub(super) fn release_target(&mut self) {
+        if self.replay.target.is_some() {
+            self.replay.clear_target();
+            self.replay.prune();
+        }
     }
 
     pub(super) fn frame(&self) -> Option<&Frame> {
@@ -236,6 +400,7 @@ impl FrameInfo {
         Ok(self.toc_parser.take().unwrap().finalize())
     }
 
+    #[inline(never)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn make_frame(
         &mut self,
@@ -275,6 +440,7 @@ impl FrameInfo {
                 .take()
                 .map(|x| x.finalize())
                 .transpose()?
+                .or_else(|| self.next_state.take())
                 .unwrap_or_else(|| {
                     DecoderState::new(
                         file_header.clone(),
@@ -384,20 +550,25 @@ impl FrameInfo {
             let s = self.sections.pop_front().unwrap();
             self.ready_section_data -= s.len;
 
-            match s.section {
-                Section::LfGlobal => {
-                    self.lf_global_section = Some(s);
-                }
-                Section::HfGlobal => {
-                    self.hf_global_section = Some(s);
-                }
-                Section::Lf { .. } => {
-                    self.lf_sections.push(s);
-                }
-                Section::Hf { group, pass } => {
-                    self.hf_sections[group][pass] = Some(s);
-                    self.candidate_hf_sections.insert(group);
-                }
+            let s = self.replay.collect(s);
+            self.queue_ready(s);
+        }
+    }
+
+    fn queue_ready(&mut self, s: ReadySection) {
+        match s.section {
+            Section::LfGlobal => {
+                self.lf_global_section = Some(s);
+            }
+            Section::HfGlobal => {
+                self.hf_global_section = Some(s);
+            }
+            Section::Lf { .. } => {
+                self.lf_sections.push(s);
+            }
+            Section::Hf { group, pass } => {
+                self.hf_sections[group][pass] = Some(s);
+                self.candidate_hf_sections.insert(group);
             }
         }
     }
@@ -742,6 +913,85 @@ impl FrameInfo {
 }
 
 impl CodestreamParser {
+    pub(in crate::api) fn update_output_view(&mut self, options: &JxlDecoderOptions) {
+        self.update_size(options);
+    }
+
+    pub(in crate::api) fn rerender_frame(
+        &mut self,
+        options: &JxlDecoderOptions,
+        level5_limits: bool,
+        buffers: &mut [JxlOutputBuffer],
+        runner: &mut dyn JxlParallelRunner,
+    ) -> Result<()> {
+        let cache = &self.frame_info.replay;
+        let Some(target) = cache.target else {
+            return Err(Error::ApiUsageError(
+                "no completed frame available for repeated decoding",
+            ));
+        };
+        let format = self.pixel_format.as_ref().unwrap();
+        let profile = self.output_color_profile.as_ref().unwrap();
+        validate_output_buffers(buffers, Some(format))?;
+
+        // Replay builds fresh frames using the parser's current view. Frame counters seed noise;
+        // skipped unrelated frames must still count towards them.
+        let file = self.image_info.file_header();
+        let viewport = self.output_viewport();
+        let mut replay = FrameInfo::new();
+        replay.buffer_recycler = self.frame_info.buffer_recycler.clone();
+        let mut empty = SmallBuffer::new(0);
+        let order = cache.reachable(std::iter::once(target));
+        let mut last_use = BTreeMap::new();
+        for &id in &order {
+            for &dep in &cache.records[&id].dependencies {
+                last_use.insert(dep, id);
+            }
+        }
+        let mut slots = [None; 8];
+        for id in order {
+            replay.keep_slots = slots
+                .map(|slot| slot.is_some_and(|s| last_use.get(&s).is_some_and(|&last| last >= id)));
+            let r = &cache.records[&id];
+            replay.frame_header = Some(r.header.clone());
+            replay.frame_counters = r.before;
+            replay.make_frame(
+                &mut empty,
+                r.toc.clone(),
+                file,
+                options,
+                format,
+                profile,
+                ProcessMode::Process,
+                level5_limits,
+                self.downsample_factor,
+                viewport,
+            )?;
+            let frame = replay.frame.as_mut().unwrap();
+            frame.coeff_cache = r.coeffs.clone();
+            frame.channel_cache = r.channels.clone();
+            if let Some(slot) = stored_slot(&r.header) {
+                slots[slot] = Some(id);
+            }
+            replay.sections.clear();
+            for section in &r.sections {
+                replay.queue_ready(ReadySection::Shared(section.clone()));
+            }
+            if replay
+                .process_sections(
+                    (id == target).then_some(&mut *buffers),
+                    profile,
+                    format,
+                    runner,
+                )?
+                .is_some()
+            {
+                return Err(Error::SectionTooShort);
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_and_clear_pixels_dirty(&mut self) -> bool {
         let r = self.frame_info.pixels_dirty;
         self.frame_info.pixels_dirty = false;

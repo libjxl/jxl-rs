@@ -280,6 +280,11 @@ impl BoxParser {
             .unwrap_or_default()
     }
 
+    pub(super) fn is_level5_limits_enforced(&self, decoder_options: &JxlDecoderOptions) -> bool {
+        decoder_options.max_profile_level == ProfileLevel::Main5
+            || self.container_level != Some(ProfileLevel::Main10)
+    }
+
     pub(super) fn container_level(&self) -> Option<ProfileLevel> {
         self.container_level
     }
@@ -857,6 +862,10 @@ impl<'a> CodestreamInput<'a> {
 
     pub(super) fn box_parser(&self) -> &BoxParser {
         self.box_parser
+    }
+
+    pub(super) fn is_level5_limits_enforced(&self, decoder_options: &JxlDecoderOptions) -> bool {
+        self.box_parser.is_level5_limits_enforced(decoder_options)
     }
 
     pub(super) fn consume_trailing_data(&mut self) -> Result<()> {

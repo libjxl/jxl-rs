@@ -315,6 +315,8 @@ impl Frame {
             )),
             epf_sigma: Arc::new(SharedSnapshot::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
+            coeff_cache: None,
+            channel_cache: None,
             buffer_recycler,
             lf_preview_dirty_groups: BTreeSet::new(),
         }))
@@ -452,7 +454,7 @@ impl Frame {
                 None
             };
 
-            let modular_global = FullModularImage::read(
+            let mut modular_global = FullModularImage::read(
                 &self.header,
                 &self.decoder_state.file_header.image_metadata,
                 self.modular_color_channels(),
@@ -462,6 +464,8 @@ impl Frame {
                 self.decoder_state.modular_storage(),
                 self.decoder_state.level5_limits,
             )?;
+
+            modular_global.channel_cache = self.channel_cache.clone();
 
             // Ensure that, if we call this function again, we resume from just after
             // reading modular global data (excluding section 0 channels).
@@ -639,13 +643,11 @@ impl Frame {
                 .max()
                 .unwrap_or(0);
             let use_i16 = max_num_bits < 16;
-            // Since the render pipeline keeps finalized channels, we only need to store
-            // HF coefficients across calls if passes are decoded incrementally.
-            let hf_coefficients = if passes.len() <= 1 {
+            let hf_coefficients = if passes.len() <= 1 && self.coeff_cache.is_none() {
                 vec![]
             } else {
                 (0..self.header.num_groups())
-                    .map(|_| Ok(Mutex::new(Vec::new())))
+                    .map(|_| Ok(Mutex::new(Default::default())))
                     .collect::<Result<_>>()?
             };
 
@@ -864,6 +866,7 @@ impl Frame {
                 &self.header,
                 lf_global,
                 hf_global,
+                self.coeff_cache.as_deref(),
                 hf_meta,
                 lf_image,
                 &self
