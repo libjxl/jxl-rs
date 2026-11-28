@@ -8,6 +8,7 @@
 
 #![allow(clippy::excessive_precision)]
 
+use std::any::Any;
 use std::f32::consts::SQRT_2;
 
 use jxl_simd::{F32SimdVec, SimdDescriptor};
@@ -500,29 +501,46 @@ fn idct2d_thin<D: SimdDescriptor>(
     }
 }
 
+/// Reusable scratch storage for heap-backed large (>= 64x128) 2D IDCTs.
+#[derive(Default)]
+pub struct IdctLargeScratch(Option<Box<dyn Any + Send + Sync>>);
+
+impl IdctLargeScratch {
+    #[inline(never)]
+    fn get<D: SimdDescriptor>(&mut self, d: D, n: usize) -> (&mut [D::F32Vec], &mut [D::F32Vec]) {
+        let buf = self
+            .0
+            .get_or_insert_with(|| Box::new(Vec::<D::F32Vec>::new()))
+            .downcast_mut::<Vec<D::F32Vec>>()
+            .unwrap();
+        if buf.len() < 2 * n {
+            buf.resize(2 * n, D::F32Vec::zero(d));
+        }
+        buf[..2 * n].split_at_mut(n)
+    }
+}
+
 macro_rules! make_idct2d {
     ($name: ident, $h: literal, $w: literal, heap) => {
         #[inline(never)]
-        pub fn $name<D: SimdDescriptor>(d: D, data: &mut [f32]) {
+        pub fn $name<D: SimdDescriptor>(d: D, data: &mut [f32], scratch: &mut IdctLargeScratch) {
             const L: usize = if $w < $h { $h } else { $w };
-            // TODO: pass a scratch buffer from caller instead of allocating Vec here
-            let mut storage = vec![D::F32Vec::zero(d); L];
-            let mut scratch = vec![D::F32Vec::zero(d); L];
+            let (storage, scratch) = scratch.get(d, L);
             if $w == $h {
                 return d.call(
                     #[inline(always)]
-                    |_| idct2d_square(d, data, $w, &mut storage, &mut scratch),
+                    |_| idct2d_square(d, data, $w, storage, scratch),
                 );
             }
             if $w > $h {
                 return d.call(
                     #[inline(always)]
-                    |_| idct2d_wide(d, data, $w, $h, &mut storage, &mut scratch),
+                    |_| idct2d_wide(d, data, $w, $h, storage, scratch),
                 );
             }
             return d.call(
                 #[inline(always)]
-                |_| idct2d_thin(d, data, $w, $h, &mut storage, &mut scratch),
+                |_| idct2d_thin(d, data, $w, $h, storage, scratch),
             );
         }
     };

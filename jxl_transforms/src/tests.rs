@@ -288,7 +288,7 @@ test_idct1d_eq_slow_n!(test_idct1d_128_eq_slow, 128, do_idct_128, 5e-5);
 test_idct1d_eq_slow_n!(test_idct1d_256_eq_slow, 256, do_idct_256, 5e-5);
 
 macro_rules! test_idct2d_eq_slow {
-    ($test_name:ident, $rows:expr, $cols:expr, $fast_idct:ident, $tol:expr) => {
+    ($test_name:ident, $rows:expr, $cols:expr, $fast_idct:expr, $tol:expr) => {
         fn $test_name<D: SimdDescriptor>(d: D) {
             const N: usize = $rows;
             const M: usize = $cols;
@@ -303,7 +303,8 @@ macro_rules! test_idct2d_eq_slow {
                 .map(|x| *x as f32)
                 .collect();
 
-            $fast_idct(d, &mut fast_input);
+            let fast_idct: fn(D, &mut [f32]) = $fast_idct;
+            fast_idct(d, &mut fast_input);
 
             for r in 0..N {
                 for c in 0..M {
@@ -312,6 +313,12 @@ macro_rules! test_idct2d_eq_slow {
             }
         }
         test_all_instruction_sets!($test_name);
+    };
+}
+
+macro_rules! test_idct2d_large {
+    ($n:ident, $r:expr, $c:expr, $f:ident, $t:expr) => {
+        test_idct2d_eq_slow!($n, $r, $c, |d, x| $f(d, x, &mut Default::default()), $t);
     };
 }
 
@@ -331,12 +338,12 @@ test_idct2d_eq_slow!(test_idct2d_32_32_eq_slow, 32, 32, idct2d_32_32, 5e-5);
 test_idct2d_eq_slow!(test_idct2d_64_32_eq_slow, 64, 32, idct2d_64_32, 1e-4);
 test_idct2d_eq_slow!(test_idct2d_32_64_eq_slow, 32, 64, idct2d_32_64, 1e-4);
 test_idct2d_eq_slow!(test_idct2d_64_64_eq_slow, 64, 64, idct2d_64_64, 1e-4);
-test_idct2d_eq_slow!(test_idct2d_128_64_eq_slow, 128, 64, idct2d_128_64, 5e-4);
-test_idct2d_eq_slow!(test_idct2d_64_128_eq_slow, 64, 128, idct2d_64_128, 5e-4);
-test_idct2d_eq_slow!(test_idct2d_128_128_eq_slow, 128, 128, idct2d_128_128, 5e-4);
-test_idct2d_eq_slow!(test_idct2d_256_128_eq_slow, 256, 128, idct2d_256_128, 1e-3);
-test_idct2d_eq_slow!(test_idct2d_128_256_eq_slow, 128, 256, idct2d_128_256, 1e-3);
-test_idct2d_eq_slow!(test_idct2d_256_256_eq_slow, 256, 256, idct2d_256_256, 5e-3);
+test_idct2d_large!(test_idct2d_128_64_eq_slow, 128, 64, idct2d_128_64, 5e-4);
+test_idct2d_large!(test_idct2d_64_128_eq_slow, 64, 128, idct2d_64_128, 5e-4);
+test_idct2d_large!(test_idct2d_128_128_eq_slow, 128, 128, idct2d_128_128, 5e-4);
+test_idct2d_large!(test_idct2d_256_128_eq_slow, 256, 128, idct2d_256_128, 1e-3);
+test_idct2d_large!(test_idct2d_128_256_eq_slow, 128, 256, idct2d_128_256, 1e-3);
+test_idct2d_large!(test_idct2d_256_256_eq_slow, 256, 256, idct2d_256_256, 5e-3);
 
 macro_rules! test_reinterpreting_dct_eq_slow {
     ($test_name:ident, $fun: ident, $rows:expr, $cols:expr, $tol:expr) => {

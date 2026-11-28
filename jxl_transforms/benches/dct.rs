@@ -14,15 +14,16 @@ const MAX_COEFF_AREA: usize = 256 * 256;
 
 fn bench_idct2d<D: SimdDescriptor>(d: D, c: &mut BenchmarkGroup<'_, impl Measurement>, name: &str) {
     let mut data = vec![1.0; MAX_COEFF_AREA];
+    let mut scratch = IdctLargeScratch::default();
 
     macro_rules! run {
-        ($fun: ident, $name: literal, $sz: expr) => {
+        ($fun: ident, $name: literal, $sz: expr $(, $scratch:ident)?) => {
             let id = BenchmarkId::new(name, format_args!("{}", $name));
             c.bench_function(id, |b| {
                 b.iter(|| {
                     d.call(
                         #[inline(always)]
-                        |d| $fun(d, &mut data[..$sz]),
+                        |d| $fun(d, &mut data[..$sz] $(, &mut $scratch)?),
                     );
                 })
             });
@@ -45,12 +46,12 @@ fn bench_idct2d<D: SimdDescriptor>(d: D, c: &mut BenchmarkGroup<'_, impl Measure
     run!(idct2d_64_32, "64x32", 64 * 32);
     run!(idct2d_32_64, "32x64", 32 * 64);
     run!(idct2d_64_64, "64x64", 64 * 64);
-    run!(idct2d_128_64, "128x64", 128 * 64);
-    run!(idct2d_64_128, "64x128", 64 * 128);
-    run!(idct2d_128_128, "128x128", 128 * 128);
-    run!(idct2d_256_128, "256x128", 256 * 128);
-    run!(idct2d_128_256, "128x256", 128 * 256);
-    run!(idct2d_256_256, "256x256", 256 * 256);
+    run!(idct2d_128_64, "128x64", 128 * 64, scratch);
+    run!(idct2d_64_128, "64x128", 64 * 128, scratch);
+    run!(idct2d_128_128, "128x128", 128 * 128, scratch);
+    run!(idct2d_256_128, "256x128", 256 * 128, scratch);
+    run!(idct2d_128_256, "128x256", 128 * 256, scratch);
+    run!(idct2d_256_256, "256x256", 256 * 256, scratch);
 }
 
 fn bench_reinterpreting_dct<D: SimdDescriptor>(

@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
+use jxl_transforms::IdctLargeScratch;
 use jxl_transforms::transform::*;
 use jxl_transforms::transform_map::*;
 use num_traits::Float;
@@ -30,6 +31,7 @@ const LF_BUFFER_SIZE: usize = 32 * 32;
 pub(crate) struct VarDctBuffers {
     pub(super) scratch: Vec<f32>,
     pub(super) transform_buffer: [Vec<f32>; 3],
+    pub(super) idct_large_scratch: IdctLargeScratch,
     /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
     pub(super) coeffs_storage: Vec<CacheLine>,
     pub(super) num_nzeros_storage: Vec<[u8; 32]>,
@@ -42,6 +44,7 @@ impl VarDctBuffers {
         Self {
             scratch: vec![],
             transform_buffer: [vec![], vec![], vec![]],
+            idct_large_scratch: IdctLargeScratch::default(),
             coeffs_storage: vec![],
             num_nzeros_storage: vec![],
             lf_upsample_bufs: None,
@@ -530,6 +533,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     scratch: &mut [f32],
     inv_global_scale: f32,
     transform_buffer: &mut [Vec<f32>; 3],
+    idct_large_scratch: &mut IdctLargeScratch,
     hshift: [usize; 3],
     vshift: [usize; 3],
     by: usize,
@@ -624,7 +628,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         let tb = &mut transform_buffer[c][..];
         d.call(
             #[inline(always)]
-            |d| transform_to_pixels_impl(d, transform_type, lf, tb),
+            |d| transform_to_pixels_impl(d, transform_type, lf, tb, idct_large_scratch),
         );
         let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
         let h = downsampled_rect.size.1;
@@ -654,6 +658,7 @@ simd_function!(
         scratch: &mut [f32],
         inv_global_scale: f32,
         transform_buffer: &mut [Vec<f32>; 3],
+        idct_large_scratch: &mut IdctLargeScratch,
         hshift: [usize; 3],
         vshift: [usize; 3],
         by: usize,
@@ -682,6 +687,7 @@ simd_function!(
             scratch,
             inv_global_scale,
             transform_buffer,
+            idct_large_scratch,
             hshift,
             vshift,
             by,
@@ -1002,6 +1008,7 @@ pub fn decode_vardct_group(
                     scratch,
                     inv_global_scale,
                     transform_buffer,
+                    &mut buffers.idct_large_scratch,
                     hshift,
                     vshift,
                     by,
