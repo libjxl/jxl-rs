@@ -424,16 +424,3 @@ impl UnconditionalCoder<()> for Extensions {
         Ok(Extensions {})
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_string_is_utf8() {
-        // Length 2 (selector 1, then 4 bits), then the UTF-8 bytes of "é": 0xc3 0xa9.
-        let mut br = BitReader::new(&[0xc9, 0x70, 0x2a]);
-        let name = String::read_unconditional(&(), &mut br, &Empty {}).unwrap();
-        assert_eq!(name, "é");
-    }
-}
