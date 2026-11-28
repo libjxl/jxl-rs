@@ -1043,7 +1043,237 @@ pub fn extract_codestream(mut input_bytes: &[u8]) -> Result<(Vec<u8>, Option<Pro
         }
     }
 
+    if !parser.latest_codestream_box.is_last()
+        || matches!(parser.state, ParseState::Codestream(Some(r)) if r > 0)
+        || !parser.ooo_jxlp_buffer.is_empty()
+    {
+        return Err(Error::InvalidBox);
+    }
+
     Ok((codestream, parser.container_level()))
+}
+
+fn patch_codestream_modular_16bit_buffers(
+    codestream: &[u8],
+    enabled: bool,
+) -> Result<(Vec<u8>, usize)> {
+    use crate::bit_reader::BitReader;
+    use crate::headers::JxlHeader;
+    use crate::headers::bit_depth::BitDepth;
+    use crate::headers::encodings::UnconditionalCoder;
+    use crate::headers::image_metadata::Animation;
+    use crate::headers::size::{Preview, Size};
+    use crate::headers::transform_data::{CustomTransformData, CustomTransformDataNonserialized};
+
+    let mut br = BitReader::new(codestream);
+    let sig = br.read(16)?;
+    if sig != 0x0AFF {
+        return Err(Error::InvalidSignature);
+    }
+    let _size = Size::read(&mut br)?;
+    let all_default_bit_pos = br.total_bits_read();
+    let all_default = br.read(1)? != 0;
+
+    if !all_default {
+        let extra_fields = br.read(1)? != 0;
+        if extra_fields {
+            let _orientation = br.read(3)?;
+            let have_intrinsic_size = br.read(1)? != 0;
+            if have_intrinsic_size {
+                let _intrinsic_size = Size::read(&mut br)?;
+            }
+            let have_preview = br.read(1)? != 0;
+            if have_preview {
+                let _preview = Preview::read(&mut br)?;
+            }
+            let have_animation = br.read(1)? != 0;
+            if have_animation {
+                let _animation = Animation::read(&mut br)?;
+            }
+        }
+        let _bit_depth = BitDepth::read(&mut br)?;
+        let flag_bit_pos = br.total_bits_read();
+        let current = br.read(1)? != 0;
+
+        let mut out = codestream.to_vec();
+        if current != enabled {
+            out[flag_bit_pos / 8] ^= 1u8 << (flag_bit_pos % 8);
+            return Ok((out, flag_bit_pos / 8 + 1));
+        }
+        return Ok((out, 0));
+    }
+
+    // `all_default == true` implies `modular_16bit_buffers == true`.
+    if enabled {
+        return Ok((codestream.to_vec(), 0));
+    }
+
+    // Expand `all_default = 1` (1 bit) into the explicit default ImageMetadata fields
+    // with `modular_16bit_buffers = 0` (12 bits total), followed by the original
+    // CustomTransformData bits, ZeroPadToByte, and the remaining codestream bytes.
+    let transform_start_bit_pos = br.total_bits_read();
+    let _transform_data = CustomTransformData::read_unconditional(
+        &(),
+        &mut br,
+        &CustomTransformDataNonserialized { xyb_encoded: true },
+    )?;
+    let transform_end_bit_pos = br.total_bits_read();
+    br.jump_to_byte_boundary()?;
+    let old_body_byte_offset = br.total_bits_read() / 8;
+
+    // 12 bits (LSB-first):
+    //   bit 0:      all_default = 0
+    //   bit 1:      extra_fields = 0
+    //   bit 2:      bit_depth.floating_point_sample = 0
+    //   bits 3..5:  bit_depth.bits_per_sample = 8 (selector 0b00)
+    //   bit 5:      modular_16bit_buffers = 0
+    //   bits 6..8:  num_extra = 0 (selector 0b00)
+    //   bit 8:      xyb_encoded = 1
+    //   bit 9:      colour_encoding.all_default = 1
+    //   bits 10..12: extensions = 0 (selector 0b00)
+    const EXPANDED_METADATA_BITS: u16 = (1 << 8) | (1 << 9);
+    const EXPANDED_METADATA_LEN: usize = 12;
+
+    let transform_num_bits = transform_end_bit_pos - transform_start_bit_pos;
+    let new_header_bits = all_default_bit_pos + EXPANDED_METADATA_LEN + transform_num_bits;
+    let new_header_bytes = new_header_bits.div_ceil(8);
+    let body = &codestream[old_body_byte_offset..];
+
+    let mut out = vec![0u8; new_header_bytes + body.len()];
+    let full_prefix_bytes = all_default_bit_pos / 8;
+    out[..full_prefix_bytes].copy_from_slice(&codestream[..full_prefix_bytes]);
+    let rem_prefix_bits = all_default_bit_pos % 8;
+    if rem_prefix_bits > 0 {
+        let mask = (1u8 << rem_prefix_bits) - 1;
+        out[full_prefix_bytes] = codestream[full_prefix_bytes] & mask;
+    }
+
+    let mut dst_bit_pos = all_default_bit_pos;
+    for i in 0..EXPANDED_METADATA_LEN {
+        if ((EXPANDED_METADATA_BITS >> i) & 1) != 0 {
+            out[dst_bit_pos / 8] |= 1u8 << (dst_bit_pos % 8);
+        }
+        dst_bit_pos += 1;
+    }
+    for src_bit_pos in transform_start_bit_pos..transform_end_bit_pos {
+        if ((codestream[src_bit_pos / 8] >> (src_bit_pos % 8)) & 1) != 0 {
+            out[dst_bit_pos / 8] |= 1u8 << (dst_bit_pos % 8);
+        }
+        dst_bit_pos += 1;
+    }
+    out[new_header_bytes..].copy_from_slice(body);
+    Ok((out, old_body_byte_offset))
+}
+
+#[doc(hidden)]
+pub fn set_modular_16bit_buffers(input_bytes: &[u8], enabled: bool) -> Result<Vec<u8>> {
+    match check_signature(input_bytes) {
+        JxlSignature::Codestream => {
+            Ok(patch_codestream_modular_16bit_buffers(input_bytes, enabled)?.0)
+        }
+        JxlSignature::Container => {
+            let (codestream, level) = extract_codestream(input_bytes)?;
+            let (patched, modified_end_byte) =
+                patch_codestream_modular_16bit_buffers(&codestream, enabled)?;
+            let need_jxll = !enabled && level != Some(ProfileLevel::Main10);
+            if patched == codestream && !need_jxll {
+                return Ok(input_bytes.to_vec());
+            }
+
+            let len_diff = patched.len() - codestream.len();
+            let mut out =
+                Vec::new_with_capacity(input_bytes.len() + len_diff + JXLL_LEVEL10_BOX.len() + 16)?;
+            out.extend_from_slice(&CONTAINER_SIGNATURE);
+            let mut pos = CONTAINER_SIGNATURE.len();
+            let mut jxll_emitted = false;
+
+            while pos < input_bytes.len() {
+                if pos + 8 > input_bytes.len() {
+                    return Err(Error::InvalidBox);
+                }
+                let size_u32 = u32::from_be_bytes(input_bytes[pos..pos + 4].try_into().unwrap());
+                let ty: [u8; 4] = input_bytes[pos + 4..pos + 8].try_into().unwrap();
+                let (header_len, box_len) = match size_u32 {
+                    1 => {
+                        if pos + 16 > input_bytes.len() {
+                            return Err(Error::InvalidBox);
+                        }
+                        let xl_size =
+                            u64::from_be_bytes(input_bytes[pos + 8..pos + 16].try_into().unwrap());
+                        if xl_size < 16 {
+                            return Err(Error::InvalidBox);
+                        }
+                        (16usize, Some(xl_size))
+                    }
+                    0 => (8usize, None),
+                    n if n >= 8 => (8usize, Some(n as u64)),
+                    _ => return Err(Error::InvalidBox),
+                };
+
+                let (raw_box, data) = if let Some(len) = box_len {
+                    if len > (input_bytes.len() - pos) as u64 {
+                        return Err(Error::InvalidBox);
+                    }
+                    let end = pos + len as usize;
+                    let raw = &input_bytes[pos..end];
+                    let d = &input_bytes[pos + header_len..end];
+                    pos = end;
+                    (raw, d)
+                } else {
+                    let raw = &input_bytes[pos..];
+                    let d = &input_bytes[pos + header_len..];
+                    pos = input_bytes.len();
+                    (raw, d)
+                };
+
+                match &ty {
+                    b"ftyp" => {
+                        out.extend_from_slice(raw_box);
+                        if need_jxll && level.is_none() {
+                            out.extend_from_slice(&JXLL_LEVEL10_BOX);
+                            jxll_emitted = true;
+                        }
+                    }
+                    b"jxll" => {
+                        if need_jxll && !jxll_emitted {
+                            out.extend_from_slice(&JXLL_LEVEL10_BOX);
+                            jxll_emitted = true;
+                        } else {
+                            out.extend_from_slice(raw_box);
+                        }
+                    }
+                    b"jxlc" => {
+                        append_box_header(b"jxlc", patched.len(), &mut out);
+                        out.extend_from_slice(&patched);
+                    }
+                    b"jxlp" => {
+                        if data.len() < 4 {
+                            return Err(Error::InvalidBox);
+                        }
+                        let idx = u32::from_be_bytes(data[0..4].try_into().unwrap()) & 0x7fff_ffff;
+                        if idx == 0 {
+                            let orig_payload_len = data.len() - 4;
+                            if orig_payload_len < modified_end_byte {
+                                return Err(Error::InvalidBox);
+                            }
+                            let new_payload_len = orig_payload_len + len_diff;
+                            append_box_header(b"jxlp", 4 + new_payload_len, &mut out);
+                            out.extend_from_slice(&data[0..4]);
+                            out.extend_from_slice(&patched[..new_payload_len]);
+                        } else {
+                            out.extend_from_slice(raw_box);
+                        }
+                    }
+                    _ => {
+                        out.extend_from_slice(raw_box);
+                    }
+                }
+            }
+
+            Ok(out)
+        }
+        _ => Err(Error::InvalidSignature),
+    }
 }
 
 #[cfg(test)]
